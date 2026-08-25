@@ -37,24 +37,46 @@ import (
 //     only against libdl/libpthread/libc. (LD_LIBRARY_PATH is needed for the
 //     ct* command-line tools, not for us.) A libcryptoki.so symlink to the
 //     same file sits beside it.
-//   - Slots: slot 1 holds "AdminToken (0000)" (flags TOKEN-INIT LOGIN-REQ);
-//     slot 0 is the working user token and ships UNINITIALIZED — empty label,
-//     no TOKEN-INIT flag. Workspaces() resolves tokens by label, so slot 0
-//     must be initialized with a label before this adapter can find anything.
-//     That initialization is an operator step, not something this adapter
-//     should do on the caller's behalf: silently initializing a token would
-//     destroy any existing key material on it.
+//   - Slots: slot 1 holds "AdminToken (0000)"; slot 0 is the working user
+//     token and ships UNINITIALIZED — empty label, no TOKEN-INIT flag, and on
+//     a fresh install the Admin token's own PINs are unset too. Workspaces()
+//     resolves tokens by label, so slot 0 must be initialized and labelled
+//     before this adapter can find anything. That initialization is an
+//     operator step, not something this adapter should do on the caller's
+//     behalf: silently initializing a token destroys any key material on it.
 //
 // # Divergences from SoftHSM2
 //
-// Record every vendor-specific behaviour discovered during implementation
-// here — mechanism support, attribute quirks, slot and label semantics,
-// session limits. This list is what sub-task 1.8 reads when deciding which
-// plumbing is genuinely shared and which only looked shared. Do not resolve a
-// divergence by widening the VendorAdapter interface; resolve it inside this
-// adapter (CLAUDE.md: vendor quirks never leak into the interface).
+// Record every vendor-specific behaviour discovered here — mechanism support,
+// attribute quirks, slot and label semantics, session limits. This list is
+// what sub-task 1.8 reads when deciding which plumbing is genuinely shared and
+// which only looked shared. Do not resolve a divergence by widening the
+// VendorAdapter interface; resolve it inside this adapter (CLAUDE.md: vendor
+// quirks never leak into the interface).
 //
-//	(none recorded yet — implementation has not started)
+// Established by pointing SoftHSM2Adapter at libctsw.so as a one-off
+// diagnostic, before any of this adapter was written. That experiment is the
+// reason 1.8 is sequenced after 1.7 rather than before: most of the plumbing
+// did transfer, but not all of it, and the part that did not is exactly the
+// part a prematurely-extracted shared core would have gotten wrong.
+//
+//	WORKS UNCHANGED: Workspaces, OpenSession, Login (CKU_USER), Logout,
+//	GenerateRandom, GenerateKeyPair (EC P-256), Sign (CKM_ECDSA, 64-byte
+//	r||s as expected), FindObjects, GetAttributes.
+//
+//	DIVERGES — Verify: C_Verify returns CKR_SIGNATURE_INVALID (0xC0) for a
+//	signature C_Sign on the same token just produced, over the same digest,
+//	with the matching public key handle. SoftHSM2 accepts the identical
+//	sequence. Not yet diagnosed. Candidate explanations, in the order worth
+//	testing: (a) ProtectToolkit's default security mode is not "Pure PKCS#11"
+//	(ctconf -f flag 'p'), and its CKM_ECDSA may treat the input buffer as
+//	data-to-hash rather than as a pre-computed digest; (b) the public key
+//	object needs an attribute this adapter does not set for verification to
+//	be permitted; (c) a session-state requirement between C_Sign and
+//	C_Verify. Diagnose before implementing Verify — and resolve it inside
+//	this adapter, never by relaxing what Verify means to callers, because a
+//	verification that silently accepts is the worst possible failure mode
+//	for a CA (CLAUDE.md §3.4).
 type ProtectServerAdapter struct {
 	// Fields are intentionally undeclared until 1.7. Modelling this adapter's
 	// state on SoftHSM2Adapter's before its real constraints are known would
