@@ -11,8 +11,11 @@ end.
 
 > **Why this is unusual:** most HSM integrations hard-code a single vendor. The
 > core of this project is one Go interface that presents the same shape over
-> nShield softcards, Luna partitions, and ProtectServer slots — with the CA above
-> it never learning which vendor holds its keys.
+> each vendor's isolated key space — a ProtectServer slot, an nShield softcard,
+> a Luna partition — with the CA above it never learning which vendor holds its
+> keys. Today that interface is proven against two independent backends,
+> SoftHSM2 and ProtectServer; nShield and Luna are Phase 7 and are stated as
+> gaps until they are real.
 
 ## Architecture
 
@@ -20,8 +23,8 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design and the
 reasoning behind each decision. The system is built in seven layered phases, each
 proven before the next is added:
 
-1. **Multi-vendor PKCS#11 core** — one Go interface, SoftHSM2-backed, no hardware
-   needed to run.
+1. **Multi-vendor PKCS#11 core** — one Go interface, proven against two
+   independent backends: SoftHSM2 (no hardware needed) and Thales ProtectServer.
 2. **CA core** — issue / revoke / CRL, HSM-agnostic by construction.
 3. **Infrastructure as code** — Terraform modules, scanned with `tfsec`.
 4. **Container + Kubernetes** — distroless image, hardened pods, admission policy.
@@ -33,10 +36,22 @@ Phase specs live in [`docs/phases/`](docs/phases/).
 
 ## Runs without hardware
 
-The entire platform develops and tests against **SoftHSM2**, so the full suite —
-including the capstone auto-unseal mechanism — runs in CI with no HSM. The
-vendor-specific and real-hardware paths are documented and clearly labelled as
-the parts that need hardware, so the rest stays reproducible by anyone.
+The baseline path develops and tests against **SoftHSM2**, so the full suite —
+including the capstone auto-unseal mechanism — runs in CI with no HSM and no
+proprietary SDK. Clone it, run `go test ./...` in the provided dev container,
+and everything CI checks runs on your machine too.
+
+A second adapter targets **Thales ProtectServer** through the ProtectToolkit
+PKCS#11 module. It is optional, and it is the part you cannot reproduce without
+your own Thales entitlement — the SDK is proprietary and is never vendored
+here, so this path runs locally and never in CI. See
+[`docs/protectserver-setup.md`](docs/protectserver-setup.md).
+
+The split is deliberate and is kept visible rather than blurred: SoftHSM2 gives
+reproducibility, ProtectServer gives the evidence that one interface really does
+survive a second, independent vendor. Phase acceptance criteria state which
+claims an automated run backs and which rest on the maintainer's own
+verification.
 
 ## Security posture
 
@@ -48,7 +63,10 @@ the parts that need hardware, so the rest stays reproducible by anyone.
 
 ## Status
 
-Scaffolding complete. Phase 1 (PKCS#11 core) in progress.
+Phase 1 (PKCS#11 core) in progress. The interface, session lifecycle, PIN
+custody, and SoftHSM2 adapter are complete and tested; the ProtectServer adapter
+is scaffolded but not yet implemented. Per-sub-task progress is tracked in
+[`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md).
 
 ## License
 
