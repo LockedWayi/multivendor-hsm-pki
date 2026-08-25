@@ -55,28 +55,29 @@ import (
 // quirks never leak into the interface).
 //
 // Established by pointing SoftHSM2Adapter at libctsw.so as a one-off
-// diagnostic, before any of this adapter was written. That experiment is the
-// reason 1.8 is sequenced after 1.7 rather than before: most of the plumbing
-// did transfer, but not all of it, and the part that did not is exactly the
-// part a prematurely-extracted shared core would have gotten wrong.
+// diagnostic, before any of this adapter was written.
 //
 //	WORKS UNCHANGED: Workspaces, OpenSession, Login (CKU_USER), Logout,
-//	GenerateRandom, GenerateKeyPair (EC P-256), Sign (CKM_ECDSA, 64-byte
-//	r||s as expected), FindObjects, GetAttributes.
+//	GenerateRandom, GenerateKeyPair (EC P-256), Sign and Verify (CKM_ECDSA,
+//	64-byte r||s as expected), FindObjects, GetAttributes. CKA_EC_POINT comes
+//	back DER-wrapped (0x04 0x41 || point), the same as SoftHSM2.
 //
-//	DIVERGES — Verify: C_Verify returns CKR_SIGNATURE_INVALID (0xC0) for a
-//	signature C_Sign on the same token just produced, over the same digest,
-//	with the matching public key handle. SoftHSM2 accepts the identical
-//	sequence. Not yet diagnosed. Candidate explanations, in the order worth
-//	testing: (a) ProtectToolkit's default security mode is not "Pure PKCS#11"
-//	(ctconf -f flag 'p'), and its CKM_ECDSA may treat the input buffer as
-//	data-to-hash rather than as a pre-computed digest; (b) the public key
-//	object needs an attribute this adapter does not set for verification to
-//	be permitted; (c) a session-state requirement between C_Sign and
-//	C_Verify. Diagnose before implementing Verify — and resolve it inside
-//	this adapter, never by relaxing what Verify means to callers, because a
-//	verification that silently accepts is the worst possible failure mode
-//	for a CA (CLAUDE.md §3.4).
+//	DIVERGES — all-zero ECDSA digest: C_Sign accepts a digest of all zero
+//	bytes and returns a signature, but C_Verify then rejects that signature
+//	with CKR_SIGNATURE_INVALID (0xC0). SoftHSM2 2.6.1 accepts it. Reproduced
+//	at 32 and 20 bytes; a non-zero digest of either length verifies fine on
+//	both. Almost certainly a deliberate guard: an all-zero digest converts to
+//	the ECDSA scalar e = 0, a degenerate case some implementations refuse on
+//	the verify path while permitting on the sign path.
+//
+//	This divergence is benign for real use — a digest of an actual message is
+//	never all-zero, since producing one would be a preimage break — so it
+//	needs no workaround. It is recorded because it is a genuine behavioural
+//	difference, and because of how it was found: a first diagnostic used
+//	make([]byte, 32) as a stand-in digest and reported "ProtectServer cannot
+//	verify" for two commits before a real digest showed Verify working
+//	normally. Degenerate test vectors produce degenerate conclusions. Use
+//	real digests in the conformance suite.
 type ProtectServerAdapter struct {
 	// Fields are intentionally undeclared until 1.7. Modelling this adapter's
 	// state on SoftHSM2Adapter's before its real constraints are known would

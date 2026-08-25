@@ -23,13 +23,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `docs/protectserver-setup.md`: manual setup for the Thales ProtectToolkit
   backend — module paths, user-token initialization, and why this path is
   local-only and never in CI.
-- First recorded vendor divergence: pointing the SoftHSM2 adapter at the
-  ProtectToolkit module showed that session handling, login, key generation,
-  signing, and object lookup all transfer unchanged, but `C_Verify` rejects a
-  signature `C_Sign` just produced (`CKR_SIGNATURE_INVALID`). Documented in
-  `protectserver.go` with candidate causes; diagnosing it is a Phase 1
-  sub-task, and it is the concrete evidence that a second vendor was worth
-  validating against rather than assuming.
+- `docs/pkcs11-vendor-notes.md`: a living record of where PKCS#11
+  implementations differ and of the portability traps (`CK_ULONG` width,
+  `CKA_EC_POINT` encoding, raw `r||s` signatures, digest-vs-message
+  mechanisms) that are easy to write and hard to notice. Every adapter reads
+  it before being written and adds to it afterwards.
+- First cross-vendor comparison run: pointing the SoftHSM2 adapter at the
+  ProtectToolkit module showed the entire exercised surface — sessions, login,
+  key generation, signing, verification, object lookup, attributes —
+  transfers unchanged. One narrow divergence recorded: ProtectToolkit's
+  `C_Verify` rejects a signature over an all-zero digest that its own
+  `C_Sign` produced, where SoftHSM2 accepts it. Benign, since a real digest is
+  never all-zero.
 
 ### Changed
 - Phase files now carry a `Sub-tasks` checklist with observable **Done when**
