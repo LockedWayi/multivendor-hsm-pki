@@ -1,0 +1,23 @@
+# Secrets and local config — never commit these
+*.env
+.env
+*.pem
+*.key
+*.crt
+!*.example
+terraform.tfstate
+terraform.tfstate.*
+.terraform/
+*.tfvars
+!*.tfvars.example
+
+# Go
+/bin/
+*.test
+*.out
+coverage.txt
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
