@@ -23,12 +23,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `docs/protectserver-setup.md`: manual setup for the Thales ProtectToolkit
   backend — module paths, user-token initialization, and why this path is
   local-only and never in CI.
+- First recorded vendor divergence: pointing the SoftHSM2 adapter at the
+  ProtectToolkit module showed that session handling, login, key generation,
+  signing, and object lookup all transfer unchanged, but `C_Verify` rejects a
+  signature `C_Sign` just produced (`CKR_SIGNATURE_INVALID`). Documented in
+  `protectserver.go` with candidate causes; diagnosing it is a Phase 1
+  sub-task, and it is the concrete evidence that a second vendor was worth
+  validating against rather than assuming.
 
 ### Changed
 - Phase files now carry a `Sub-tasks` checklist with observable **Done when**
   criteria, so progress mid-phase is readable from the document rather than
-  inferred from commit history. Phase 1 is broken down and marked up to date;
-  Phases 2–7 carry a placeholder to be broken down at the start of each phase.
+  inferred from commit history. All seven phases are broken down; where a
+  choice is the maintainer's to make, it is recorded as an explicit
+  "Decide before starting" item rather than defaulted silently.
+- `CLAUDE.md` §7 gained the tracking discipline this depends on: discovered
+  work — prerequisites, workarounds, defects found in passing, work belonging
+  to a later phase — is added to the relevant checklist rather than silently
+  absorbed, and a decision the agent cannot make blocks its sub-task rather
+  than the phase.
+- ProtectServer environment prepared: Admin token PINs initialized and a
+  labelled user token created on slot 0. `docs/protectserver-setup.md` now
+  documents the sequence that actually works, including the mid-run label
+  prompt that is easy to answer with a PIN by mistake.
 - Phase 1 scope now includes a second, real-vendor adapter (ProtectServer)
   alongside SoftHSM2, and its acceptance criteria are split into CI-verifiable
   and maintainer-verified halves so a reader can tell which claims an automated
