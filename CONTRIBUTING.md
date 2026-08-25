@@ -16,6 +16,22 @@ implementation, but it is built to real contribution standards.
 Conventional Commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`,
 `ci:`. One logical change per commit.
 
+## Running tests locally
+`internal/pkcs11`'s test suite needs a real SoftHSM2 PKCS#11 module to run
+its integration tests against (unit tests that need no hardware run
+regardless). Build and use the provided dev container rather than
+installing SoftHSM2 on your host:
+
+```sh
+docker build -t hsm-pki-dev -f ci/softhsm2-dev.Dockerfile .
+docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev \
+  go test ./... -race -cover
+```
+
+Running `go test` directly on a host without SoftHSM2 installed still
+passes — the integration tests skip themselves with an explanatory message
+rather than failing — but that skip means you have not actually run them.
+
 ## Non-negotiables
 - No secrets in commits or history. `gitleaks` blocks merge.
 - Private keys and PINs never hit plaintext disk or logs.
