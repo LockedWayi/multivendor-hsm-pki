@@ -1,0 +1,15 @@
+# Copy to config.yaml and fill in real values. config.yaml is gitignored.
+# This example file is safe to commit — it contains no real secrets.
+
+server:
+  listen_addr: "0.0.0.0:8080"
+
+ca:
+  # ECDSA P-256 is the default curve (see docs/architecture.md).
+  curve: "P-256"
+  cert_ttl_hours: 8760
+
+# Vault settings are unused until Phase 5.
+vault:
+  address: "https://vault.example.local:8200"
+  role: "pki-ca-service"
