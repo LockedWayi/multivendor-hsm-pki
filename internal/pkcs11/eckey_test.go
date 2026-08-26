@@ -71,6 +71,48 @@ func TestDecodeECPoint_BareUnwrapped(t *testing.T) {
 	}
 }
 
+// TestDecodeECPoint_BareUnwrapped_ASN1TagCollision deterministically
+// reproduces the exact condition that made TestDecodeECPoint_BareUnwrapped
+// intermittently fail before DecodeECPoint tried the raw interpretation
+// first: a bare, unwrapped point whose second byte happens to equal 0x3F
+// (63) — the DER short-form length of the remaining 63 bytes — which
+// otherwise makes it possible to misparse as an ASN.1-wrapped OCTET
+// STRING. Rather than rely on a ~1/256 chance per random key, generate
+// keys until one lands on that exact byte value, capping the search well
+// above the expected ~256 draws so a regression here fails loudly instead
+// of flaking.
+func TestDecodeECPoint_BareUnwrapped_ASN1TagCollision(t *testing.T) {
+	const collidingSecondByte = 0x3F
+	var point []byte
+	for i := 0; i < 100_000; i++ {
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+		candidate := elliptic.Marshal(elliptic.P256(), priv.X, priv.Y)
+		if candidate[1] == collidingSecondByte {
+			point = candidate
+			break
+		}
+	}
+	if point == nil {
+		t.Fatal("did not find a colliding point within 100,000 draws — something about the collision probability assumption is wrong")
+	}
+
+	x, y := elliptic.Unmarshal(elliptic.P256(), point)
+	if x == nil {
+		t.Fatal("test bug: generated point does not itself unmarshal")
+	}
+
+	got, err := DecodeECPoint(elliptic.P256(), point)
+	if err != nil {
+		t.Fatalf("DecodeECPoint on a colliding bare point: %v", err)
+	}
+	if got.X.Cmp(x) != 0 || got.Y.Cmp(y) != 0 {
+		t.Fatal("decoded point does not match the original, despite the ASN.1 tag collision")
+	}
+}
+
 func TestDecodeECPoint_InvalidFails(t *testing.T) {
 	if _, err := DecodeECPoint(elliptic.P256(), []byte{0x01, 0x02, 0x03}); err == nil {
 		t.Fatal("DecodeECPoint on garbage input succeeded, want an error")

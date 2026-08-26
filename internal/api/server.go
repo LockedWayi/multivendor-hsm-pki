@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
+	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
 const (
@@ -39,31 +40,35 @@ const (
 )
 
 // NewServer builds the HTTP handler for the CA service. issuer signs
-// certificates and CRLs; registry records what has been issued and
-// revoked; crlValidity sets each generated CRL's thisUpdate/nextUpdate
-// window.
-func NewServer(issuer *ca.CA, registry *Registry, crlValidity time.Duration, logger *slog.Logger) http.Handler {
+// certificates and CRLs; adapter and workspace back the /readyz probe;
+// registry records what has been issued and revoked; crlValidity sets each
+// generated CRL's thisUpdate/nextUpdate window.
+func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspace, registry *Registry, crlValidity time.Duration, logger *slog.Logger) http.Handler {
 	s := &server{
 		ca:          issuer,
+		adapter:     adapter,
+		workspace:   workspace,
 		registry:    registry,
 		crlValidity: crlValidity,
 		crlNumber:   big.NewInt(0),
-		logger:      logger,
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("POST /certificates", s.handleIssueCertificate)
 	mux.HandleFunc("POST /certificates/{serial}/revoke", s.handleRevoke)
 	mux.HandleFunc("GET /crl", s.handleCRL)
 
-	return http.TimeoutHandler(mux, requestTimeout, `{"error":"request timed out"}`)
+	return withRequestLogging(logger, http.TimeoutHandler(mux, requestTimeout, `{"error":"request timed out"}`))
 }
 
 type server struct {
 	ca          *ca.CA
+	adapter     pk11.VendorAdapter
+	workspace   pk11.Workspace
 	registry    *Registry
 	crlValidity time.Duration
-	logger      *slog.Logger
 
 	crlMu            sync.Mutex
 	crlNumber        *big.Int
@@ -114,7 +119,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 			// tells the caller something went wrong on this end, not what
 			// (CLAUDE.md §3.4: never leak internal detail to an untrusted
 			// caller).
-			s.logger.Error("certificate issuance failed", "error", err)
+			loggerFromContext(r.Context()).Error("certificate issuance failed", "error", err)
 		}
 		s.writeError(w, status, msg)
 		return
@@ -186,7 +191,7 @@ func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusNotFound, "certificate not found")
 			return
 		}
-		s.logger.Error("revocation failed", "error", err)
+		loggerFromContext(r.Context()).Error("revocation failed", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "revocation failed")
 		return
 	}
@@ -216,7 +221,7 @@ func (s *server) invalidateCRLCache() {
 func (s *server) handleCRL(w http.ResponseWriter, r *http.Request) {
 	der, err := s.currentCRL()
 	if err != nil {
-		s.logger.Error("CRL generation failed", "error", err)
+		loggerFromContext(r.Context()).Error("CRL generation failed", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "CRL generation failed")
 		return
 	}

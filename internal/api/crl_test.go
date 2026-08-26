@@ -90,9 +90,9 @@ func fetchCRL(t *testing.T, srvURL string) *x509.RevocationList {
 }
 
 func TestRevoke_Success(t *testing.T) {
-	c := newTestCA(t)
+	c, adapter, ws := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	cert := issueTestCert(t, srv.URL, "to-revoke.example.test")
@@ -113,9 +113,9 @@ func TestRevoke_Success(t *testing.T) {
 }
 
 func TestRevoke_UnknownSerialFails(t *testing.T) {
-	c := newTestCA(t)
+	c, adapter, ws := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/certificates/999999999999/revoke", nil)
@@ -133,9 +133,9 @@ func TestRevoke_UnknownSerialFails(t *testing.T) {
 }
 
 func TestRevoke_IsIdempotent(t *testing.T) {
-	c := newTestCA(t)
+	c, adapter, ws := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	cert := issueTestCert(t, srv.URL, "revoke-twice.example.test")
@@ -154,9 +154,9 @@ func TestRevoke_IsIdempotent(t *testing.T) {
 }
 
 func TestCRL_ContainsRevokedSerial(t *testing.T) {
-	c := newTestCA(t)
+	c, adapter, ws := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	cert := issueTestCert(t, srv.URL, "in-crl.example.test")
@@ -183,9 +183,9 @@ func TestCRL_ContainsRevokedSerial(t *testing.T) {
 }
 
 func TestCRL_EmptyWhenNothingRevoked(t *testing.T) {
-	c := newTestCA(t)
+	c, adapter, ws := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	crl := fetchCRL(t, srv.URL)
@@ -207,9 +207,9 @@ func TestCRL_EmptyWhenNothingRevoked(t *testing.T) {
 // revocation must be visible on the next fetch, not on the next natural
 // cache expiry.
 func TestCRL_RevocationInvalidatesCache(t *testing.T) {
-	c := newTestCA(t)
+	c, adapter, ws := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	// Populate the cache before anything is revoked.
@@ -244,9 +244,9 @@ func TestCRL_OpenSSLVerify(t *testing.T) {
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skip("openssl not found on PATH")
 	}
-	c := newTestCA(t)
+	c, adapter, ws := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	cert := issueTestCert(t, srv.URL, "openssl-crl-check.example.test")
