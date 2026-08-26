@@ -24,6 +24,20 @@ type RevokedCert struct {
 // (RFC 5280 §5.2.3) — the caller owns that counter, since only it knows
 // how many CRLs have been served.
 func (c *CA) BuildCRL(revoked []RevokedCert, thisUpdate, nextUpdate time.Time, number *big.Int) ([]byte, error) {
+	// Reject an inverted or empty validity window here rather than emitting
+	// a CRL that is expired the moment it is signed. A caller that computes
+	// nextUpdate from a misconfigured duration (a zero or negative
+	// crl_validity_hours) would otherwise produce a technically well-formed
+	// CRL that every verifier rejects, and the failure would surface far
+	// from its cause (CLAUDE.md §3.4).
+	if !nextUpdate.After(thisUpdate) {
+		return nil, fmt.Errorf("ca: CRL nextUpdate (%s) must be after thisUpdate (%s)",
+			nextUpdate.Format(time.RFC3339), thisUpdate.Format(time.RFC3339))
+	}
+	if number == nil || number.Sign() <= 0 {
+		return nil, fmt.Errorf("ca: CRL number must be a positive integer")
+	}
+
 	entries := make([]x509.RevocationListEntry, len(revoked))
 	for i, r := range revoked {
 		entries[i] = x509.RevocationListEntry{

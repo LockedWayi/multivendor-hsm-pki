@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -220,5 +221,70 @@ func TestIssue_UnsupportedKeyAlgorithmRejected(t *testing.T) {
 
 	if _, err := c.Issue(csr); !errors.Is(err, ca.ErrDisallowedKeyType) {
 		t.Fatalf("Issue with an Ed25519 key = %v, want ErrDisallowedKeyType", err)
+	}
+}
+
+// TestIssue_KeyUsageMatchesKeyAlgorithm guards a standards bug: the
+// template asserted keyEncipherment unconditionally, which describes an
+// RSA operation an EC key cannot perform (RFC 5480 §3) — and P-256 is this
+// CA's default curve, so every certificate it issued carried it wrongly.
+func TestIssue_KeyUsageMatchesKeyAlgorithm(t *testing.T) {
+	c := newTestCA(t)
+
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	ecCert, err := c.Issue(signedCSR(t, ecKey, pkix.Name{CommonName: "ec.example.test"}))
+	if err != nil {
+		t.Fatalf("Issue (EC): %v", err)
+	}
+	if ecCert.KeyUsage&x509.KeyUsageKeyEncipherment != 0 {
+		t.Error("ECDSA certificate asserts keyEncipherment, which an EC key cannot do")
+	}
+	if ecCert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
+		t.Error("ECDSA certificate is missing digitalSignature")
+	}
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	rsaCert, err := c.Issue(signedCSR(t, rsaKey, pkix.Name{CommonName: "rsa.example.test"}))
+	if err != nil {
+		t.Fatalf("Issue (RSA): %v", err)
+	}
+	if rsaCert.KeyUsage&x509.KeyUsageKeyEncipherment == 0 {
+		t.Error("RSA certificate is missing keyEncipherment")
+	}
+}
+
+func TestGenerateSerial_AlwaysPositive(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		serial, err := ca.GenerateSerial()
+		if err != nil {
+			t.Fatalf("GenerateSerial: %v", err)
+		}
+		if serial.Sign() <= 0 {
+			t.Fatalf("GenerateSerial returned a non-positive value: %v", serial)
+		}
+	}
+}
+
+func TestBuildCRL_RejectsInvertedValidityWindow(t *testing.T) {
+	c := newTestCA(t)
+	now := time.Now()
+
+	if _, err := c.BuildCRL(nil, now, now.Add(-time.Hour), big.NewInt(1)); err == nil {
+		t.Error("BuildCRL with nextUpdate before thisUpdate succeeded, want an error")
+	}
+	if _, err := c.BuildCRL(nil, now, now, big.NewInt(1)); err == nil {
+		t.Error("BuildCRL with nextUpdate == thisUpdate succeeded, want an error")
+	}
+	if _, err := c.BuildCRL(nil, now, now.Add(time.Hour), big.NewInt(0)); err == nil {
+		t.Error("BuildCRL with a zero CRL number succeeded, want an error")
+	}
+	if _, err := c.BuildCRL(nil, now, now.Add(time.Hour), nil); err == nil {
+		t.Error("BuildCRL with a nil CRL number succeeded, want an error")
 	}
 }

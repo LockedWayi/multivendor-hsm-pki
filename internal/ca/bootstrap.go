@@ -144,6 +144,12 @@ func bootstrapNew(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Works
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		SubjectKeyId:          ski,
+		// RFC 5280 §4.2.1.1 lets a self-signed CA omit the authority key
+		// identifier, so this is not required — but path builders and
+		// several toolchains look for it unconditionally, and on a
+		// self-signed certificate it is by definition the subject's own
+		// key id. One field for one less special case downstream.
+		AuthorityKeyId: ski,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
 	if err != nil {

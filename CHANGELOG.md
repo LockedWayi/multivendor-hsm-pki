@@ -172,6 +172,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   today rather than implying all four are working.
 
 ### Fixed
+- Certificate `KeyUsage` now follows the subject's key algorithm.
+  `keyEncipherment` was asserted unconditionally, which describes an RSA
+  operation an EC key cannot perform (RFC 5480 §3) — and P-256 is this CA's
+  default curve, so every ECDSA certificate it issued carried a capability
+  claim that was simply false.
+- `ca.GenerateSerial` redraws rather than returning a zero serial. RFC 5280
+  §4.1.2.2 requires a positive serial number; the probability is 2^-128, but
+  "cannot happen" and "must not be emitted" are different claims and only
+  one is enforceable.
+- `(*ca.CA).BuildCRL` rejects an inverted or empty validity window and a
+  non-positive CRL number, instead of signing a CRL that is expired the
+  moment it is issued.
+- CRL numbers are now monotonic across a service restart. The counter
+  started from zero on every start, so a restarted service reissued low
+  numbers while verifiers held a higher-numbered CRL — which they may then
+  keep, ignoring every later update and the revocations in it. With no
+  persistent storage in Phase 2 (deliberately), the wall clock supplies the
+  monotonic component. Milliseconds, not seconds: a test written for this
+  caught a same-second restart reissuing an identical number.
+- A CRL's `thisUpdate` is backdated by the same clock-skew allowance
+  `Issue` applies to `NotBefore`.
+- `newRequestID` handles a `crypto/rand` failure instead of discarding it.
+  A failed read left the buffer zeroed, giving every concurrent request the
+  id `0000000000000000` — the one outcome that defeats a correlation id
+  entirely, arriving exactly when logs matter most.
+- The logging middleware's `ResponseWriter` wrapper ignores a second
+  `WriteHeader` (so the access log cannot disagree with the wire) and
+  implements `Unwrap`, so `http.ResponseController` can still reach
+  `Flusher`/`Hijacker` beneath it rather than having them silently stripped.
+- Self-signed CA certificates now carry an `AuthorityKeyIdentifier` equal to
+  their own `SubjectKeyIdentifier`. RFC 5280 §4.2.1.1 permits omitting it,
+  but path builders look for it unconditionally.
 - `pkcs11.Login` now zeroes the caller's PIN slice on every return path, not
   only once execution reaches `NewSecurePIN`. The guard clauses ahead of it
   (cancelled context, expired session) previously returned with the

@@ -54,7 +54,14 @@ func NewRegistry() *Registry {
 func (r *Registry) Record(rec CertRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.records[rec.Serial.String()] = &rec
+	// Store an explicit copy rather than &rec. Taking the address of a
+	// by-value parameter is safe in Go (escape analysis moves it to the
+	// heap), but it reads as though the caller's variable is being aliased,
+	// and the next person to touch this should not have to work out that it
+	// is not. Serial stays shared — it is a *big.Int nobody mutates after
+	// issuance — which is the one aliasing this type does keep.
+	stored := rec
+	r.records[rec.Serial.String()] = &stored
 }
 
 // Get returns the record for serial, if one exists.

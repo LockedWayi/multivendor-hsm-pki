@@ -290,3 +290,61 @@ func TestCRL_OpenSSLVerify(t *testing.T) {
 		t.Fatalf("revoked serial %s (hex) not found in openssl's CRL text output:\n%s", hexSerial, textOut)
 	}
 }
+
+// TestCRL_NumberSurvivesRestart guards RFC 5280 §5.2.3's monotonicity
+// requirement across a process restart. A counter starting from zero each
+// time the service starts would reissue low numbers that verifiers holding
+// a higher-numbered CRL may then ignore — silently, and including its
+// revocations. Two independently constructed servers over the same CA stand
+// in for a restart.
+func TestCRL_NumberSurvivesRestart(t *testing.T) {
+	c, adapter, ws := newTestCA(t)
+
+	first := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, testLogger()))
+	beforeRestart := fetchCRL(t, first.URL)
+	first.Close()
+
+	// A brand-new server with a brand-new in-memory registry: the same
+	// state a restarted process starts from.
+	second := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, testLogger()))
+	defer second.Close()
+	afterRestart := fetchCRL(t, second.URL)
+
+	if afterRestart.Number.Cmp(beforeRestart.Number) <= 0 {
+		t.Fatalf("CRL number went backwards across a restart: %v then %v", beforeRestart.Number, afterRestart.Number)
+	}
+}
+
+// TestCRL_NumberIncreasesWithinOneRun covers the other half: two CRLs
+// generated inside the same wall-clock second must still differ.
+func TestCRL_NumberIncreasesWithinOneRun(t *testing.T) {
+	c, adapter, ws := newTestCA(t)
+	registry := api.NewRegistry()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	defer srv.Close()
+
+	first := fetchCRL(t, srv.URL)
+
+	// Force regeneration rather than waiting out the cache.
+	cert := issueTestCert(t, srv.URL, "crl-number.example.test")
+	resp := revokeTestCert(t, srv.URL, cert.SerialNumber)
+	resp.Body.Close()
+
+	second := fetchCRL(t, srv.URL)
+	if second.Number.Cmp(first.Number) <= 0 {
+		t.Fatalf("CRL number did not increase within one run: %v then %v", first.Number, second.Number)
+	}
+}
+
+// TestCRL_ThisUpdateIsBackdated checks the clock-skew allowance: a verifier
+// whose clock trails this host's must not see a CRL that is not valid yet.
+func TestCRL_ThisUpdateIsBackdated(t *testing.T) {
+	c, adapter, ws := newTestCA(t)
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, testLogger()))
+	defer srv.Close()
+
+	crl := fetchCRL(t, srv.URL)
+	if !crl.ThisUpdate.Before(time.Now()) {
+		t.Fatalf("CRL ThisUpdate %v is not backdated relative to now", crl.ThisUpdate)
+	}
+}

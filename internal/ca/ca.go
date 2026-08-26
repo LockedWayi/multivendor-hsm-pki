@@ -57,7 +57,7 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 		// whatever will validate the certificate first.
 		NotBefore:             now.Add(-5 * time.Minute),
 		NotAfter:              now.Add(c.certTTL),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		KeyUsage:              keyUsageFor(csr.PublicKey),
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  false,
@@ -104,16 +104,52 @@ func validateCSR(csr *x509.CertificateRequest) error {
 	return nil
 }
 
+// keyUsageFor returns the key usages appropriate to the subject's key
+// algorithm.
+//
+// keyEncipherment describes wrapping a symmetric key directly under the
+// subject's public key, which is an RSA operation. An EC key cannot do it —
+// ECDH-based key establishment is keyAgreement, a different bit — so
+// asserting keyEncipherment on an ECDSA certificate states a capability the
+// key does not have (RFC 5480 §3). Setting it unconditionally, as this did,
+// was wrong for exactly the curve this CA issues by default.
+func keyUsageFor(pub crypto.PublicKey) x509.KeyUsage {
+	switch pub.(type) {
+	case *rsa.PublicKey:
+		return x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
+	default:
+		// ECDSA, and anything else validateCSR has already allowed.
+		return x509.KeyUsageDigitalSignature
+	}
+}
+
 // GenerateSerial returns a new certificate serial number: 128 bits of
 // crypto/rand, well above the 64-bit floor and never sequential — a
 // predictable serial weakens collision resistance across the CA's whole
 // issued-certificate history, not just for one certificate.
 func GenerateSerial() (*big.Int, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return nil, fmt.Errorf("ca: generating serial: %w", err)
+	// RFC 5280 §4.1.2.2 requires a positive serial number, and SetBytes
+	// yields zero for an all-zero draw. The probability is 2^-128, but
+	// "cannot happen" and "must not be emitted" are different claims, and
+	// only one of them is enforceable: redraw instead of asserting.
+	//
+	// Note what is deliberately NOT done here: forcing the top bit
+	// (buf[0] |= 0x80) to guarantee a "full width" value. That would cost
+	// a bit of entropy and force DER to prepend a 0x00 padding octet to
+	// keep the INTEGER positive, making every serial 17 octets instead of
+	// 16 — all to avoid a leading zero byte that is harmless. 128 random
+	// bits is already double the 64-bit floor the phase file requires,
+	// and stays comfortably above it even in the 1-in-256 case where the
+	// top byte lands on zero.
+	for {
+		buf := make([]byte, 16)
+		if _, err := rand.Read(buf); err != nil {
+			return nil, fmt.Errorf("ca: generating serial: %w", err)
+		}
+		if serial := new(big.Int).SetBytes(buf); serial.Sign() > 0 {
+			return serial, nil
+		}
 	}
-	return new(big.Int).SetBytes(buf), nil
 }
 
 // subjectKeyID computes an RFC 5280 §4.2.1.2 method-1-style key identifier:
