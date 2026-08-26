@@ -13,6 +13,15 @@
 # provider, not that the configuration is free of every possible
 # misconfiguration class.
 #
+# `trivy config`'s cloud-misconfiguration rules have zero coverage for
+# this provider (see above), so this script also runs Trivy's secret
+# scanner over the same tree. That check *is* reachable regardless of
+# provider: it pattern-matches file contents for real-looking credentials,
+# independent of any resource schema. It is what caught the deliberate
+# demonstration mistake in sub-task 3.6 (see
+# docs/phases/phase-3-infrastructure.md) — a hardcoded-looking token left
+# in a variable's `default`.
+#
 # Usage: ci/terraform-scan.sh
 set -euo pipefail
 
@@ -20,3 +29,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 trivy config --exit-code 1 --severity HIGH,CRITICAL "${REPO_ROOT}/deploy/terraform"
+trivy fs --scanners secret --exit-code 1 "${REPO_ROOT}/deploy/terraform"
