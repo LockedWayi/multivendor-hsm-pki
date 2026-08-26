@@ -63,13 +63,26 @@ verification.
 
 ## Status
 
-Phase 1 (PKCS#11 core) complete. The interface, session lifecycle, PIN custody,
-and both the SoftHSM2 and ProtectServer adapters are implemented, tested, and
-share one extracted core (`internal/pkcs11/base.go`) — proof that the interface
-needed zero vendor-specific overrides once a second, real vendor was run against
-it. A single conformance suite (`TestConformance`) runs against both backends.
+Phase 1 (PKCS#11 core) and Phase 2 (CA core) complete.
+
+Phase 1: the interface, session lifecycle, PIN custody, and both the
+SoftHSM2 and ProtectServer adapters are implemented, tested, and share one
+extracted core (`internal/pkcs11/base.go`) — proof that the interface
+needed zero vendor-specific overrides once a second, real vendor was run
+against it. A single conformance suite (`TestConformance`) runs against
+both backends.
+
+Phase 2: an HSM-backed `crypto.Signer`, CA bootstrap and issuance with CSR
+validation, and a full HTTP surface — `POST /certificates`,
+`POST /certificates/{serial}/revoke`, `GET /crl`, `GET /healthz`/`GET /readyz`
+— all signing through the Phase 1 adapter, never holding a raw key.
+Verified against a real, running server with `openssl`-generated CSRs and
+`openssl verify`/`openssl crl -verify`, on both SoftHSM2 and the
+maintainer's ProtectServer token.
+
 Per-sub-task detail is tracked in
-[`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md).
+[`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md) and
+[`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md).
 
 ## License
 
