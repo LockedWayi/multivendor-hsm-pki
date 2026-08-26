@@ -6,6 +6,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- `cmd/hsm-pki-server`, `internal/config`, `internal/api`: the Phase 2 service
+  skeleton. `internal/config` loads `config.yaml`, validates the selected
+  adapter and its module path/workspace label/PIN-env-var name, and fails
+  fast on an unknown adapter or a PIN environment variable that isn't set —
+  before any HSM call is attempted. The PIN's value itself is never held on
+  the `Config` struct; it is read once, at the point of use. `main.go`
+  proves the configured adapter can actually open a session and log in
+  before serving any traffic, and shuts down gracefully (drain, then close
+  the adapter) on `SIGTERM`/`SIGINT`. Verified against both SoftHSM2 and the
+  maintainer's ProtectServer token.
 - Project scaffolding: `CLAUDE.md` engineering contract, architecture document,
   and phase specifications (Phases 1–7), centered on a multi-vendor PKCS#11 core.
 - `internal/pkcs11`: vendor-agnostic `VendorAdapter` interface (session
