@@ -77,15 +77,22 @@ func newTestAdapter(t *testing.T) (pk11.VendorAdapter, pk11.Workspace, func() ([
 		t.Fatalf("workspace %q not found among %+v", label, wss)
 	}
 
+	// Establish the anchor login here, the way Bootstrap does in production,
+	// so tests that drive the adapter directly work against an authenticated
+	// token. Bootstrap itself is idempotent about this (it checks
+	// TokenLoggedIn first), so tests may still call it.
+	ctxLogin := context.Background()
+	if err := adapter.LoginToken(ctxLogin, ws, []byte(pin), pk11.RoleUser); err != nil {
+		t.Fatalf("LoginToken: %v", err)
+	}
+
 	resolvePIN := func() ([]byte, error) { return []byte(pin), nil }
 	return adapter, ws, resolvePIN
 }
 
-// withSession opens a session against ws, logs in, runs fn, and always logs
-// out and closes the session — the same lifecycle internal/ca.Signer's own
-// unexported withSession follows, duplicated here because tests need to
-// drive the adapter directly (e.g. to generate a key before a Signer over
-// it exists).
+// withSession opens a session against ws, runs fn, and closes it. No login:
+// newTestAdapter has already established the token's anchor login, which
+// every session on that token inherits (internal/pkcs11/tokenlogin.go).
 func withSession[T any](t *testing.T, ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), fn func(*pk11.Session) (T, error)) (T, error) {
 	t.Helper()
 	var zero T
@@ -94,13 +101,5 @@ func withSession[T any](t *testing.T, ctx context.Context, adapter pk11.VendorAd
 		return zero, err
 	}
 	defer adapter.CloseSession(ctx, s)
-	pin, err := resolvePIN()
-	if err != nil {
-		return zero, err
-	}
-	if err := adapter.Login(ctx, s, pin, pk11.RoleUser); err != nil {
-		return zero, err
-	}
-	defer adapter.Logout(ctx, s)
 	return fn(s)
 }

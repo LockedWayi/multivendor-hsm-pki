@@ -111,15 +111,18 @@ func run(configPath string, logger *slog.Logger) error {
 	return nil
 }
 
-// verifyHSMConnection proves, before the service accepts any traffic, that
-// the configured adapter can actually reach its workspace and log in — a
-// wrong PIN or an unreachable module fails the process at startup rather
-// than surfacing as a 500 on the first request (CLAUDE.md §3.4, fail
-// closed). The session opened here is not kept: the CA signer (Phase 2
-// sub-task 2.2) opens its own session per operation, since a single
-// session held for the service's lifetime would eventually hit its own
-// idle timeout or max TTL and start failing closed on every subsequent
-// call.
+// verifyHSMConnection resolves the configured workspace and establishes the
+// token login, before the service accepts any traffic. A wrong PIN or an
+// unreachable module fails the process at startup rather than surfacing as
+// a 500 on the first request (CLAUDE.md §3.4, fail closed).
+//
+// The login it establishes is not torn down here — it is the service's
+// anchor login, held by the adapter for the process's lifetime and released
+// by adapter.Close during shutdown. PKCS#11 authenticates a token for the
+// whole application rather than per session, so every session the CA opens
+// afterward inherits this and needs no login of its own; see
+// internal/pkcs11/tokenlogin.go for why the alternative (login and logout
+// around each operation) cannot survive concurrent requests.
 func verifyHSMConnection(ctx context.Context, cfg *config.Config, adapter pkcs11.VendorAdapter) (pkcs11.Workspace, error) {
 	vendor, err := cfg.Vendor()
 	if err != nil {
@@ -142,20 +145,13 @@ func verifyHSMConnection(ctx context.Context, cfg *config.Config, adapter pkcs11
 		return pkcs11.Workspace{}, errWorkspaceNotFound(vendor.WorkspaceLabel)
 	}
 
-	session, err := adapter.OpenSession(ctx, ws, cfg.PKCS11.SessionOptions)
-	if err != nil {
-		return pkcs11.Workspace{}, err
-	}
-	defer adapter.CloseSession(ctx, session)
-
 	pin, err := cfg.ResolvePIN()
 	if err != nil {
 		return pkcs11.Workspace{}, err
 	}
-	if err := adapter.Login(ctx, session, pin, pkcs11.RoleUser); err != nil {
+	if err := adapter.LoginToken(ctx, ws, pin, pkcs11.RoleUser); err != nil {
 		return pkcs11.Workspace{}, err
 	}
-	defer adapter.Logout(ctx, session)
 
 	return ws, nil
 }

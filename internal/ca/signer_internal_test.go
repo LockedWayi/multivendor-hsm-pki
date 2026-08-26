@@ -84,10 +84,13 @@ func TestSigner_Sign_ExpiredSessionFailsClosed(t *testing.T) {
 	if ws.Label == "" {
 		t.Fatalf("workspace %q not found among %+v", label, wss)
 	}
-	resolvePIN := func() ([]byte, error) { return []byte(pin), nil }
+	// Establish the anchor login once, exactly as Bootstrap does.
+	if err := adapter.LoginToken(ctx, ws, []byte(pin), pk11.RoleUser); err != nil {
+		t.Fatalf("LoginToken: %v", err)
+	}
 
 	const keyLabel = "expiry-test-key"
-	if _, err := withSession(ctx, adapter, ws, pk11.SessionOptions{}, resolvePIN, func(s *pk11.Session) (struct{}, error) {
+	if _, err := withSession(ctx, adapter, ws, pk11.SessionOptions{}, func(s *pk11.Session) (struct{}, error) {
 		_, err := adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
 			Curve: pk11.P256, Label: keyLabel, Sign: true, Verify: true,
 		})
@@ -98,7 +101,7 @@ func TestSigner_Sign_ExpiredSessionFailsClosed(t *testing.T) {
 
 	// Built with a normal budget, so construction (which opens its own
 	// session to read the public key) succeeds.
-	signer, err := NewSigner(ctx, adapter, ws, pk11.SessionOptions{}, resolvePIN, keyLabel, pk11.P256)
+	signer, err := NewSigner(ctx, adapter, ws, pk11.SessionOptions{}, keyLabel, pk11.P256)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}

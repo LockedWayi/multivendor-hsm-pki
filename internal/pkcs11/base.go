@@ -70,6 +70,13 @@ type pkcs11Adapter struct {
 	sessMu   sync.Mutex
 	sessions map[p11.SessionHandle]*Session
 
+	// Anchor login state. See tokenlogin.go for the model and why the
+	// anchor session is a raw handle rather than a *Session.
+	loginMu         sync.Mutex
+	anchorSession   p11.SessionHandle
+	anchorWorkspace Workspace
+	tokenLoggedIn   bool
+
 	janitorStop chan struct{}
 	janitorDone chan struct{}
 	closeOnce   sync.Once
@@ -789,6 +796,14 @@ func (a *pkcs11Adapter) Close() error {
 	a.closeOnce.Do(func() {
 		close(a.janitorStop)
 		<-a.janitorDone
+
+		// Drop the token's authentication before tearing anything else
+		// down. C_Finalize would release it anyway, but logging out
+		// explicitly means a shutdown leaves the token in a known state
+		// rather than one that depends on the module's finalize path.
+		a.loginMu.Lock()
+		_ = a.logoutTokenLocked()
+		a.loginMu.Unlock()
 
 		a.sessMu.Lock()
 		handles := make([]p11.SessionHandle, 0, len(a.sessions))

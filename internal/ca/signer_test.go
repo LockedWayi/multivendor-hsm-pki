@@ -40,7 +40,7 @@ func newTestSigner(t *testing.T) *ca.Signer {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
 
-	signer, err := ca.NewSigner(ctx, adapter, ws, pk11.SessionOptions{}, resolvePIN, keyLabel, pk11.P256)
+	signer, err := ca.NewSigner(ctx, adapter, ws, pk11.SessionOptions{}, keyLabel, pk11.P256)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
