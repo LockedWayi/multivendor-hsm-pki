@@ -79,7 +79,7 @@ func run(configPath string, logger *slog.Logger) error {
 	registry := api.NewRegistry()
 	httpServer := &http.Server{
 		Addr:    cfg.Server.ListenAddr,
-		Handler: api.NewServer(caInstance, registry, logger),
+		Handler: api.NewServer(caInstance, registry, time.Duration(cfg.CA.CRLValidityHours)*time.Hour, logger),
 	}
 
 	serveErr := make(chan error, 1)

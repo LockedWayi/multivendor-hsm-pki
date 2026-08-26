@@ -75,11 +75,19 @@ type CAConfig struct {
 	// defaulted by Load when empty, since it is not security-relevant the
 	// way the PIN/module/label fields are.
 	SubjectCommonName string `yaml:"subject_common_name"`
+	// CRLValidityHours is how long a generated CRL is valid for
+	// (thisUpdate to nextUpdate). Optional — defaulted by Load when zero.
+	CRLValidityHours int `yaml:"crl_validity_hours"`
 }
 
-// defaultSubjectCommonName is used when ca.subject_common_name is left
-// empty in config.yaml.
-const defaultSubjectCommonName = "hsm-pki-platform CA"
+const (
+	// defaultSubjectCommonName is used when ca.subject_common_name is left
+	// empty in config.yaml.
+	defaultSubjectCommonName = "hsm-pki-platform CA"
+	// defaultCRLValidityHours is used when ca.crl_validity_hours is left
+	// at zero in config.yaml.
+	defaultCRLValidityHours = 24
+)
 
 // Load reads and validates the config file at path. Validation is
 // deliberately strict and fails fast: an unknown adapter name or a missing
@@ -137,6 +145,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.CA.SubjectCommonName == "" {
 		c.CA.SubjectCommonName = defaultSubjectCommonName
+	}
+	if c.CA.CRLValidityHours == 0 {
+		c.CA.CRLValidityHours = defaultCRLValidityHours
 	}
 
 	return &c, nil

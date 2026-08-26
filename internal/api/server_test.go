@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/api"
 )
@@ -26,7 +27,7 @@ func testLogger() *slog.Logger {
 func TestIssueCertificate_Success(t *testing.T) {
 	c := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -78,7 +79,7 @@ func TestIssueCertificate_Success(t *testing.T) {
 func TestIssueCertificate_MalformedBodyRejected(t *testing.T) {
 	c := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", strings.NewReader("this is not a CSR"))
@@ -98,7 +99,7 @@ func TestIssueCertificate_MalformedBodyRejected(t *testing.T) {
 func TestIssueCertificate_BrokenSignatureRejected(t *testing.T) {
 	c := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -132,7 +133,7 @@ func TestIssueCertificate_BrokenSignatureRejected(t *testing.T) {
 func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 	c := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -164,7 +165,7 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 	c := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, registry, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, registry, 24*time.Hour, testLogger()))
 	defer srv.Close()
 
 	oversized := bytes.Repeat([]byte("A"), 128*1024) // well past the 64 KiB limit
