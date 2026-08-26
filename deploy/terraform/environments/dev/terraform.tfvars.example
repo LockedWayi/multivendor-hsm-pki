@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (gitignored) and fill in the real values that
+# match the maintainer's actual, already-provisioned VPS -- read them back
+# with `tofu state show module.compute.hostinger_vps.primary` after the
+# import documented in modules/compute/README.md, or look them up with the
+# hostinger_vps_data_centers / hostinger_vps_plans / hostinger_vps_templates
+# data sources.
+#
+# hostinger_api_token is NOT set here -- export TF_VAR_hostinger_api_token
+# instead. A secret does not belong in a file, even a gitignored one.
+
+vps_plan           = "hostingercom-vps-kvm2-usd-1m"
+vps_data_center_id = 13
+vps_template_id    = 1002
+vps_hostname       = "dev.example.invalid"
+vps_ssh_key_ids    = []
