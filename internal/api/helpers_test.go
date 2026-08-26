@@ -28,8 +28,10 @@ func requireSoftHSM2(t *testing.T) string {
 	return modulePath
 }
 
-// newTestCA provisions a fresh SoftHSM2 token and bootstraps a CA over it.
-func newTestCA(t *testing.T) *ca.CA {
+// newTestCA provisions a fresh SoftHSM2 token and bootstraps a CA over it,
+// returning the CA along with the adapter and workspace it was built on —
+// callers building a server also need those for the /readyz probe.
+func newTestCA(t *testing.T) (*ca.CA, pk11.VendorAdapter, pk11.Workspace) {
 	t.Helper()
 	modulePath := requireSoftHSM2(t)
 
@@ -86,5 +88,5 @@ func newTestCA(t *testing.T) *ca.CA {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	return c
+	return c, adapter, ws
 }

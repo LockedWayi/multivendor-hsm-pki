@@ -6,6 +6,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- `GET /healthz` / `GET /readyz` (`internal/api`): liveness never touches
+  the HSM; readiness probes it with an open+close session (no PIN needed)
+  and reports not-ready once the adapter is closed. Every request now logs
+  through a request-scoped `log/slog` logger with consistent field names
+  (`request_id`, `method`, `path`, `status`, `duration_ms`).
 - `POST /certificates/{serial}/revoke` and `GET /crl` (`internal/api`,
   `(*ca.CA).BuildCRL`): revocation is idempotent (re-revoking succeeds
   without error — a one-way state transition has no security effect from
@@ -142,6 +147,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   today rather than implying all four are working.
 
 ### Fixed
+- `pkcs11.DecodeECPoint` (introduced in sub-task 2.2) tried the ASN.1
+  OCTET-STRING-unwrap interpretation of a `CKA_EC_POINT` value before the
+  raw-point one. An uncompressed point's leading byte (`0x04`) collides
+  with ASN.1's OCTET STRING tag, so a bare, unwrapped point could be
+  misparsed roughly 1 time in 256 (whenever the point's second byte matched
+  the remaining byte count) — a public-key-reconstruction failure with no
+  vendor trigger, just unlucky key material. Caught by an intermittent
+  `TestDecodeECPoint_BareUnwrapped` failure during Phase 2 sub-task 2.6's
+  full-suite verification run, not by the function's own tests, since the
+  original tests never exercised the colliding byte value. Fixed by trying
+  the raw interpretation first; added a test that deterministically
+  reproduces the exact collision instead of depending on chance.
 - `.gitignore` did not exclude `config.yaml`, despite `config.example.yaml`
   stating that it did — the file intended to hold real values was trackable.
   Also added guards against committing proprietary vendor SDK binaries.

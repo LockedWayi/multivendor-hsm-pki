@@ -12,24 +12,39 @@ import (
 //
 // The PKCS#11 spec says CKA_EC_POINT is a DER-encoded OCTET STRING wrapping
 // the uncompressed point; some tokens return exactly that, others return the
-// bare point with no wrapper (docs/pkcs11-vendor-notes.md). This tries an
-// ASN.1 OCTET STRING unwrap first — using encoding/asn1 rather than
-// hand-decoding the DER length byte, so both short-form and long-form DER
-// lengths are handled correctly (a P-521 point is 133 bytes, which already
-// needs a long-form length) — and falls back to treating the input as the
-// raw point if that unwrap fails.
+// bare point with no wrapper (docs/pkcs11-vendor-notes.md). Try the bytes as
+// a raw point first, and only attempt an ASN.1 OCTET STRING unwrap if that
+// fails.
+//
+// That order is not arbitrary, and reversing it is a real bug this package
+// shipped once: an uncompressed EC point's first byte (0x04, "uncompressed
+// point indicator") is the same byte as ASN.1's OCTET STRING tag. Trying
+// the ASN.1 unwrap first meant that for a bare, unwrapped point, whenever
+// the point's second byte happened to numerically equal the remaining
+// byte count minus 2 (probability ~1/256 for a P-256 point, since that
+// byte is effectively random X-coordinate data), asn1.Unmarshal would
+// spuriously succeed, slice out the wrong sub-range as if it were the
+// OCTET STRING's content, and hand elliptic.Unmarshal a corrupted buffer —
+// caught by TestDecodeECPoint_BareUnwrapped failing intermittently rather
+// than every run, since the trigger depends on a freshly generated key's
+// random bytes. Trying the raw interpretation first removes the
+// ambiguity entirely: a DER-wrapped buffer is 2 bytes longer than a valid
+// point, so elliptic.Unmarshal correctly rejects it on length alone and
+// falls through to the unwrap step; a bare point is accepted immediately
+// and the unwrap step is never reached.
 func DecodeECPoint(curve elliptic.Curve, ecPoint []byte) (*ecdsa.PublicKey, error) {
-	raw := ecPoint
-	var octet []byte
-	if _, err := asn1.Unmarshal(ecPoint, &octet); err == nil {
-		raw = octet
+	if x, y := elliptic.Unmarshal(curve, ecPoint); x != nil {
+		return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
 	}
 
-	x, y := elliptic.Unmarshal(curve, raw)
-	if x == nil {
-		return nil, fmt.Errorf("pkcs11: invalid EC point encoding (%d bytes)", len(ecPoint))
+	var octet []byte
+	if _, err := asn1.Unmarshal(ecPoint, &octet); err == nil {
+		if x, y := elliptic.Unmarshal(curve, octet); x != nil {
+			return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+		}
 	}
-	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+
+	return nil, fmt.Errorf("pkcs11: invalid EC point encoding (%d bytes)", len(ecPoint))
 }
 
 // Curve returns the elliptic.Curve for c, or nil for an ECCurve this
