@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509/pkix"
 	"errors"
 	"flag"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/api"
+	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
 	"github.com/LockedWayi/hsm-pki-platform/internal/config"
 	pkcs11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
@@ -58,9 +60,26 @@ func run(configPath string, logger *slog.Logger) error {
 		"workspace", ws.Label,
 	)
 
+	caInstance, err := ca.Bootstrap(ctx, adapter, ws, cfg.PKCS11.SessionOptions, cfg.ResolvePIN, ca.BootstrapParams{
+		KeyLabel: cfg.CA.KeyLabel,
+		CertPath: cfg.CA.CertPath,
+		Curve:    cfg.CA.Curve(),
+		Subject:  pkix.Name{CommonName: cfg.CA.SubjectCommonName},
+		CertTTL:  time.Duration(cfg.CA.CertTTLHours) * time.Hour,
+	})
+	if err != nil {
+		return err
+	}
+	logger.Info("CA ready",
+		"subject", caInstance.Certificate().Subject.String(),
+		"serial", caInstance.Certificate().SerialNumber.String(),
+		"not_after", caInstance.Certificate().NotAfter,
+	)
+
+	registry := api.NewRegistry()
 	httpServer := &http.Server{
 		Addr:    cfg.Server.ListenAddr,
-		Handler: api.NewServer(),
+		Handler: api.NewServer(caInstance, registry, logger),
 	}
 
 	serveErr := make(chan error, 1)
