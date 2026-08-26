@@ -26,7 +26,7 @@ proven before the next is added:
 - **Phase 1 — Multi-vendor PKCS#11 core**: one Go interface, proven against two
   independent backends: SoftHSM2 (no hardware needed) and Thales ProtectServer.
 - **Phase 2 — CA core**: issue / revoke / CRL, HSM-agnostic by construction.
-- **Phase 3 — Infrastructure as code**: OpenTofu modules, scanned with `tfsec`.
+- **Phase 3 — Infrastructure as code**: OpenTofu modules, scanned with `trivy`.
 - **Phase 3b — PKI hardening**: two-tier hierarchy (offline root, online
   intermediate), persistent revocation state, CDP/AIA, threat model and
   key-ceremony/recovery docs.
@@ -81,7 +81,8 @@ verification.
 
 ## Status
 
-Phase 1 (PKCS#11 core) and Phase 2 (CA core) complete.
+Phase 1 (PKCS#11 core), Phase 2 (CA core), and Phase 3 (infrastructure as
+code) complete.
 
 Phase 1: the interface, session lifecycle, PIN custody, and both the
 SoftHSM2 and ProtectServer adapters are implemented, tested, and share one
@@ -98,9 +99,17 @@ Verified against a real, running server with `openssl`-generated CSRs and
 `openssl verify`/`openssl crl -verify`, on both SoftHSM2 and the
 maintainer's ProtectServer token.
 
+Phase 3: OpenTofu modules for the maintainer's Hostinger VPS (imported,
+never created, guarded by `lifecycle { prevent_destroy = true }`),
+`dev`/`staging` environments composed from the same modules, a
+locked-and-encrypted remote state backend on self-hosted MinIO, and
+`trivy`-based policy/secret scanning with a demonstrated real catch. See
+[`deploy/terraform/README.md`](deploy/terraform/README.md).
+
 Per-sub-task detail is tracked in
-[`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md) and
-[`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md).
+[`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md),
+[`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md), and
+[`docs/phases/phase-3-infrastructure.md`](docs/phases/phase-3-infrastructure.md).
 
 ## License
 
