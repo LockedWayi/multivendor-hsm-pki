@@ -11,7 +11,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
@@ -37,20 +39,36 @@ const (
 )
 
 // NewServer builds the HTTP handler for the CA service. issuer signs
-// certificates; registry records what has been issued.
-func NewServer(issuer *ca.CA, registry *Registry, logger *slog.Logger) http.Handler {
-	s := &server{ca: issuer, registry: registry, logger: logger}
+// certificates and CRLs; registry records what has been issued and
+// revoked; crlValidity sets each generated CRL's thisUpdate/nextUpdate
+// window.
+func NewServer(issuer *ca.CA, registry *Registry, crlValidity time.Duration, logger *slog.Logger) http.Handler {
+	s := &server{
+		ca:          issuer,
+		registry:    registry,
+		crlValidity: crlValidity,
+		crlNumber:   big.NewInt(0),
+		logger:      logger,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /certificates", s.handleIssueCertificate)
+	mux.HandleFunc("POST /certificates/{serial}/revoke", s.handleRevoke)
+	mux.HandleFunc("GET /crl", s.handleCRL)
 
 	return http.TimeoutHandler(mux, requestTimeout, `{"error":"request timed out"}`)
 }
 
 type server struct {
-	ca       *ca.CA
-	registry *Registry
-	logger   *slog.Logger
+	ca          *ca.CA
+	registry    *Registry
+	crlValidity time.Duration
+	logger      *slog.Logger
+
+	crlMu            sync.Mutex
+	crlNumber        *big.Int
+	cachedCRL        []byte
+	cachedNextUpdate time.Time
 }
 
 type errorResponse struct {
@@ -126,6 +144,117 @@ func parseCSR(body []byte) (*x509.CertificateRequest, error) {
 		data = block.Bytes
 	}
 	return x509.ParseCertificateRequest(data)
+}
+
+// revokeRequest is the optional JSON body for POST /certificates/{serial}/revoke.
+// An empty or absent body revokes with CRLReason 0 (unspecified).
+type revokeRequest struct {
+	Reason int `json:"reason"`
+}
+
+// handleRevoke implements POST /certificates/{serial}/revoke. serial is the
+// certificate's serial number in decimal — the form big.Int.String()
+// produces, matching how this service's own records key themselves — not
+// hex. An unknown serial is a 404; re-revoking an already-revoked
+// certificate succeeds without error (see Registry.Revoke's doc comment
+// for why that is idempotent rather than rejected).
+func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	serialStr := r.PathValue("serial")
+	serial, ok := new(big.Int).SetString(serialStr, 10)
+	if !ok {
+		s.writeError(w, http.StatusBadRequest, "serial must be a decimal integer")
+		return
+	}
+
+	var req revokeRequest
+	if r.ContentLength != 0 {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "reading request body")
+			return
+		}
+		if len(body) > 0 {
+			if err := json.Unmarshal(body, &req); err != nil {
+				s.writeError(w, http.StatusBadRequest, "malformed request body")
+				return
+			}
+		}
+	}
+
+	if err := s.registry.Revoke(serial, req.Reason, time.Now()); err != nil {
+		if errors.Is(err, ErrCertNotFound) {
+			s.writeError(w, http.StatusNotFound, "certificate not found")
+			return
+		}
+		s.logger.Error("revocation failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "revocation failed")
+		return
+	}
+	s.invalidateCRLCache()
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// invalidateCRLCache drops the cached CRL so the next GET /crl regenerates
+// one that includes this revocation immediately, rather than waiting up to
+// nextUpdate to become visible. Discovered by hand while smoke-testing a
+// running server: a time-only cache (valid until nextUpdate, full stop)
+// technically satisfies "never serve a stale CRL past nextUpdate," but a
+// revocation is exactly the kind of event an operator expects to take
+// effect right away — a compromised certificate should not stay
+// CRL-invisible for up to a full validity window just because nothing had
+// re-requested the CRL since the last revocation.
+func (s *server) invalidateCRLCache() {
+	s.crlMu.Lock()
+	defer s.crlMu.Unlock()
+	s.cachedCRL = nil
+}
+
+// handleCRL implements GET /crl: serve the current CRL, regenerating it if
+// the cached one is missing or has passed its nextUpdate — never serving a
+// stale CRL past its stated validity window.
+func (s *server) handleCRL(w http.ResponseWriter, r *http.Request) {
+	der, err := s.currentCRL()
+	if err != nil {
+		s.logger.Error("CRL generation failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "CRL generation failed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/pkix-crl")
+	_, _ = w.Write(der)
+}
+
+func (s *server) currentCRL() ([]byte, error) {
+	s.crlMu.Lock()
+	defer s.crlMu.Unlock()
+
+	now := time.Now()
+	if s.cachedCRL != nil && now.Before(s.cachedNextUpdate) {
+		return s.cachedCRL, nil
+	}
+
+	var revoked []ca.RevokedCert
+	for _, rec := range s.registry.All() {
+		if rec.Status == StatusRevoked {
+			revoked = append(revoked, ca.RevokedCert{
+				Serial:     rec.Serial,
+				RevokedAt:  rec.RevokedAt,
+				ReasonCode: rec.RevocationReason,
+			})
+		}
+	}
+
+	thisUpdate := now
+	nextUpdate := now.Add(s.crlValidity)
+	s.crlNumber = new(big.Int).Add(s.crlNumber, big.NewInt(1))
+
+	der, err := s.ca.BuildCRL(revoked, thisUpdate, nextUpdate, s.crlNumber)
+	if err != nil {
+		return nil, err
+	}
+	s.cachedCRL = der
+	s.cachedNextUpdate = nextUpdate
+	return der, nil
 }
 
 // issueErrorResponse maps a ca.Issue error to an HTTP status and a message

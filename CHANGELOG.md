@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- `POST /certificates/{serial}/revoke` and `GET /crl` (`internal/api`,
+  `(*ca.CA).BuildCRL`): revocation is idempotent (re-revoking succeeds
+  without error — a one-way state transition has no security effect from
+  being requested twice) and 404s on an unknown serial. The CRL is signed
+  through the same HSM-backed `Signer` as certificate issuance, cached
+  until its configured `nextUpdate` (`ca.crl_validity_hours`), and
+  invalidated immediately on every revocation rather than waiting for that
+  cache to expire naturally. Verified with real `openssl crl -verify`.
 - `POST /certificates` (`internal/api`): accepts a PEM or DER CSR and
   returns a signed certificate, or a 4xx with a specific reason for a
   malformed body, an unparseable CSR, or any rejection `internal/ca.CA.Issue`

@@ -2,10 +2,15 @@ package api
 
 import (
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"sync"
 	"time"
 )
+
+// ErrCertNotFound is returned by Revoke when no record exists for the
+// given serial.
+var ErrCertNotFound = errors.New("api: certificate not found")
 
 // Status is a certificate's lifecycle state in the Registry.
 type Status string
@@ -61,6 +66,33 @@ func (r *Registry) Get(serial *big.Int) (CertRecord, bool) {
 		return CertRecord{}, false
 	}
 	return *rec, true
+}
+
+// Revoke marks the certificate with serial revoked, recording reason and
+// at. Returns ErrCertNotFound if no record exists for serial.
+//
+// Re-revoking an already-revoked certificate is idempotent, not rejected:
+// it succeeds without changing the existing RevokedAt/RevocationReason.
+// Revocation is a one-way state transition with no security effect from
+// being requested twice — a retried request (a client that timed out
+// waiting for the first response, an operator re-running a script) should
+// not fail just because the first attempt actually succeeded. Rejecting
+// the second call would turn a harmless retry into an error the caller has
+// to specially handle for no safety benefit.
+func (r *Registry) Revoke(serial *big.Int, reason int, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.records[serial.String()]
+	if !ok {
+		return ErrCertNotFound
+	}
+	if rec.Status == StatusRevoked {
+		return nil
+	}
+	rec.Status = StatusRevoked
+	rec.RevokedAt = at
+	rec.RevocationReason = reason
+	return nil
 }
 
 // All returns every record currently in the registry, in no particular
