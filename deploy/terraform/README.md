@@ -57,6 +57,35 @@ only when the default is genuinely environment-independent.
 `environments/<name>/terraform.tfvars` supplies the real values and is
 gitignored; a committed `terraform.tfvars.example` documents the shape.
 
+## Policy scanning
+
+```
+$ ci/terraform-scan.sh
+```
+
+Runs `trivy config` (not `tfsec` — tfsec is deprecated and merged into
+Trivy, so "tfsec (or trivy config)" resolves to the maintained tool)
+against `deploy/terraform`, failing on any HIGH/CRITICAL finding. Not yet
+wired into CI (that is Phase 5); this is the local, maintainer-run form
+for now.
+
+A clean run here is a narrower claim than it looks. Trivy ships no rules
+for `hostinger_vps` — confirmed by scanning a throwaway, deliberately
+public `aws_s3_bucket` alongside this tree and watching Trivy flag it
+correctly (proving the scanner itself works) while the real Hostinger
+resources produce zero findings either way. So "0 misconfigurations" here
+means "Trivy has nothing to say about this provider's narrow resource
+surface," not "this configuration is provably free of every
+misconfiguration class." See sub-task 3.5 in
+[`docs/phases/phase-3-infrastructure.md`](../../docs/phases/phase-3-infrastructure.md)
+for the full record, and 3.6 for how this phase demonstrates the scanner
+catches something real despite that.
+
+No suppression exists anywhere in this tree yet — there is nothing to
+document a reason for. If one is ever added, it carries an inline comment
+explaining why it was accepted, per this project's rule that an
+unexplained suppression is worse than the finding.
+
 ## Provider verification (sub-task 3.1)
 
 The `hostinger/hostinger` provider's own README states a Terraform ≥ 1.3.0
