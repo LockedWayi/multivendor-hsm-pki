@@ -30,6 +30,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -296,6 +297,33 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
+	// Login_ZeroizesCallerPINOnEarlyReturn pins the "pin is consumed"
+	// contract to every return path, not just the success path. The guard
+	// clauses ahead of NewSecurePIN (cancelled context here; an expired
+	// session is the other one) used to return with the caller's PIN still
+	// readable in the Go heap — the one copy this package can
+	// deterministically wipe, left unwiped (CLAUDE.md §3.1).
+	t.Run("Login_ZeroizesCallerPINOnEarlyReturn", func(t *testing.T) {
+		s, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
+		if err != nil {
+			t.Fatalf("OpenSession: %v", err)
+		}
+		defer b.adapter.CloseSession(ctx, s)
+
+		pin := append([]byte(nil), b.userPIN...)
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+
+		if err := b.adapter.Login(cancelled, s, pin, pk11.RoleUser); err == nil {
+			t.Fatal("Login with a cancelled context succeeded, want an error")
+		}
+		for i, c := range pin {
+			if c != 0 {
+				t.Fatalf("caller PIN byte %d = %#x after an early-return Login, want 0", i, c)
+			}
+		}
+	})
+
 	t.Run("Logout", func(t *testing.T) {
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 		if err := b.adapter.Logout(ctx, s); err != nil {
@@ -541,6 +569,48 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatal("Unwrap returned a zero handle")
 		}
 	})
+
+	// GenerateSecretKey_InvalidKeySizeRejected checks the adapter refuses a
+	// bad AES key length itself rather than passing bits/8 down and letting
+	// each vendor decide. 200 bits is the interesting case: it divides to a
+	// 25-byte CKA_VALUE_LEN, which is a plausible-looking value a token
+	// might accept as a non-standard key rather than reject.
+	t.Run("GenerateSecretKey_InvalidKeySizeRejected", func(t *testing.T) {
+		s := b.openLoggedInSession(t, pk11.SessionOptions{})
+		for _, bits := range []int{1, 127, 200, 512, -256} {
+			_, err := b.adapter.GenerateSecretKey(ctx, s, pk11.SecretKeyRequest{
+				KeyBits: bits, Label: b.label("bad-aes"), Encrypt: true, Decrypt: true,
+			})
+			if !errors.Is(err, pk11.ErrUnsupportedKeySize) {
+				t.Fatalf("GenerateSecretKey(KeyBits=%d) = %v, want ErrUnsupportedKeySize", bits, err)
+			}
+		}
+	})
+
+	// No concurrency subtest lives here, and that absence is deliberate.
+	//
+	// One was written while reviewing base.go's lock discipline: eight
+	// goroutines calling Workspaces at once. It exposed two real things and
+	// then had to be removed, because it destabilizes the ProtectServer run
+	// for the rest of the suite — after that burst, a later C_OpenSession
+	// hangs, and the suite times out rather than failing cleanly.
+	//
+	// What it found is recorded where it belongs instead:
+	//   - ProtectToolkit deadlocks inside a concurrently-entered
+	//     C_GetSlotList despite CKF_OS_LOCKING_OK. This is why Workspaces
+	//     holds the exclusive lock; see its doc comment and
+	//     docs/pkcs11-vendor-notes.md.
+	//   - PKCS#11 login state is per-token, not per-session, on BOTH
+	//     backends, which makes the current open/login/op/logout-per-call
+	//     pattern unsafe under concurrent callers. That is a live defect,
+	//     tracked as Phase 2 sub-task 2.8, and it is blocked on a
+	//     maintainer decision — the test that proves it fixed belongs with
+	//     that fix, not ahead of it.
+	//
+	// Anything added here that runs operations from several goroutines must
+	// be tested against ProtectServer with the full suite ahead of it, not
+	// in isolation: neither failure reproduces in a freshly started process
+	// that only makes the one call.
 
 	t.Run("GenerateRandom_ReturnsDistinctBytes", func(t *testing.T) {
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})

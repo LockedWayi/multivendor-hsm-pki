@@ -23,4 +23,8 @@ var (
 	// ErrUnsupportedCurve is returned by GenerateKeyPair for an ECCurve
 	// value this adapter does not implement.
 	ErrUnsupportedCurve = errors.New("pkcs11: unsupported EC curve")
+
+	// ErrUnsupportedKeySize is returned by GenerateSecretKey for a
+	// SecretKeyRequest.KeyBits value that is not a valid AES key size.
+	ErrUnsupportedKeySize = errors.New("pkcs11: unsupported AES key size")
 )

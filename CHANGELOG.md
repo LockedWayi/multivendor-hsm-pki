@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Known issues
+- **The CA service is not concurrency-safe against the HSM** (Phase 2
+  sub-task 2.8). PKCS#11 login state is per-token, not per-session, so the
+  signer's open/login/work/logout/close-per-call pattern breaks with two
+  requests in flight: the second `C_Login` returns
+  `CKR_USER_ALREADY_LOGGED_IN`, and the first caller's `C_Logout`
+  de-authenticates the second mid-operation. Reproduced identically on
+  SoftHSM2 2.6.1 and ProtectToolkit 7.3.3, which is what establishes it as
+  the spec's model rather than a vendor bug. Every test through Phase 2 is
+  sequential, which is why it went unnoticed. The fix is blocked on a
+  maintainer decision about the token's authenticated lifetime; see the
+  sub-task for the options.
+
 ### Added
 - Failure-path coverage completing Phase 2: `TestSigner_Sign_ExpiredSessionFailsClosed`
   (a white-box test — `Signer.Sign` opens its own session per call, so an
@@ -154,6 +167,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   today rather than implying all four are working.
 
 ### Fixed
+- `pkcs11.Login` now zeroes the caller's PIN slice on every return path, not
+  only once execution reaches `NewSecurePIN`. The guard clauses ahead of it
+  (cancelled context, expired session) previously returned with the
+  caller's PIN still readable in the Go heap — the one copy this package can
+  deterministically wipe, left unwiped (CLAUDE.md §3.1).
+- `pkcs11.CloseSession` no longer removes a session from the adapter's map
+  before the token has actually released it. A failed `C_CloseSession`
+  used to leave a session open on the token that neither the janitor nor
+  `Close` could ever reclaim, since both work from that map.
+- `pkcs11.GenerateSecretKey` validates `KeyBits` against 128/192/256
+  instead of passing `bits/8` to the token. Integer division silently
+  turned a wrong-but-plausible request (200 bits) into a non-standard
+  25-byte key that some tokens accept rather than reject; a negative value
+  was worse.
 - `pkcs11.DecodeECPoint` (introduced in sub-task 2.2) tried the ASN.1
   OCTET-STRING-unwrap interpretation of a `CKA_EC_POINT` value before the
   raw-point one. An uncompressed point's leading byte (`0x04`) collides
