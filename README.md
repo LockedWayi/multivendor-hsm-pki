@@ -20,17 +20,27 @@ end.
 ## Architecture
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design and the
-reasoning behind each decision. The system is built in seven layered phases, each
+reasoning behind each decision. The system is built in layered phases, each
 proven before the next is added:
 
-1. **Multi-vendor PKCS#11 core** — one Go interface, proven against two
-   independent backends: SoftHSM2 (no hardware needed) and Thales ProtectServer.
-2. **CA core** — issue / revoke / CRL, HSM-agnostic by construction.
-3. **Infrastructure as code** — Terraform modules, scanned with `tfsec`.
-4. **Container + Kubernetes** — distroless image, hardened pods, admission policy.
-5. **CI/CD security gates** — SAST, dependency/image/secret scanning, auto-deploy.
-6. **Vault integration** — key custody moves out of the service.
-7. **HSM-backed Vault auto-unseal** — root of trust anchored to hardware (capstone).
+- **Phase 1 — Multi-vendor PKCS#11 core**: one Go interface, proven against two
+  independent backends: SoftHSM2 (no hardware needed) and Thales ProtectServer.
+- **Phase 2 — CA core**: issue / revoke / CRL, HSM-agnostic by construction.
+- **Phase 3 — Infrastructure as code**: OpenTofu modules, scanned with `tfsec`.
+- **Phase 3b — PKI hardening**: two-tier hierarchy (offline root, online
+  intermediate), persistent revocation state, CDP/AIA, threat model and
+  key-ceremony/recovery docs.
+- **Phase 4 — Container + Kubernetes**: distroless image, hardened pods,
+  admission policy, purpose-separated signing keys.
+- **Phase 5 — CI/CD security gates**: SAST, dependency/image/secret scanning,
+  HSM-backed signing and SLSA provenance as blocking gates, auto-deploy.
+- **Phase 5b — Issuance policy & OCSP**: certificate profiles, naming
+  authorization, delegated OCSP responder.
+- **Phase 6 — Vault integration**: key custody moves out of the service.
+- **Phase 7 — HSM-backed Vault auto-unseal**: root of trust anchored to
+  hardware (capstone).
+- **Phase 8 — Verifiable evidence** (post-capstone): signed, hash-chained
+  audit log; crypto-agility/PQC-readiness design.
 
 Phase specs live in [`docs/phases/`](docs/phases/).
 
@@ -60,11 +70,14 @@ verification.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - ECDSA P-256 default curve.
 - Fail-closed on every ambiguous security decision; all enforcement server-side.
-- Signing is purpose-separated at the key level: `ca-root-key`,
-  `image-signing-key`, and `artifact-signing-key` are three distinct HSM-held
-  keys behind the same PKCS#11 core, never interchangeable — a compromised
-  image key cannot issue a certificate, and a compromised CA key cannot sign a
-  release. See `docs/architecture.md`, "The signing layer."
+- Signing is purpose-separated at the key level: the CA hierarchy's keys
+  (offline root, online intermediate — Phase 3b), `image-signing-key`, and
+  `artifact-signing-key` are distinct HSM-held keys behind the same PKCS#11
+  core, never interchangeable — a compromised image key cannot issue a
+  certificate, and a compromised CA key cannot sign a release. Keys carry
+  versioned labels and a published, signed inventory so rotation is a
+  lifecycle event, not a breaking change. See `docs/architecture.md`,
+  "The signing layer."
 
 ## Status
 
