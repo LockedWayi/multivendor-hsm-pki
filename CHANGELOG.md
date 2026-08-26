@@ -6,6 +6,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- `POST /certificates` (`internal/api`): accepts a PEM or DER CSR and
+  returns a signed certificate, or a 4xx with a specific reason for a
+  malformed body, an unparseable CSR, or any rejection `internal/ca.CA.Issue`
+  itself raises (bad signature, empty subject, disallowed key type) — never
+  partially processed, and never recorded in `internal/api.Registry` on
+  rejection. A 64 KiB body limit and a 15s request timeout are enforced at
+  the HTTP transport layer (`http.MaxBytesReader`, `http.TimeoutHandler`);
+  the timeout cannot be threaded into the underlying HSM call because
+  `crypto.Signer`, the standard interface `Signer` implements, has no
+  context parameter — documented as a real, stated constraint rather than
+  papered over. Verified as a live process: `curl` against a running
+  `cmd/hsm-pki-server` with real `openssl req`-generated CSRs, not only
+  `httptest`.
 - `internal/ca.CA`, `internal/ca.Bootstrap`: CA domain logic on top of the
   Phase 2 signer. `Bootstrap` decides between loading an existing CA and
   creating a new one by checking two independent signals — an HSM key under

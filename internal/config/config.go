@@ -71,7 +71,15 @@ type CAConfig struct {
 	CertTTLHours int    `yaml:"cert_ttl_hours"`
 	KeyLabel     string `yaml:"key_label"`
 	CertPath     string `yaml:"cert_path"`
+	// SubjectCommonName names the CA's own certificate subject. Optional —
+	// defaulted by Load when empty, since it is not security-relevant the
+	// way the PIN/module/label fields are.
+	SubjectCommonName string `yaml:"subject_common_name"`
 }
+
+// defaultSubjectCommonName is used when ca.subject_common_name is left
+// empty in config.yaml.
+const defaultSubjectCommonName = "hsm-pki-platform CA"
 
 // Load reads and validates the config file at path. Validation is
 // deliberately strict and fails fast: an unknown adapter name or a missing
@@ -126,6 +134,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.CA.CertPath == "" {
 		return nil, fmt.Errorf("config: ca.cert_path is empty")
+	}
+	if c.CA.SubjectCommonName == "" {
+		c.CA.SubjectCommonName = defaultSubjectCommonName
 	}
 
 	return &c, nil
