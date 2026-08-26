@@ -75,6 +75,9 @@ func newTestCA(t *testing.T) (*ca.CA, pk11.VendorAdapter, pk11.Workspace) {
 		t.Fatalf("workspace %q not found among %+v", label, wss)
 	}
 
+	if err := adapter.LoginToken(ctx, ws, []byte(pin), pk11.RoleUser); err != nil {
+		t.Fatalf("LoginToken: %v", err)
+	}
 	resolvePIN := func() ([]byte, error) { return []byte(pin), nil }
 
 	c, err := ca.Bootstrap(ctx, adapter, ws, pk11.SessionOptions{}, resolvePIN, ca.BootstrapParams{

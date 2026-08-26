@@ -9,11 +9,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -226,5 +228,84 @@ func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 	}
 	if len(registry.All()) != 0 {
 		t.Fatalf("registry has %d records, want 0 after a rejected request", len(registry.All()))
+	}
+}
+
+// TestIssueCertificate_ConcurrentRequests is sub-task 2.8's Done-when
+// criterion. Before the anchor-login change this failed reliably: PKCS#11
+// authenticates a token for the whole application, so the second concurrent
+// request's C_Login returned CKR_USER_ALREADY_LOGGED_IN, and the first
+// request's C_Logout de-authenticated the second one mid-signature. Every
+// other test in Phases 1 and 2 is sequential, which is exactly why the
+// defect survived to be found by hand.
+func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
+	c, adapter, ws := newTestCA(t)
+	registry := api.NewRegistry()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	defer srv.Close()
+
+	const concurrent = 8
+	var wg sync.WaitGroup
+	errs := make([]error, concurrent)
+	serials := make([]string, concurrent)
+
+	for i := 0; i < concurrent; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+				Subject: pkix.Name{CommonName: fmt.Sprintf("concurrent-%d.example.test", i)},
+			}, priv)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+
+			resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusCreated {
+				errs[i] = fmt.Errorf("status %d: %s", resp.StatusCode, body)
+				return
+			}
+			block, _ := pem.Decode(body)
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			if err := cert.CheckSignatureFrom(c.Certificate()); err != nil {
+				errs[i] = fmt.Errorf("CheckSignatureFrom: %w", err)
+				return
+			}
+			serials[i] = cert.SerialNumber.String()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent request %d failed: %v", i, err)
+		}
+	}
+	seen := make(map[string]bool, concurrent)
+	for _, s := range serials {
+		if seen[s] {
+			t.Fatalf("duplicate serial %s across concurrent issuances", s)
+		}
+		seen[s] = true
+	}
+	if len(registry.All()) != concurrent {
+		t.Fatalf("registry has %d records, want %d", len(registry.All()), concurrent)
 	}
 }

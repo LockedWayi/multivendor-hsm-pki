@@ -17,24 +17,32 @@ import (
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
-// PINResolver returns the login PIN for a signing operation, read at the
-// point of use (see config.Config.ResolvePIN) rather than cached anywhere
-// with a longer lifetime than the call that needs it.
+// PINResolver returns the token's login PIN, read at the point of use (see
+// config.Config.ResolvePIN) rather than cached anywhere with a longer
+// lifetime than the call that needs it. It is used once, by Bootstrap, to
+// establish the token login for the service's lifetime.
 type PINResolver func() ([]byte, error)
 
 // Signer is a crypto.Signer backed by an HSM-resident EC key pair, reached
 // through the Phase 1 VendorAdapter abstraction. It never holds the private
-// key: every Sign call opens its own session, authenticates, asks the HSM
-// to sign, and closes the session again.
+// key: every Sign call opens its own session, asks the HSM to sign, and
+// closes the session again.
 //
-// A session is not held between calls (or across the signer's lifetime)
-// deliberately: pkcs11.Session enforces an idle timeout and a maximum TTL
-// and fails closed once either elapses (CLAUDE.md §3.4), so a signer that
-// tried to reuse one session forever would eventually start failing every
-// call for a reason with nothing to do with the actual request. Signing is
-// an infrequent CA operation (issue a certificate, sign a CRL), not a
-// hot path, so the per-call session-open cost is the right trade here —
-// see docs/phases/phase-2-ca-core.md sub-task 2.2.
+// It does not log in. The token is authenticated once by Bootstrap via
+// LoginToken and stays that way for the service's lifetime, so the sessions
+// opened here inherit that authentication — PKCS#11 authenticates a token
+// for the whole application, not per session
+// (internal/pkcs11/tokenlogin.go). An earlier version logged in and out
+// around each operation and could not survive two concurrent requests; see
+// withSession below for what that broke.
+//
+// A session is still not held between calls, deliberately: pkcs11.Session
+// enforces an idle timeout and a maximum TTL and fails closed once either
+// elapses (CLAUDE.md §3.4), so a signer reusing one session forever would
+// eventually fail every call for a reason unrelated to the request. Those
+// bounds govern a caller's session; the token's authentication is a
+// separate lifetime, held by the adapter's anchor session, which is exactly
+// why the two are no longer entangled.
 //
 // Signer looks the private key object up by its CKA_LABEL inside every
 // session it opens, rather than caching the ObjectHandle GenerateKeyPair
@@ -50,7 +58,6 @@ type Signer struct {
 	adapter     pk11.VendorAdapter
 	workspace   pk11.Workspace
 	sessionOpts pk11.SessionOptions
-	resolvePIN  PINResolver
 
 	keyLabel  string
 	publicKey *ecdsa.PublicKey
@@ -68,7 +75,7 @@ type Signer struct {
 // This opens one session to find the public key object and read its
 // attributes, then closes it before returning — it does not keep a session
 // open (see the Signer doc comment).
-func NewSigner(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, resolvePIN PINResolver, keyLabel string, curve pk11.ECCurve) (*Signer, error) {
+func NewSigner(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, keyLabel string, curve pk11.ECCurve) (*Signer, error) {
 	ellipticCurve := curve.Curve()
 	if ellipticCurve == nil {
 		return nil, pk11.ErrUnsupportedCurve
@@ -78,7 +85,7 @@ func NewSigner(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspac
 		return nil, err
 	}
 
-	pub, err := withSession(ctx, adapter, ws, sessionOpts, resolvePIN, func(s *pk11.Session) (*ecdsa.PublicKey, error) {
+	pub, err := withSession(ctx, adapter, ws, sessionOpts, func(s *pk11.Session) (*ecdsa.PublicKey, error) {
 		handle, err := findKeyByLabel(ctx, adapter, s, pk11.ClassPublicKey, keyLabel)
 		if err != nil {
 			return nil, err
@@ -100,7 +107,6 @@ func NewSigner(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspac
 		adapter:     adapter,
 		workspace:   ws,
 		sessionOpts: sessionOpts,
-		resolvePIN:  resolvePIN,
 		keyLabel:    keyLabel,
 		publicKey:   pub,
 		hash:        hash,
@@ -130,7 +136,7 @@ func (s *Signer) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byt
 	}
 
 	ctx := context.Background()
-	raw, err := withSession(ctx, s.adapter, s.workspace, s.sessionOpts, s.resolvePIN, func(sess *pk11.Session) ([]byte, error) {
+	raw, err := withSession(ctx, s.adapter, s.workspace, s.sessionOpts, func(sess *pk11.Session) ([]byte, error) {
 		handle, err := findKeyByLabel(ctx, s.adapter, sess, pk11.ClassPrivateKey, s.keyLabel)
 		if err != nil {
 			return nil, err
@@ -201,11 +207,24 @@ func findKeyByLabel(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Ses
 	}
 }
 
-// withSession opens a session against ws, logs in, runs fn, and always logs
-// out and closes the session afterward — the lifecycle every Signer
-// operation shares. The zero value of T is returned alongside a non-nil
-// error on any failure.
-func withSession[T any](ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, opts pk11.SessionOptions, resolvePIN PINResolver, fn func(*pk11.Session) (T, error)) (T, error) {
+// withSession opens a session against ws, runs fn, and closes the session
+// afterward — the lifecycle every Signer operation shares.
+//
+// It does not log in, and that is the point. PKCS#11 authenticates a token
+// for the whole application, not per session, so the token is already
+// authenticated by the time this runs: Bootstrap established it once via
+// LoginToken and it holds for the service's lifetime (see
+// internal/pkcs11/tokenlogin.go). A session opened here inherits that
+// authentication and can use private keys immediately.
+//
+// This used to log in and out around every operation. That was not merely
+// wasteful, it was broken under concurrency: the second concurrent caller's
+// C_Login failed with CKR_USER_ALREADY_LOGGED_IN, and the first caller's
+// C_Logout de-authenticated the second one mid-signature. Serializing the
+// calls could not fix it, because the interference happened between them.
+//
+// The zero value of T is returned alongside a non-nil error on any failure.
+func withSession[T any](ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, opts pk11.SessionOptions, fn func(*pk11.Session) (T, error)) (T, error) {
 	var zero T
 
 	session, err := adapter.OpenSession(ctx, ws, opts)
@@ -213,15 +232,6 @@ func withSession[T any](ctx context.Context, adapter pk11.VendorAdapter, ws pk11
 		return zero, fmt.Errorf("ca: OpenSession: %w", err)
 	}
 	defer adapter.CloseSession(ctx, session)
-
-	pin, err := resolvePIN()
-	if err != nil {
-		return zero, fmt.Errorf("ca: resolving PIN: %w", err)
-	}
-	if err := adapter.Login(ctx, session, pin, pk11.RoleUser); err != nil {
-		return zero, fmt.Errorf("ca: Login: %w", err)
-	}
-	defer adapter.Logout(ctx, session)
 
 	return fn(session)
 }

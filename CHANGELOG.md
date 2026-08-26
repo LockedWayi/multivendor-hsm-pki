@@ -5,20 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Known issues
-- **The CA service is not concurrency-safe against the HSM** (Phase 2
-  sub-task 2.8). PKCS#11 login state is per-token, not per-session, so the
-  signer's open/login/work/logout/close-per-call pattern breaks with two
-  requests in flight: the second `C_Login` returns
-  `CKR_USER_ALREADY_LOGGED_IN`, and the first caller's `C_Logout`
-  de-authenticates the second mid-operation. Reproduced identically on
-  SoftHSM2 2.6.1 and ProtectToolkit 7.3.3, which is what establishes it as
-  the spec's model rather than a vendor bug. Every test through Phase 2 is
-  sequential, which is why it went unnoticed. The fix is blocked on a
-  maintainer decision about the token's authenticated lifetime; see the
-  sub-task for the options.
-
 ### Added
+- **Anchor login** (`internal/pkcs11/tokenlogin.go`): `LoginToken` /
+  `LogoutToken` / `TokenLoggedIn`. The service authenticates its token once
+  at startup and stays authenticated until shutdown; sessions opened
+  afterward inherit that authentication and perform no login of their own.
+  This fixes a real defect — PKCS#11 authenticates a token for the whole
+  application, not per session, so the previous login-and-logout-around-
+  every-operation pattern broke with two requests in flight (the second
+  `C_Login` returned `CKR_USER_ALREADY_LOGGED_IN`; the first caller's
+  `C_Logout` de-authenticated the second mid-signature). Serializing the
+  calls could not fix it, because the interference happened between them.
+  Reproduced identically on SoftHSM2 2.6.1 and ProtectToolkit 7.3.3, which
+  is what established it as the spec's model rather than a vendor bug; every
+  test through Phase 2 was sequential, which is why it survived that long.
+  The anchor session is held outside the janitor's tracking so it can never
+  expire — an expiring anchor would drop authentication out from under
+  in-flight requests. Verified with 10 concurrent `POST /certificates`
+  against the maintainer's real ProtectServer token: all 201, all
+  `openssl verify` OK, all serials distinct, zero login errors.
 - Failure-path coverage completing Phase 2: `TestSigner_Sign_ExpiredSessionFailsClosed`
   (a white-box test — `Signer.Sign` opens its own session per call, so an
   already-expired budget can only be forced after a normal, successful
@@ -65,7 +70,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `crypto/x509` round trip.
 - `internal/ca.Signer`: a `crypto.Signer` backed by an HSM-resident EC key
   pair, reached through `VendorAdapter`. Every `Sign` call opens its own
-  session, authenticates, and closes the session again — it never holds one
+  session and closes it again — it never holds one
   for its lifetime (`pkcs11.Session` fails closed on idle timeout / max TTL,
   so a service-lifetime session would eventually start failing every call
   for reasons unrelated to the request). `pkcs11.DecodeECPoint` moved from a

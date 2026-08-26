@@ -61,7 +61,22 @@ func Bootstrap(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspac
 		params.RootValidity = DefaultRootValidity
 	}
 
-	keyExists, err := keyPairExists(ctx, adapter, ws, sessionOpts, resolvePIN, params.KeyLabel)
+	// Authenticate the token once, here, for the service's lifetime.
+	// Everything below — and every later signing call — runs on sessions
+	// that inherit this, with no login of their own. See
+	// internal/pkcs11/tokenlogin.go for why per-operation login cannot be
+	// made concurrency-safe.
+	if !adapter.TokenLoggedIn() {
+		pin, err := resolvePIN()
+		if err != nil {
+			return nil, fmt.Errorf("ca: resolving PIN: %w", err)
+		}
+		if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
+			return nil, fmt.Errorf("ca: token login: %w", err)
+		}
+	}
+
+	keyExists, err := keyPairExists(ctx, adapter, ws, sessionOpts, params.KeyLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -72,9 +87,9 @@ func Bootstrap(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspac
 
 	switch {
 	case keyExists && certExists:
-		return loadExisting(ctx, adapter, ws, sessionOpts, resolvePIN, params)
+		return loadExisting(ctx, adapter, ws, sessionOpts, params)
 	case !keyExists && !certExists:
-		return bootstrapNew(ctx, adapter, ws, sessionOpts, resolvePIN, params)
+		return bootstrapNew(ctx, adapter, ws, sessionOpts, params)
 	default:
 		return nil, fmt.Errorf(
 			"ca: inconsistent bootstrap state for key label %q: HSM key exists=%v, cert file %q exists=%v — refusing to guess which one is stale",
@@ -82,20 +97,20 @@ func Bootstrap(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspac
 	}
 }
 
-func loadExisting(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, resolvePIN PINResolver, params BootstrapParams) (*CA, error) {
+func loadExisting(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, params BootstrapParams) (*CA, error) {
 	cert, err := loadCertPEM(params.CertPath)
 	if err != nil {
 		return nil, err
 	}
-	signer, err := NewSigner(ctx, adapter, ws, sessionOpts, resolvePIN, params.KeyLabel, params.Curve)
+	signer, err := NewSigner(ctx, adapter, ws, sessionOpts, params.KeyLabel, params.Curve)
 	if err != nil {
 		return nil, err
 	}
 	return &CA{cert: cert, signer: signer, certTTL: params.CertTTL}, nil
 }
 
-func bootstrapNew(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, resolvePIN PINResolver, params BootstrapParams) (*CA, error) {
-	_, err := withSession(ctx, adapter, ws, sessionOpts, resolvePIN, func(s *pk11.Session) (struct{}, error) {
+func bootstrapNew(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, params BootstrapParams) (*CA, error) {
+	_, err := withSession(ctx, adapter, ws, sessionOpts, func(s *pk11.Session) (struct{}, error) {
 		_, err := adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
 			Curve: params.Curve, Label: params.KeyLabel, Sign: true, Verify: true,
 		})
@@ -105,7 +120,7 @@ func bootstrapNew(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Works
 		return nil, fmt.Errorf("ca: generating CA key pair: %w", err)
 	}
 
-	signer, err := NewSigner(ctx, adapter, ws, sessionOpts, resolvePIN, params.KeyLabel, params.Curve)
+	signer, err := NewSigner(ctx, adapter, ws, sessionOpts, params.KeyLabel, params.Curve)
 	if err != nil {
 		return nil, err
 	}
@@ -148,8 +163,8 @@ func bootstrapNew(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Works
 // keyPairExists reports whether a private key with label already exists on
 // the token, distinguishing "does not exist" (ErrKeyNotFound) from any
 // other error opening a session or searching for it.
-func keyPairExists(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, resolvePIN PINResolver, label string) (bool, error) {
-	return withSession(ctx, adapter, ws, sessionOpts, resolvePIN, func(s *pk11.Session) (bool, error) {
+func keyPairExists(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, label string) (bool, error) {
+	return withSession(ctx, adapter, ws, sessionOpts, func(s *pk11.Session) (bool, error) {
 		_, err := findKeyByLabel(ctx, adapter, s, pk11.ClassPrivateKey, label)
 		if errors.Is(err, ErrKeyNotFound) {
 			return false, nil
