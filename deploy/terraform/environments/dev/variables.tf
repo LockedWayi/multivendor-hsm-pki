@@ -1,7 +1,6 @@
 variable "hostinger_api_token" {
   type        = string
   sensitive   = true
-  default     = "ghp_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a"
   description = "Hostinger API token. Supply via the TF_VAR_hostinger_api_token environment variable -- never write it to a *.tfvars file, gitignored or not."
 }
 
