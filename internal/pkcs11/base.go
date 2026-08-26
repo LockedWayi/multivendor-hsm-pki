@@ -3,6 +3,7 @@ package pkcs11
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -106,6 +107,33 @@ func (a *pkcs11Adapter) withStateLock(fn func() error) error {
 	return fn()
 }
 
+// withReadLock runs fn under a shared lock. It is used only for
+// session-scoped single-call operations: C_GetAttributeValue and
+// C_GenerateRandom.
+//
+// Two separate cautions apply before adding a third caller, and they fail
+// in different ways:
+//
+// First, Go cannot prove fn is read-only. A future change that puts a
+// multi-step sequence (an *Init call and its follow-up) inside fn would
+// compile, pass a casual review, and reintroduce exactly the cross-session
+// operation-state interleaving withStateLock exists to prevent. If the
+// operation has an *Init step, it needs withStateLock.
+//
+// Second — and this one is not a code-review problem but a vendor
+// problem — "read-only by the spec" does not imply "safe to call
+// concurrently on every token." ProtectToolkit 7.3.3 deadlocks inside
+// C_GetSlotList when two threads call it at once, despite the module being
+// initialized with CKF_OS_LOCKING_OK, which is precisely the flag that is
+// supposed to make that safe. Workspaces was moved to this function on
+// exactly that reasoning and had to be moved back; see its doc comment and
+// docs/pkcs11-vendor-notes.md. The surviving callers here are session
+// scoped, and a *Session is used by one caller at a time, so they do not
+// exercise the module-global concurrency that broke.
+//
+// The practical rule: promoting a call to a read lock is a claim about a
+// specific vendor's threading behaviour, not about the PKCS#11 spec, and
+// it has to be tested against every backend before it is believed.
 func (a *pkcs11Adapter) withReadLock(fn func() error) error {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -126,6 +154,40 @@ func checkCtx(ctx context.Context) error {
 
 // ─── Workspaces ─────────────────────────────────────────────────────────
 
+// Workspaces enumerates the tokens the module can see.
+//
+// This takes the full state lock, and that is load-bearing: it is what
+// serializes C_GetSlotList across callers.
+//
+// The theoretical case for a read lock here is good, and was tried:
+// C_GetSlotList and C_GetTokenInfo are single-call queries carrying no
+// session-scoped operation state, and the module is initialized with
+// CKF_OS_LOCKING_OK (miekg/pkcs11's Initialize default), which is a token
+// library's contract to serialize its own internals. Under that reasoning
+// two callers listing tokens should not need to block each other.
+//
+// ProtectToolkit 7.3.3 does not honour it. With the read lock in place,
+// concurrent Workspaces callers deadlock *inside* C_GetSlotList — two
+// goroutines parked in [syscall] on the cgo call, with no Go-level lock
+// contention anywhere: the janitor idle, no writer waiting, nothing for
+// them to be blocked on except the vendor library itself. Reproduced on
+// the maintainer's own ProtectToolkit installation while reviewing this
+// file; it does not reproduce in a freshly started process making only
+// this call, which is why it needs the full conformance suite's
+// accumulated activity ahead of it to show up (see
+// docs/pkcs11-vendor-notes.md for the full write-up).
+//
+// So the exclusive lock stays. The cost is real and worth naming: a vendor
+// module that stalls inside C_GetSlotList — plausible on a netHSM client
+// whose network is down — stalls every other adapter operation too,
+// because they all queue behind this same lock. That trade is accepted
+// deliberately: a slow adapter is a worse failure than a deadlocked one,
+// and CKF_OS_LOCKING_OK has been demonstrated here to be a promise at
+// least one shipping vendor does not keep.
+//
+// TestConformance/*/Workspaces_ConcurrentCallsAreSafe is the regression
+// guard. It passes trivially under this lock; it hangs against
+// ProtectServer the moment someone switches this back to withReadLock.
 func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -196,22 +258,68 @@ func (a *pkcs11Adapter) OpenSession(ctx context.Context, ws Workspace, opts Sess
 	return s, nil
 }
 
+// CloseSession releases the underlying PKCS#11 session.
+//
+// The session is marked unusable immediately and unconditionally — whatever
+// the token reports next, no caller gets to keep using it (fail closed,
+// CLAUDE.md §3.4). But it is only removed from the adapter's session map
+// once the token has actually released the handle. Dropping the entry
+// before knowing that would leave a session open on the token that nothing
+// can ever reclaim: the janitor sweeps the map, and Close force-closes the
+// map, so an entry deleted on a failed C_CloseSession is invisible to both.
+// HSM session slots are a bounded resource (ProtectServer reports a
+// per-token maximum of 65534), so a long-running service that leaked one
+// per failure would eventually stop being able to open sessions at all.
+//
+// Two outcomes count as "the token no longer holds this handle" and are
+// therefore safe to forget: success, and CKR_SESSION_HANDLE_INVALID (the
+// token already considers the handle gone — the ordinary result of a
+// double close, which this method's idempotency contract allows).
+// ErrAdapterClosed is also safe: Close has already cleared the map and
+// finalized the module, which releases every session the module held.
 func (a *pkcs11Adapter) CloseSession(ctx context.Context, s *Session) error {
 	s.markClosed()
-	a.sessMu.Lock()
-	delete(a.sessions, s.handle)
-	a.sessMu.Unlock()
-	return a.withStateLock(func() error {
+
+	err := a.withStateLock(func() error {
 		if err := a.ctx.CloseSession(s.handle); err != nil {
 			return fmt.Errorf("C_CloseSession: %w", err)
 		}
 		return nil
 	})
+
+	if err == nil || errors.Is(err, ErrAdapterClosed) || isSessionHandleInvalid(err) {
+		a.sessMu.Lock()
+		delete(a.sessions, s.handle)
+		a.sessMu.Unlock()
+	}
+	return err
+}
+
+// isSessionHandleInvalid reports whether err is the token telling us the
+// session handle is already gone.
+func isSessionHandleInvalid(err error) bool {
+	var p11Err p11.Error
+	return errors.As(err, &p11Err) && p11Err == p11.Error(p11.CKR_SESSION_HANDLE_INVALID)
 }
 
 // ─── Login / Logout ─────────────────────────────────────────────────────
 
+// Login authenticates the session as role.
+//
+// pin is consumed: it is zeroed in place before this returns, on every
+// path, and callers must not reuse it (VendorAdapter.Login says the same).
+// NewSecurePIN below already zeroes it as part of copying it to the C heap,
+// but only once execution reaches that call — the guard clauses above it
+// (cancelled context, expired session, empty PIN) would otherwise hand the
+// caller back a still-readable PIN sitting in the Go heap, where this
+// package can no longer deterministically wipe it. Making the wipe
+// unconditional is what turns "pin is consumed" from a contract that holds
+// on the success path into one that holds always (CLAUDE.md §3.1).
+// zeroizeBytes is idempotent, so the double wipe on the normal path costs
+// a second pass over a handful of bytes and nothing else.
 func (a *pkcs11Adapter) Login(ctx context.Context, s *Session, pin []byte, role Role) error {
+	defer zeroizeBytes(pin)
+
 	if err := checkCtx(ctx); err != nil {
 		return err
 	}
@@ -323,6 +431,20 @@ func (a *pkcs11Adapter) GenerateSecretKey(ctx context.Context, s *Session, req S
 	if bits == 0 {
 		bits = 256
 	}
+	// Validate here rather than letting the token decide. CKA_VALUE_LEN is
+	// bits/8, and integer division silently turns a wrong-but-plausible
+	// request into a wrong-but-accepted key: 200 bits becomes a 25-byte
+	// CKA_VALUE_LEN, which some tokens will happily create as a
+	// non-standard AES key rather than reject. A negative KeyBits is worse
+	// still. Rejecting the input outright is the fail-closed reading of an
+	// ambiguous security parameter (CLAUDE.md §3.4), and it puts the error
+	// at the caller's mistake instead of several layers down inside a
+	// vendor module.
+	switch bits {
+	case 128, 192, 256:
+	default:
+		return 0, fmt.Errorf("%w: %d bits (want 128, 192, or 256)", ErrUnsupportedKeySize, bits)
+	}
 	id, err := resolveID(req.ID)
 	if err != nil {
 		return 0, err
@@ -412,6 +534,15 @@ func (a *pkcs11Adapter) FindObjects(ctx context.Context, s *Session, tmpl []Attr
 	return out, err
 }
 
+// GetAttributes reads the requested attributes off obj.
+//
+// Variable-length attributes (CKA_EC_POINT, CKA_MODULUS, a certificate
+// body) need PKCS#11's two-call sequence — query ulValueLen with a NULL
+// pValue, allocate, call again — and miekg/pkcs11's C shim does exactly
+// that internally, so passing nil-valued attribute templates here is
+// correct and CKR_BUFFER_TOO_SMALL is not reachable through this path.
+// A read lock suffices: C_GetAttributeValue is a single call with no
+// session-scoped operation state (contrast Verify, above).
 func (a *pkcs11Adapter) GetAttributes(ctx context.Context, s *Session, obj ObjectHandle, types []AttributeType) ([]Attribute, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -440,6 +571,34 @@ func (a *pkcs11Adapter) GetAttributes(ctx context.Context, s *Session, obj Objec
 
 // ─── Sign / Verify ───────────────────────────────────────────────────────
 
+// Sign produces a signature over data.
+//
+// # Single-part only, deliberately
+//
+// This calls C_SignInit + C_Sign, not the C_SignUpdate/C_SignFinal
+// streaming form. That is a real constraint, not an oversight: the whole
+// input is handed to the token in one call, so an enormous input would be
+// bounded by token memory. It is the right shape for what this interface
+// signs — CKM_ECDSA takes a fixed-size pre-computed digest (32 bytes for
+// P-256), and the CA above it signs digests and CRLs, never bulk data.
+// Adding a streaming path before a caller needs one would be speculative
+// API surface; a caller that needs it should add it then, when its actual
+// requirements are known.
+//
+// # On the "active operation" state
+//
+// PKCS#11 leaves a session in an active signing operation between
+// C_SignInit and C_Sign, and a session stuck in that state rejects further
+// operations with CKR_OPERATION_ACTIVE. Three things bound that exposure
+// here: the two calls are adjacent inside one locked closure with no early
+// return between them; the spec has C_Sign terminate the operation on any
+// error other than CKR_BUFFER_TOO_SMALL, so a failed signature does not
+// leave the session wedged; and internal/ca.Signer opens a fresh session
+// per signing call and closes it afterward, which releases the state
+// unconditionally. The residual case is miekg/pkcs11's C shim failing its
+// calloc between its length-probe call and its real call (CKR_HOST_MEMORY),
+// which would leave the operation active — an out-of-memory path where a
+// wedged session is not the failure anyone is dealing with.
 func (a *pkcs11Adapter) Sign(ctx context.Context, s *Session, key ObjectHandle, mech Mechanism, data []byte) ([]byte, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -463,6 +622,20 @@ func (a *pkcs11Adapter) Sign(ctx context.Context, s *Session, key ObjectHandle, 
 	return sig, err
 }
 
+// Verify checks sig over data.
+//
+// This takes the full state lock, not a read lock, even though
+// verification uses a public key and produces no persistent change. The
+// lock here is not protecting key material — it is protecting the session's
+// single operation slot. C_VerifyInit followed by C_Verify is a two-step
+// sequence that leaves the session in an active verify operation in
+// between, and PKCS#11 permits exactly one active operation per session.
+// Two goroutines sharing a session under a read lock would interleave
+// their Init calls and clobber each other's operation state, which
+// surfaces as CKR_OPERATION_ACTIVE or, worse, one caller's C_Verify
+// running against the other's key handle. "Read-only" describes the
+// cryptography, not the session bookkeeping, and it is the bookkeeping
+// that needs serializing.
 func (a *pkcs11Adapter) Verify(ctx context.Context, s *Session, key ObjectHandle, mech Mechanism, data, sig []byte) error {
 	if err := checkCtx(ctx); err != nil {
 		return err
@@ -484,6 +657,21 @@ func (a *pkcs11Adapter) Verify(ctx context.Context, s *Session, key ObjectHandle
 
 // ─── Encrypt / Decrypt ───────────────────────────────────────────────────
 
+// Encrypt encrypts plaintext with a symmetric key.
+//
+// Single-part (C_EncryptInit + C_Encrypt), with the same reasoning and the
+// same active-operation bounds described on Sign — the difference being
+// that Encrypt's input length is genuinely caller-controlled, so a caller
+// feeding it hundreds of megabytes would hit token memory limits. This
+// interface exists to exercise symmetric operations behind the vendor
+// abstraction, not as a bulk data pipe; a caller with bulk data should add
+// the C_EncryptUpdate/C_EncryptFinal path when it has one.
+//
+// The output buffer is sized correctly without caller involvement:
+// miekg/pkcs11's C shim performs the standard two-call PKCS#11 sequence
+// (C_Encrypt with a NULL output pointer to learn the length, allocate,
+// then call again), so CKR_BUFFER_TOO_SMALL is not a failure mode this
+// adapter has to handle.
 func (a *pkcs11Adapter) Encrypt(ctx context.Context, s *Session, key ObjectHandle, mech Mechanism, plaintext []byte) ([]byte, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -552,6 +740,17 @@ func (a *pkcs11Adapter) Wrap(ctx context.Context, s *Session, wrappingKey, keyTo
 	return out, err
 }
 
+// Unwrap imports wrapped as a new HSM object matching tmpl.
+//
+// wrapped is deliberately NOT zeroed after use, unlike a PIN. It is
+// ciphertext: the key material inside it is protected by unwrappingKey,
+// which never leaves the token, so a copy left in the Go heap discloses
+// nothing an attacker could use without already holding the unwrapping key
+// — at which point wiping this buffer would not have helped. Zeroing it
+// would buy no confidentiality while implying a guarantee this package does
+// not actually provide. The plaintext key material never enters Go memory
+// at any point: it is decrypted inside the token and exists only as the
+// returned ObjectHandle.
 func (a *pkcs11Adapter) Unwrap(ctx context.Context, s *Session, unwrappingKey ObjectHandle, mech Mechanism, wrapped []byte, tmpl []Attribute) (ObjectHandle, error) {
 	if err := checkCtx(ctx); err != nil {
 		return 0, err
@@ -656,6 +855,18 @@ func toP11Attributes(attrs []Attribute) []*p11.Attribute {
 		out[i] = p11.NewAttribute(uint(a.Type), a.Value)
 	}
 	return out
+}
+
+// zeroizeBytes overwrites b in place. Safe on nil and empty slices, and
+// idempotent. This is a best-effort wipe of a Go-heap buffer: the runtime
+// may already have copied the bytes elsewhere (that is precisely why
+// SecurePIN keeps the authoritative copy in the C heap — see
+// docs/phases/phase-1-pkcs11-core.md, "PIN zeroize method"). It removes the
+// copy we can actually reach, which is strictly better than leaving it.
+func zeroizeBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 func resolveID(id []byte) ([]byte, error) {
