@@ -60,6 +60,11 @@ verification.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - ECDSA P-256 default curve.
 - Fail-closed on every ambiguous security decision; all enforcement server-side.
+- Signing is purpose-separated at the key level: `ca-root-key`,
+  `image-signing-key`, and `artifact-signing-key` are three distinct HSM-held
+  keys behind the same PKCS#11 core, never interchangeable — a compromised
+  image key cannot issue a certificate, and a compromised CA key cannot sign a
+  release. See `docs/architecture.md`, "The signing layer."
 
 ## Status
 

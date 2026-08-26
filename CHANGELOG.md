@@ -24,6 +24,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   in-flight requests. Verified with 10 concurrent `POST /certificates`
   against the maintainer's real ProtectServer token: all 201, all
   `openssl verify` OK, all serials distinct, zero login errors.
+- `internal/pkcs11/conformance_test.go`: `LoginToken_AnchorLifecycle` and
+  `LoginToken_ConcurrentCallsSerializeToOneWinner`, pinning `LoginToken` /
+  `LogoutToken` / `TokenLoggedIn` directly at the layer that implements
+  them. Previously these were only reached indirectly through
+  `internal/ca` / `internal/api` tests, which is why `internal/pkcs11`'s
+  own coverage profile showed 0.0% on all three despite the anchor-login
+  fix above being otherwise fully verified — found during a maintainer
+  double-check of the whole phase before starting Phase 3. Raised
+  `internal/pkcs11`'s package coverage from 74.7% to 82.8% and
+  `ci/coverage.sh`'s overall figure from 73.2% to 77.0%.
 - Failure-path coverage completing Phase 2: `TestSigner_Sign_ExpiredSessionFailsClosed`
   (a white-box test — `Signer.Sign` opens its own session per call, so an
   already-expired budget can only be forced after a normal, successful
@@ -136,6 +146,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `C_Verify` rejects a signature over an all-zero digest that its own
   `C_Sign` produced, where SoftHSM2 accepts it. Benign, since a real digest is
   never all-zero.
+- **The signing layer, as a platform-wide principle** (documentation only in
+  this change; the build lands in Phases 4 and 5). The PKCS#11 core is now
+  stated as the platform's single signing foundation rather than only the CA's
+  key store: certificates, container images, and release artifacts are each
+  signed by their own HSM-held key over the same custody boundary. Recorded as
+  a non-negotiable rule in `CLAUDE.md` §3.6 (three purpose-separated keys —
+  `ca-root-key`, `image-signing-key`, `artifact-signing-key` — never
+  interchangeable, fail-closed on anything unsigned) and explained in
+  `docs/architecture.md` under "The signing layer: one core, three purposes",
+  with the two design decisions behind it: purpose-separated keys rather than
+  one platform key, and cosign rather than a first-party signing tool.
+  The delivery checklist follows the dependency line: `docs/phases/
+  phase-4-container-k8s.md` gains 4.8 (key provisioning through the Phase 1
+  core via `cmd/hsm-pki-keytool`), 4.9 (release-artifact signing with
+  `cosign sign-blob` over PKCS#11, cross-checked independently in Go with
+  `crypto/ecdsa`), and 4.10 (image signing by digest, verified at admission by
+  the Kyverno installed in 4.7); `docs/phases/phase-5-cicd.md` gains 5.9,
+  which turns all of it into a blocking pipeline gate.
+  Two facts established by reading cosign's own source rather than assuming
+  them, and recorded where they will be needed: PKCS#11 support sits behind
+  cosign's `pkcs11key` build tag, so the `pivkey-pkcs11key` release build is
+  required and the default binary cannot open a token at all; and cosign opens
+  the token through its own PKCS#11 binding, not through this repository's
+  `VendorAdapter` — so what the CA path and the signing path share is the token
+  and the standard, not our Go code, and the documentation says exactly that
+  instead of implying more.
 
 ### Changed
 - `internal/pkcs11/base.go`: the shared PKCS#11 plumbing (`pkcs11Adapter`)
@@ -233,6 +269,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `.gitignore` did not exclude `config.yaml`, despite `config.example.yaml`
   stating that it did — the file intended to hold real values was trackable.
   Also added guards against committing proprietary vendor SDK binaries.
+- `(*server).nextCRLNumber`'s doc comment still said "Unix seconds" after
+  the underlying implementation had already switched to `UnixMilli()` to
+  fix the same-second-restart collision (see the CRL-monotonicity entry
+  above) — the code was correct, only the comment had gone stale. Caught
+  during a maintainer double-check of the whole phase before starting
+  Phase 3.
 
 <!--
 Tag v0.1.0 once Phase 1 (PKCS#11 core) lands. Each phase producing a user-visible
