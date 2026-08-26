@@ -6,6 +6,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- `internal/ca.CA`, `internal/ca.Bootstrap`: CA domain logic on top of the
+  Phase 2 signer. `Bootstrap` decides between loading an existing CA and
+  creating a new one by checking two independent signals — an HSM key under
+  `ca.key_label` and a certificate file at `ca.cert_path` (new config
+  fields) — and refuses to guess when only one is present, rather than risk
+  signing under a mismatched key or duplicating a label meant to be unique.
+  `Issue` validates a CSR's signature, subject, and key type (EC
+  P-256/P-384/P-521 or RSA ≥ 2048 bits) before building a certificate;
+  serials are 128 bits of `crypto/rand`, never sequential. Verified with
+  `openssl verify` against a real issued certificate, not just Go's own
+  `crypto/x509` round trip.
 - `internal/ca.Signer`: a `crypto.Signer` backed by an HSM-resident EC key
   pair, reached through `VendorAdapter`. Every `Sign` call opens its own
   session, authenticates, and closes the session again — it never holds one

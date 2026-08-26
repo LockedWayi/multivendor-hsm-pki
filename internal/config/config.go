@@ -62,10 +62,15 @@ type VendorConfig struct {
 	PINEnv         string `yaml:"pin_env"`
 }
 
-// CAConfig configures certificate issuance policy.
+// CAConfig configures certificate issuance policy and where the CA's own
+// identity lives: its key pair on the HSM (by label) and its self-signed
+// certificate on disk (by path) — see internal/ca.Bootstrap for how the two
+// are used together.
 type CAConfig struct {
-	Curve        string `yaml:"curve"`
+	CurveName    string `yaml:"curve"`
 	CertTTLHours int    `yaml:"cert_ttl_hours"`
+	KeyLabel     string `yaml:"key_label"`
+	CertPath     string `yaml:"cert_path"`
 }
 
 // Load reads and validates the config file at path. Validation is
@@ -110,7 +115,41 @@ func Load(path string) (*Config, error) {
 	}
 	c.PKCS11.SessionOptions = opts
 
+	if _, err := ParseCurve(c.CA.CurveName); err != nil {
+		return nil, err
+	}
+	if c.CA.CertTTLHours <= 0 {
+		return nil, fmt.Errorf("config: ca.cert_ttl_hours must be positive, got %d", c.CA.CertTTLHours)
+	}
+	if c.CA.KeyLabel == "" {
+		return nil, fmt.Errorf("config: ca.key_label is empty")
+	}
+	if c.CA.CertPath == "" {
+		return nil, fmt.Errorf("config: ca.cert_path is empty")
+	}
+
 	return &c, nil
+}
+
+// ParseCurve maps a config ca.curve string to a pkcs11.ECCurve.
+func ParseCurve(s string) (pkcs11.ECCurve, error) {
+	switch s {
+	case "P-256":
+		return pkcs11.P256, nil
+	case "P-384":
+		return pkcs11.P384, nil
+	case "P-521":
+		return pkcs11.P521, nil
+	default:
+		return 0, fmt.Errorf("config: unknown ca.curve %q (want \"P-256\", \"P-384\", or \"P-521\")", s)
+	}
+}
+
+// Curve returns the parsed pkcs11.ECCurve for ca.curve. Load already
+// validated it, so this is safe to call unchecked afterward.
+func (c *CAConfig) Curve() pkcs11.ECCurve {
+	curve, _ := ParseCurve(c.CurveName)
+	return curve
 }
 
 // selectedVendor returns the VendorConfig for whichever adapter

@@ -193,7 +193,7 @@ func findKeyByLabel(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Ses
 	}
 	switch len(handles) {
 	case 0:
-		return 0, fmt.Errorf("ca: no object found with class %d and label %q", class, label)
+		return 0, fmt.Errorf("%w: class=%d label=%q", ErrKeyNotFound, class, label)
 	case 1:
 		return handles[0], nil
 	default:

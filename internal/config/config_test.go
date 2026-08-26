@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -31,6 +33,8 @@ pkcs11:
 ca:
   curve: "P-256"
   cert_ttl_hours: 8760
+  key_label: "ca-signing-key"
+  cert_path: "ca-cert.pem"
 `
 
 func TestLoad_Success(t *testing.T) {
@@ -137,6 +141,11 @@ pkcs11:
     module_path: "/usr/lib/softhsm/libsofthsm2.so"
     workspace_label: "test-token"
     pin_env: "TEST_PIN"
+ca:
+  curve: "P-256"
+  cert_ttl_hours: 8760
+  key_label: "ca-signing-key"
+  cert_path: "ca-cert.pem"
 `
 	path := writeConfig(t, body)
 
@@ -146,6 +155,103 @@ pkcs11:
 	}
 	if cfg.PKCS11.SessionOptions.IdleTimeout == 0 || cfg.PKCS11.SessionOptions.MaxTTL == 0 {
 		t.Fatalf("SessionOptions = %+v, want non-zero defaults", cfg.PKCS11.SessionOptions)
+	}
+}
+
+func TestLoad_UnknownCurveFails(t *testing.T) {
+	t.Setenv("TEST_PIN", "1234")
+	body := `
+pkcs11:
+  adapter: "softhsm2"
+  softhsm2:
+    module_path: "/usr/lib/softhsm/libsofthsm2.so"
+    workspace_label: "test-token"
+    pin_env: "TEST_PIN"
+ca:
+  curve: "P-224"
+  cert_ttl_hours: 8760
+  key_label: "ca-signing-key"
+  cert_path: "ca-cert.pem"
+`
+	path := writeConfig(t, body)
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load with an unsupported ca.curve succeeded, want an error")
+	}
+}
+
+func TestLoad_ZeroCertTTLFails(t *testing.T) {
+	t.Setenv("TEST_PIN", "1234")
+	body := `
+pkcs11:
+  adapter: "softhsm2"
+  softhsm2:
+    module_path: "/usr/lib/softhsm/libsofthsm2.so"
+    workspace_label: "test-token"
+    pin_env: "TEST_PIN"
+ca:
+  curve: "P-256"
+  cert_ttl_hours: 0
+  key_label: "ca-signing-key"
+  cert_path: "ca-cert.pem"
+`
+	path := writeConfig(t, body)
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load with cert_ttl_hours=0 succeeded, want an error")
+	}
+}
+
+func TestLoad_EmptyKeyLabelFails(t *testing.T) {
+	t.Setenv("TEST_PIN", "1234")
+	body := `
+pkcs11:
+  adapter: "softhsm2"
+  softhsm2:
+    module_path: "/usr/lib/softhsm/libsofthsm2.so"
+    workspace_label: "test-token"
+    pin_env: "TEST_PIN"
+ca:
+  curve: "P-256"
+  cert_ttl_hours: 8760
+  cert_path: "ca-cert.pem"
+`
+	path := writeConfig(t, body)
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load with an empty ca.key_label succeeded, want an error")
+	}
+}
+
+func TestLoad_EmptyCertPathFails(t *testing.T) {
+	t.Setenv("TEST_PIN", "1234")
+	body := `
+pkcs11:
+  adapter: "softhsm2"
+  softhsm2:
+    module_path: "/usr/lib/softhsm/libsofthsm2.so"
+    workspace_label: "test-token"
+    pin_env: "TEST_PIN"
+ca:
+  curve: "P-256"
+  cert_ttl_hours: 8760
+  key_label: "ca-signing-key"
+`
+	path := writeConfig(t, body)
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load with an empty ca.cert_path succeeded, want an error")
+	}
+}
+
+func TestCAConfig_Curve(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	cfg, err := Load(writeConfig(t, validSoftHSM2Config))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.CA.Curve(); got != pkcs11.P256 {
+		t.Fatalf("CA.Curve() = %v, want P256", got)
 	}
 }
 

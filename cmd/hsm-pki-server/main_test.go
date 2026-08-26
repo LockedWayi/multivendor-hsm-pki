@@ -33,7 +33,12 @@ func writeSoftHSM2Config(t *testing.T, modulePath, label string) string {
 		"  softhsm2:\n" +
 		"    module_path: \"" + modulePath + "\"\n" +
 		"    workspace_label: \"" + label + "\"\n" +
-		"    pin_env: \"MAIN_TEST_PIN\"\n"
+		"    pin_env: \"MAIN_TEST_PIN\"\n" +
+		"ca:\n" +
+		"  curve: \"P-256\"\n" +
+		"  cert_ttl_hours: 8760\n" +
+		"  key_label: \"ca-signing-key\"\n" +
+		"  cert_path: \"" + filepath.Join(t.TempDir(), "ca-cert.pem") + "\"\n"
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
