@@ -6,10 +6,10 @@ import (
 )
 
 // VendorAdapter is the vendor-agnostic PKCS#11 surface every HSM backend
-// (SoftHSM2 today; nShield, Luna, ProtectServer later — Phase 7) implements.
-// It is written against the standard PKCS#11 operation set only; a vendor's
-// quirks and extensions are resolved inside that vendor's adapter and never
-// appear here (docs/phases/phase-1-pkcs11-core.md).
+// (SoftHSM2 and ProtectServer today; nShield and Luna later — Phase 7)
+// implements. It is written against the standard PKCS#11 operation set
+// only; a vendor's quirks and extensions are resolved inside that vendor's
+// adapter and never appear here (docs/phases/phase-1-pkcs11-core.md).
 //
 // Every method that operates within a session takes the *Session returned
 // by OpenSession. Implementations must reject the call once that session's

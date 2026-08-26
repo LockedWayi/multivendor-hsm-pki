@@ -63,9 +63,12 @@ verification.
 
 ## Status
 
-Phase 1 (PKCS#11 core) in progress. The interface, session lifecycle, PIN
-custody, and SoftHSM2 adapter are complete and tested; the ProtectServer adapter
-is scaffolded but not yet implemented. Per-sub-task progress is tracked in
+Phase 1 (PKCS#11 core) complete. The interface, session lifecycle, PIN custody,
+and both the SoftHSM2 and ProtectServer adapters are implemented, tested, and
+share one extracted core (`internal/pkcs11/base.go`) — proof that the interface
+needed zero vendor-specific overrides once a second, real vendor was run against
+it. A single conformance suite (`TestConformance`) runs against both backends.
+Per-sub-task detail is tracked in
 [`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md).
 
 ## License
