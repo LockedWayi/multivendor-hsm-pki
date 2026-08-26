@@ -37,6 +37,10 @@ const (
 	// the client's connection open past the deadline; the underlying HSM
 	// call is abandoned, not interrupted.
 	requestTimeout = 15 * time.Second
+
+	// crlClockSkewAllowance backdates a CRL's thisUpdate, matching the
+	// backdate Issue applies to a certificate's NotBefore.
+	crlClockSkewAllowance = 5 * time.Minute
 )
 
 // NewServer builds the HTTP handler for the CA service. issuer signs
@@ -249,9 +253,12 @@ func (s *server) currentCRL() ([]byte, error) {
 		}
 	}
 
-	thisUpdate := now
+	// Backdate thisUpdate the same few minutes Issue backdates NotBefore,
+	// so a verifier whose clock trails this host's does not reject a CRL
+	// that is technically not valid yet.
+	thisUpdate := now.Add(-crlClockSkewAllowance)
 	nextUpdate := now.Add(s.crlValidity)
-	s.crlNumber = new(big.Int).Add(s.crlNumber, big.NewInt(1))
+	s.crlNumber = s.nextCRLNumber(now)
 
 	der, err := s.ca.BuildCRL(revoked, thisUpdate, nextUpdate, s.crlNumber)
 	if err != nil {
@@ -260,6 +267,36 @@ func (s *server) currentCRL() ([]byte, error) {
 	s.cachedCRL = der
 	s.cachedNextUpdate = nextUpdate
 	return der, nil
+}
+
+// nextCRLNumber returns a CRL number strictly greater than any this
+// service has issued — including across a restart.
+//
+// RFC 5280 §5.2.3 requires CRL numbers to increase monotonically, and a
+// counter that starts from zero every time the process starts does not:
+// after a restart the service would reissue number 1 while verifiers hold a
+// previously distributed number 5, and a verifier keeping the higher-
+// numbered CRL would then ignore every subsequent update, revocations
+// included. Phase 2 has no persistent storage to read a counter back from
+// (deliberately — see the phase file's out-of-scope list), so the wall
+// clock supplies the monotonic component instead: Unix seconds only ever
+// increase, survive a restart, and need nothing stored.
+//
+// max(previous+1, now) keeps it strictly increasing within a run too, for
+// the case where two CRLs are generated inside the same second.
+//
+// The dependency this accepts is on the clock not moving backwards across a
+// restart. A large backward step would repeat numbers already issued; NTP
+// keeps that from happening in practice, and a persistent counter — the
+// real fix — arrives with the storage layer that Phase 2 explicitly does
+// not build.
+func (s *server) nextCRLNumber(now time.Time) *big.Int {
+	candidate := big.NewInt(now.UnixMilli())
+	incremented := new(big.Int).Add(s.crlNumber, big.NewInt(1))
+	if incremented.Cmp(candidate) > 0 {
+		return incremented
+	}
+	return candidate
 }
 
 // issueErrorResponse maps a ca.Issue error to an HTTP status and a message
