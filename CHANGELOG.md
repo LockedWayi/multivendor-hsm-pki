@@ -6,6 +6,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- `internal/ca.Signer`: a `crypto.Signer` backed by an HSM-resident EC key
+  pair, reached through `VendorAdapter`. Every `Sign` call opens its own
+  session, authenticates, and closes the session again — it never holds one
+  for its lifetime (`pkcs11.Session` fails closed on idle timeout / max TTL,
+  so a service-lifetime session would eventually start failing every call
+  for reasons unrelated to the request). `pkcs11.DecodeECPoint` moved from a
+  test-only helper into the `pkcs11` package proper, fixing a long-form DER
+  length bug the test-only version had for any EC point ≥128 bytes.
+  Verified: `x509.CreateCertificate` produces a certificate over a
+  SoftHSM2-resident key, and `cert.CheckSignatureFrom` accepts it.
 - `cmd/hsm-pki-server`, `internal/config`, `internal/api`: the Phase 2 service
   skeleton. `internal/config` loads `config.yaml`, validates the selected
   adapter and its module path/workspace label/PIN-env-var name, and fails

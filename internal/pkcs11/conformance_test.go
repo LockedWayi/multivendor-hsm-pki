@@ -453,9 +453,9 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		if err != nil {
 			t.Fatalf("GetAttributes: %v", err)
 		}
-		pub, err := ecPointToPublicKey(elliptic.P256(), attrs[0].Value)
+		pub, err := pk11.DecodeECPoint(elliptic.P256(), attrs[0].Value)
 		if err != nil {
-			t.Fatalf("ecPointToPublicKey: %v", err)
+			t.Fatalf("DecodeECPoint: %v", err)
 		}
 		half := len(sig) / 2
 		r := new(big.Int).SetBytes(sig[:half])
@@ -579,27 +579,4 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatalf("Workspaces after Close = %v, want ErrAdapterClosed", err)
 		}
 	})
-}
-
-// ─── Helpers ───────────────────────────────────────────────────────────────
-
-// ecPointToPublicKey decodes a PKCS#11 CKA_EC_POINT (a DER OCTET STRING
-// wrapping an uncompressed EC point) into a crypto/ecdsa public key.
-func ecPointToPublicKey(curve elliptic.Curve, ecPoint []byte) (*ecdsa.PublicKey, error) {
-	var raw []byte
-	if len(ecPoint) > 2 && ecPoint[0] == 0x04 {
-		// ASN.1 OCTET STRING header: 0x04 <len> <point bytes>.
-		n := int(ecPoint[1])
-		if n <= len(ecPoint)-2 {
-			raw = ecPoint[2 : 2+n]
-		}
-	}
-	if raw == nil {
-		raw = ecPoint // some tokens return the raw point unwrapped
-	}
-	x, y := elliptic.Unmarshal(curve, raw)
-	if x == nil {
-		return nil, fmt.Errorf("invalid EC point encoding (%d bytes)", len(ecPoint))
-	}
-	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
 }
