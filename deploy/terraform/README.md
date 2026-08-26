@@ -86,6 +86,19 @@ document a reason for. If one is ever added, it carries an inline comment
 explaining why it was accepted, per this project's rule that an
 unexplained suppression is worse than the finding.
 
+### Proof the scanner catches something (sub-task 3.6)
+
+`trivy config`'s cloud rules have no coverage for Hostinger, so a
+fabricated cloud-misconfiguration demo was not available without adding
+an unrelated resource this repo has no other reason to hold — the padding
+this phase's introduction explicitly avoids. Instead, `ci/terraform-scan.sh`
+also runs Trivy's secret scanner (reachable regardless of provider), and
+2 commits demonstrate it working end-to-end on a realistic mistake —
+a hardcoded-looking token left in a variable's `default`:
+
+- [`2f37c6f`](https://github.com/LockedWayi/hsm-pki-platform/commit/2f37c6f) — introduces the mistake; `ci/terraform-scan.sh` exits 1, Trivy flags it `CRITICAL` (`github-pat`)
+- [`357496c`](https://github.com/LockedWayi/hsm-pki-platform/commit/357496c) — reverts it; `ci/terraform-scan.sh` exits 0 again
+
 ## Provider verification (sub-task 3.1)
 
 The `hostinger/hostinger` provider's own README states a Terraform ≥ 1.3.0
