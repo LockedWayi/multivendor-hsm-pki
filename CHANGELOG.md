@@ -56,6 +56,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   never all-zero.
 
 ### Changed
+- `internal/pkcs11/base.go`: the shared PKCS#11 plumbing (`pkcs11Adapter`)
+  extracted from `SoftHSM2Adapter` and `ProtectServerAdapter` now that both
+  have been run against real hardware. Every operation the conformance
+  suite exercises turned out to need zero vendor-specific code — the one
+  real divergence found (an all-zero-digest `Verify` rejection, ProtectServer
+  only) is HSM behavior, not adapter logic, so it stays a documented fact in
+  `protectserver.go` rather than a branch. `SoftHSM2Adapter` and
+  `ProtectServerAdapter` are now each a named type embedding
+  `*pkcs11Adapter` plus a constructor. Phase 1 sub-task 1.8; completes
+  Phase 1.
 - Phase files now carry a `Sub-tasks` checklist with observable **Done when**
   criteria, so progress mid-phase is readable from the document rather than
   inferred from commit history. All seven phases are broken down; where a
