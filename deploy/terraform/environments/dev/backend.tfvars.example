@@ -1,0 +1,12 @@
+# Copy to backend.tfvars (gitignored) and pass it at init time:
+#   tofu init -backend-config=backend.tfvars
+#
+# Do NOT put access_key/secret_key here -- export AWS_ACCESS_KEY_ID and
+# AWS_SECRET_ACCESS_KEY instead. A credential does not belong in a file,
+# even a gitignored one. Only the endpoint goes here: not a secret, but
+# specific to this deployment (see docs/terraform-state-backend-setup.md
+# for why it is a private/localhost address, not a public one).
+
+endpoints = {
+  s3 = "http://127.0.0.1:9000"
+}
