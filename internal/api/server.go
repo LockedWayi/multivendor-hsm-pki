@@ -279,8 +279,10 @@ func (s *server) currentCRL() ([]byte, error) {
 // numbered CRL would then ignore every subsequent update, revocations
 // included. Phase 2 has no persistent storage to read a counter back from
 // (deliberately — see the phase file's out-of-scope list), so the wall
-// clock supplies the monotonic component instead: Unix seconds only ever
-// increase, survive a restart, and need nothing stored.
+// clock supplies the monotonic component instead: Unix milliseconds only
+// ever increase, survive a restart, and need nothing stored. Seconds were
+// tried first; a same-second restart reissuing an identical number is what
+// forced the switch to milliseconds (see TestCRL_NumberSurvivesRestart).
 //
 // max(previous+1, now) keeps it strictly increasing within a run too, for
 // the case where two CRLs are generated inside the same second.

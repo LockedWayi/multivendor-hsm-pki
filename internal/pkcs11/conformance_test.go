@@ -36,6 +36,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -331,6 +332,155 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 		if s.LoggedIn() {
 			t.Fatal("LoggedIn() = true after Logout")
+		}
+	})
+
+	// LoginToken_AnchorLifecycle exercises the anchor-login model directly
+	// at the pkcs11 layer, not only through internal/ca's CA-level
+	// concurrency test. Discovered during Phase 2's final review: every
+	// tokenlogin.go function was only ever reached indirectly, through
+	// internal/ca/internal/api tests, which showed as 0% coverage on this
+	// package's own per-package profile and meant no test here pinned
+	// LoginToken's edge cases (a rejected empty PIN, a rejected second
+	// login, idempotent logout) at the layer that actually implements them
+	// (docs/phases/phase-2-ca-core.md, sub-task 2.8).
+	//
+	// Runs immediately after "Logout" above, which is the one earlier
+	// subtest guaranteed to leave the token de-authenticated — every
+	// subtest from here on that calls openLoggedInSession relies on that
+	// being true at its start, so this block logs the token back out
+	// before returning.
+	t.Run("LoginToken_AnchorLifecycle", func(t *testing.T) {
+		if b.adapter.TokenLoggedIn() {
+			t.Fatal("TokenLoggedIn() = true before any LoginToken call")
+		}
+
+		if err := b.adapter.LoginToken(ctx, b.ws, nil, pk11.RoleUser); err != pk11.ErrEmptyPIN {
+			t.Fatalf("LoginToken(nil pin) = %v, want ErrEmptyPIN", err)
+		}
+		if b.adapter.TokenLoggedIn() {
+			t.Fatal("TokenLoggedIn() = true after a rejected empty-PIN LoginToken")
+		}
+
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.wrongPIN...), pk11.RoleUser); err == nil {
+			t.Fatal("LoginToken with wrong PIN succeeded, want an error")
+		}
+		if b.adapter.TokenLoggedIn() {
+			t.Fatal("TokenLoggedIn() = true after a failed LoginToken")
+		}
+
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+			t.Fatalf("LoginToken: %v", err)
+		}
+		if !b.adapter.TokenLoggedIn() {
+			t.Fatal("TokenLoggedIn() = false after a successful LoginToken")
+		}
+
+		// The load-bearing premise sub-task 2.8 was built on: a session
+		// opened after the anchor login inherits its authentication and can
+		// use a CKA_PRIVATE=true key with no login of its own. Pinned here
+		// so a regression fails at this layer, not three layers up in an
+		// HTTP concurrency test.
+		label := b.label("anchor-inherits")
+		genSess, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
+		if err != nil {
+			t.Fatalf("OpenSession (key gen): %v", err)
+		}
+		kp, err := b.adapter.GenerateKeyPair(ctx, genSess, pk11.KeyPairRequest{
+			Curve: pk11.P256, Label: label, Sign: true, Verify: true,
+		})
+		if err != nil {
+			t.Fatalf("GenerateKeyPair with no session-level login: %v", err)
+		}
+		_ = b.adapter.CloseSession(ctx, genSess)
+
+		signSess, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
+		if err != nil {
+			t.Fatalf("OpenSession (sign): %v", err)
+		}
+		digest := sha256.Sum256([]byte("anchor login inherited by a fresh session"))
+		if _, err := b.adapter.Sign(ctx, signSess, kp.Private, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:]); err != nil {
+			t.Fatalf("Sign with no session-level login: %v", err)
+		}
+		_ = b.adapter.CloseSession(ctx, signSess)
+
+		// A second LoginToken while already logged in is an error, not a
+		// silent no-op — see LoginToken's doc comment for why silently
+		// agreeing would leave two callers disagreeing about who owns the
+		// eventual logout.
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); !errors.Is(err, pk11.ErrTokenAlreadyLoggedIn) {
+			t.Fatalf("second LoginToken = %v, want ErrTokenAlreadyLoggedIn", err)
+		}
+		if !b.adapter.TokenLoggedIn() {
+			t.Fatal("TokenLoggedIn() = false after a rejected second LoginToken")
+		}
+
+		if err := b.adapter.LogoutToken(ctx); err != nil {
+			t.Fatalf("LogoutToken: %v", err)
+		}
+		if b.adapter.TokenLoggedIn() {
+			t.Fatal("TokenLoggedIn() = true after LogoutToken")
+		}
+
+		// Idempotent: logging out when not logged in is not an error.
+		if err := b.adapter.LogoutToken(ctx); err != nil {
+			t.Fatalf("second LogoutToken (idempotent) = %v, want nil", err)
+		}
+
+		// Not a one-shot resource: the token can be re-authenticated after
+		// a logout, which is exactly what a long-lived daemon needs across
+		// its lifetime even though Phase 2 never re-logs-in on its own.
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+			t.Fatalf("LoginToken after LogoutToken: %v", err)
+		}
+		if err := b.adapter.LogoutToken(ctx); err != nil {
+			t.Fatalf("final LogoutToken: %v", err)
+		}
+	})
+
+	// LoginToken_ConcurrentCallsSerializeToOneWinner exercises loginMu
+	// directly: sub-task 2.8's fix is only real if concurrent LoginToken
+	// callers cannot both believe they established the anchor. Complements
+	// internal/api's TestIssueCertificate_ConcurrentRequests, which proves
+	// concurrent signing works once one caller has already logged in, but
+	// never exercises concurrent callers racing the login itself.
+	t.Run("LoginToken_ConcurrentCallsSerializeToOneWinner", func(t *testing.T) {
+		if b.adapter.TokenLoggedIn() {
+			t.Fatal("TokenLoggedIn() = true before this subtest")
+		}
+
+		const n = 4
+		results := make([]error, n)
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				results[i] = b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser)
+			}(i)
+		}
+		wg.Wait()
+
+		successes := 0
+		for i, err := range results {
+			switch {
+			case err == nil:
+				successes++
+			case errors.Is(err, pk11.ErrTokenAlreadyLoggedIn):
+				// expected for every loser of the race
+			default:
+				t.Fatalf("concurrent LoginToken[%d] = %v, want nil or ErrTokenAlreadyLoggedIn", i, err)
+			}
+		}
+		if successes != 1 {
+			t.Fatalf("%d of %d concurrent LoginToken calls succeeded, want exactly 1", successes, n)
+		}
+		if !b.adapter.TokenLoggedIn() {
+			t.Fatal("TokenLoggedIn() = false after a concurrent LoginToken race")
+		}
+
+		if err := b.adapter.LogoutToken(ctx); err != nil {
+			t.Fatalf("LogoutToken: %v", err)
 		}
 	})
 
