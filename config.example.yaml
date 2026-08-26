@@ -54,7 +54,20 @@ ca:
   # ECDSA P-256 is the default curve; P-384 is available where a larger
   # security margin is warranted (see docs/architecture.md).
   curve: "P-256"
+  # Validity window for certificates this CA issues (not its own — see
+  # internal/ca.DefaultRootValidity for that).
   cert_ttl_hours: 8760
+  # CKA_LABEL the CA's own key pair is created with in the HSM, and looked
+  # up by on every later restart. Change this and the CA will bootstrap a
+  # brand new key pair under the new label, alongside the old one.
+  key_label: "hsm-pki-ca"
+  # Where the CA's self-signed certificate is read from and written to.
+  # Contains no private key material — the private key never leaves the
+  # HSM — so this file is safe to distribute to anyone verifying
+  # certificates this CA issues. Not gitignored on principle, but a real
+  # deployment's actual cert_path (outside this repo) has nothing to do
+  # with git either way.
+  cert_path: "ca-cert.pem"
 
 # Vault settings are unused until Phase 6.
 vault:

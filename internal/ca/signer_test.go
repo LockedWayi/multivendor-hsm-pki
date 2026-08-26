@@ -15,9 +15,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,69 +22,15 @@ import (
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
-func requireSoftHSM2(t *testing.T) string {
-	t.Helper()
-	modulePath := os.Getenv("SOFTHSM2_MODULE")
-	if modulePath == "" {
-		modulePath = "/usr/lib/softhsm/libsofthsm2.so"
-	}
-	if _, err := os.Stat(modulePath); err != nil {
-		t.Skip("SoftHSM2 module not found — run inside the dev container (see CONTRIBUTING.md)")
-	}
-	return modulePath
-}
-
 // newTestSigner provisions a fresh SoftHSM2 token, generates an EC P-256
 // key pair on it, and returns a ready-to-use *ca.Signer over that key.
 func newTestSigner(t *testing.T) *ca.Signer {
 	t.Helper()
-	modulePath := requireSoftHSM2(t)
-
-	dir := t.TempDir()
-	tokenDir := filepath.Join(dir, "tokens")
-	if err := os.MkdirAll(tokenDir, 0700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	confPath := filepath.Join(dir, "softhsm2.conf")
-	conf := "directories.tokendir = " + tokenDir + "\n" +
-		"objectstore.backend = file\nlog.level = ERROR\n"
-	if err := os.WriteFile(confPath, []byte(conf), 0600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	t.Setenv("SOFTHSM2_CONF", confPath)
-
-	const label, pin = "ca-signer-test", "123456"
-	cmd := exec.Command("softhsm2-util", "--init-token", "--free",
-		"--label", label, "--so-pin", "000000", "--pin", pin)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("softhsm2-util --init-token: %v: %s", err, out)
-	}
-
-	adapter, err := pk11.NewSoftHSM2Adapter(modulePath)
-	if err != nil {
-		t.Fatalf("NewSoftHSM2Adapter: %v", err)
-	}
-	t.Cleanup(func() { adapter.Close() })
-
+	adapter, ws, resolvePIN := newTestAdapter(t)
 	ctx := context.Background()
-	wss, err := adapter.Workspaces(ctx)
-	if err != nil {
-		t.Fatalf("Workspaces: %v", err)
-	}
-	var ws pk11.Workspace
-	for _, w := range wss {
-		if w.Label == label {
-			ws = w
-		}
-	}
-	if ws.Label == "" {
-		t.Fatalf("workspace %q not found among %+v", label, wss)
-	}
-
-	resolvePIN := func() ([]byte, error) { return []byte(pin), nil }
 
 	const keyLabel = "ca-signer-key"
-	_, err = withSession(t, ctx, adapter, ws, resolvePIN, func(s *pk11.Session) (struct{}, error) {
+	_, err := withSession(t, ctx, adapter, ws, resolvePIN, func(s *pk11.Session) (struct{}, error) {
 		_, err := adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
 			Curve: pk11.P256, Label: keyLabel, Sign: true, Verify: true,
 		})
@@ -102,25 +45,6 @@ func newTestSigner(t *testing.T) *ca.Signer {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	return signer
-}
-
-func withSession[T any](t *testing.T, ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), fn func(*pk11.Session) (T, error)) (T, error) {
-	t.Helper()
-	var zero T
-	s, err := adapter.OpenSession(ctx, ws, pk11.SessionOptions{})
-	if err != nil {
-		return zero, err
-	}
-	defer adapter.CloseSession(ctx, s)
-	pin, err := resolvePIN()
-	if err != nil {
-		return zero, err
-	}
-	if err := adapter.Login(ctx, s, pin, pk11.RoleUser); err != nil {
-		return zero, err
-	}
-	defer adapter.Logout(ctx, s)
-	return fn(s)
 }
 
 func TestSigner_RoundTrip(t *testing.T) {
