@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- Failure-path coverage completing Phase 2: `TestSigner_Sign_ExpiredSessionFailsClosed`
+  (a white-box test — `Signer.Sign` opens its own session per call, so an
+  already-expired budget can only be forced after a normal, successful
+  construction, not from outside the package) and
+  `TestIssueCertificate_AdapterErrorDoesNotLeakDetail` (an adapter-level
+  failure surfaces as a 500 whose body never contains internal error text).
+  `ci/coverage.sh` reports 76.0%.
 - `GET /healthz` / `GET /readyz` (`internal/api`): liveness never touches
   the HSM; readiness probes it with an open+close session (no PIN needed)
   and reports not-ready once the adapter is closed. Every request now logs

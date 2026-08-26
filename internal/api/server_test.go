@@ -162,6 +162,52 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 	}
 }
 
+// TestIssueCertificate_AdapterErrorDoesNotLeakDetail covers Phase 2
+// sub-task 2.7's other failure path: an adapter-level failure (here, the
+// adapter having been closed — the same failure mode as a service mid-
+// shutdown or an HSM connection drop) must surface as a 500 whose body
+// never contains internal error detail, only a fixed generic message
+// (CLAUDE.md §3.4).
+func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
+	c, adapter, ws := newTestCA(t)
+	registry := api.NewRegistry()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	defer srv.Close()
+
+	adapter.Close()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "adapter-down.example.test"},
+	}, priv)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest: %v", err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+
+	resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+	if err != nil {
+		t.Fatalf("POST /certificates: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, http.StatusInternalServerError, body)
+	}
+	for _, leak := range []string{"ErrAdapterClosed", "pkcs11:", "ca: HSM sign", "ca: OpenSession"} {
+		if strings.Contains(string(body), leak) {
+			t.Fatalf("response body leaked internal detail (%q): %s", leak, body)
+		}
+	}
+	if len(registry.All()) != 0 {
+		t.Fatalf("registry has %d records, want 0 after a failed request", len(registry.All()))
+	}
+}
+
 func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 	c, adapter, ws := newTestCA(t)
 	registry := api.NewRegistry()
