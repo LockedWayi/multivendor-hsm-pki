@@ -1,0 +1,18 @@
+# Files listed here implement a vendor adapter that requires a proprietary
+# SDK or physical/emulated HSM hardware unavailable in CI (CLAUDE.md §2.3).
+# ci/coverage.sh excludes them from the coverage floor computed here.
+#
+# This is not a lower bar: it is a different, more honest one. Coverage is a
+# CI-computed number, and CI cannot execute code it has no way to run — a
+# blanket floor over the whole package would either block merges on lines
+# that will never run in CI, or get quietly lowered until it protects
+# nothing. Excluding these files keeps the floor meaningful for the code CI
+# actually exercises. The adapters listed here are instead validated by the
+# conformance suite passing against real hardware in the maintainer's own
+# environment, and that claim is labelled maintainer-verified, not
+# CI-verified, everywhere it is made (docs/phases/phase-1-pkcs11-core.md).
+#
+# As Phase 7 adds nShield and Luna adapters with the same constraint, add
+# their files here — this list, not a naming convention or a build tag, is
+# the single place that decision lives.
+internal/pkcs11/protectserver.go

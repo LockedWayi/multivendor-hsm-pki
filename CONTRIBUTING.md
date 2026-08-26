@@ -32,6 +32,35 @@ Running `go test` directly on a host without SoftHSM2 installed still
 passes — the integration tests skip themselves with an explanatory message
 rather than failing — but that skip means you have not actually run them.
 
+The cross-vendor behavioral suite lives in `TestConformance`
+(`internal/pkcs11/conformance_test.go`) and runs against every backend the
+environment can reach:
+
+```sh
+go test ./internal/pkcs11 -run TestConformance -race -v
+```
+
+With only SoftHSM2 available, its subtests run and ProtectServer's skip. If
+you have your own ProtectToolkit entitlement (see
+`docs/protectserver-setup.md`), set `PROTECTSERVER_MODULE` (and
+`PROTECTSERVER_WORKSPACE`, `PROTECTSERVER_PIN`) to also run that backend's
+subtests — never in CI, always locally, against your own SDK.
+
+## Coverage floor
+The 70% floor is enforced by `ci/coverage.sh`, not a bare `go test -cover`:
+
+```sh
+docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev bash ci/coverage.sh -race
+```
+
+The difference matters once a vendor adapter needs a proprietary SDK or real
+hardware this pipeline does not have: that adapter's file goes in
+`ci/coverage-exclude.txt`, and its correctness is validated by
+`TestConformance` passing against real hardware in the maintainer's own
+environment instead of by a percentage CI cannot honestly compute for code
+it cannot execute (CLAUDE.md §2.3). A bare `go test -cover` still works for a
+quick local read, but the floor itself is `ci/coverage.sh`'s number.
+
 ## Non-negotiables
 - No secrets in commits or history. `gitleaks` blocks merge.
 - Private keys and PINs never hit plaintext disk or logs.

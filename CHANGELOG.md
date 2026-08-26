@@ -16,13 +16,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   never as a Go-heap string (see docs/phases/phase-1-pkcs11-core.md).
 - `ci/softhsm2-dev.Dockerfile`: reproducible dev/test environment so the
   SoftHSM2-backed test suite runs the same way on any machine or in CI.
-- `internal/pkcs11/protectserver.go`: `ProtectServerAdapter` skeleton (all
-  methods panic; implementation is Phase 1 sub-task 1.7). The compile-time
-  interface assertion proves a second, independent vendor satisfies
-  `VendorAdapter` without the interface changing.
+- `internal/pkcs11/protectserver.go`: `ProtectServerAdapter`, a full,
+  independently-written second implementation of `VendorAdapter` against
+  Thales ProtectToolkit-C. Every operation in the interface — session
+  lifecycle, key generation, sign/verify, encrypt/decrypt, wrap/unwrap,
+  generate random, find/get-attributes, close — is confirmed working
+  against the maintainer's own ProtectToolkit installation by the
+  conformance suite below.
+- `internal/pkcs11/conformance_test.go`: `TestConformance`, one behavioral
+  suite parameterized over a `VendorAdapter` factory, run against both
+  backends. SoftHSM2's subtests run whenever its module is present (CI);
+  ProtectServer's run only when `PROTECTSERVER_MODULE` is set and skip
+  cleanly otherwise — the suite stays green either way. Every test vector is
+  a real digest, plaintext, or key, never a degenerate stand-in — the earlier
+  false "ProtectServer cannot verify" divergence (below) came from exactly
+  that shortcut.
 - `docs/protectserver-setup.md`: manual setup for the Thales ProtectToolkit
   backend — module paths, user-token initialization, and why this path is
   local-only and never in CI.
+- `ci/coverage.sh` and `ci/coverage-exclude.txt`: the coverage floor,
+  computed over CI-reachable code only. `ProtectServerAdapter` now contains
+  real, non-trivial logic that CI structurally cannot execute (no
+  proprietary SDK), so a blanket `go test ./... -cover` no longer measures
+  what it used to — it conflates "untested" with "untestable here." The
+  excluded files are validated instead by the conformance suite passing
+  against real hardware, and that claim stays labelled maintainer-verified,
+  never blended into a CI-reported percentage (CLAUDE.md §2.3).
 - `docs/pkcs11-vendor-notes.md`: a living record of where PKCS#11
   implementations differ and of the portability traps (`CK_ULONG` width,
   `CKA_EC_POINT` encoding, raw `r||s` signatures, digest-vs-message
