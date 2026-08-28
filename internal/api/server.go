@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -149,6 +150,11 @@ func (s *server) serveRootArtifact(w http.ResponseWriter, r *http.Request, pemBy
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
+	// These change only when a new ceremony runs, which is a rare,
+	// deliberate operator act. An hour is short enough that a re-ceremony
+	// propagates on a human timescale and long enough that a CDN is not
+	// re-fetching a static file on every request.
+	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
 	_, _ = w.Write(pemBytes)
 }
 
@@ -213,6 +219,11 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 		NotAfter: cert.NotAfter,
 		Status:   store.StatusValid,
 	}); err != nil {
+		// A duplicate serial is not a caller error — serials come from this
+		// CA's own crypto/rand, so it means either an astronomically
+		// improbable collision or a defect here. Either way the certificate
+		// is not handed out, because the store already holds a different
+		// record under that serial and revoking it later would be ambiguous.
 		loggerFromContext(r.Context()).Error("recording an issued certificate failed", "error", err, "serial", cert.SerialNumber.String())
 		s.writeError(w, http.StatusInternalServerError, "certificate issuance failed")
 		return
@@ -285,9 +296,17 @@ func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.store.Revoke(r.Context(), serial, req.Reason, time.Now()); err != nil {
+	if err := s.store.Revoke(r.Context(), serial, store.RevocationReason(req.Reason), time.Now()); err != nil {
 		if errors.Is(err, store.ErrCertNotFound) {
 			s.writeError(w, http.StatusNotFound, "certificate not found")
+			return
+		}
+		// A reason code outside RFC 5280 §5.3.1 is a statement about the
+		// caller's request, not about this server: reject it as a 400
+		// rather than writing an entry no verifier can interpret into the
+		// CRL (CLAUDE.md §3.4).
+		if errors.Is(err, store.ErrInvalidRevocationReason) {
+			s.writeError(w, http.StatusBadRequest, "revocation reason is not a valid RFC 5280 CRLReason")
 			return
 		}
 		loggerFromContext(r.Context()).Error("revocation failed", "error", err)
@@ -325,9 +344,47 @@ func (s *server) handleCRL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/pkix-crl")
+	// Bound any intermediary's caching by the CRL's own nextUpdate.
+	//
+	// This is a correctness control, not a performance one. Without an
+	// explicit lifetime, a CDN or proxy applies its own heuristic and may
+	// keep serving a CRL past the point this CA said it stops being
+	// authoritative — which is indistinguishable, to a relying party, from
+	// a CA that has not revoked anything. must-revalidate says the stale
+	// copy may not be served once it expires, even if the origin is
+	// unreachable.
+	maxAge := int(time.Until(s.crlNextUpdate()).Seconds())
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d, must-revalidate", maxAge))
 	_, _ = w.Write(der)
 }
 
+// crlNextUpdate reports the cached CRL's nextUpdate, for the cache header.
+func (s *server) crlNextUpdate() time.Time {
+	s.crlMu.Lock()
+	defer s.crlMu.Unlock()
+	return s.cachedNextUpdate
+}
+
+// currentCRL returns the cached CRL, regenerating it when the cache is
+// empty or past its nextUpdate.
+//
+// # The lock is held across generation on purpose
+//
+// Signing a CRL is an HSM round trip, and holding crlMu for its duration
+// looks like a mistake worth "optimizing" with a read-write lock and a
+// double-checked cache read. It is not: holding it is what makes this
+// single-flight. Ten concurrent GET /crl on a cold cache produce one HSM
+// signature and nine waiters, not ten signatures. Releasing the lock to let
+// readers through would turn a cache miss into a thundering herd against
+// the token — far more expensive than the nanoseconds a cache hit spends
+// acquiring an uncontended mutex.
+//
+// Change this only with a measurement showing cache-hit contention is real,
+// and keep the single-flight property if you do (golang.org/x/sync's
+// singleflight is the shape that preserves it).
 func (s *server) currentCRL(ctx context.Context) ([]byte, error) {
 	s.crlMu.Lock()
 	defer s.crlMu.Unlock()
@@ -346,7 +403,7 @@ func (s *server) currentCRL(ctx context.Context) ([]byte, error) {
 		revoked = append(revoked, ca.RevokedCert{
 			Serial:     rec.Serial,
 			RevokedAt:  rec.RevokedAt,
-			ReasonCode: rec.RevocationReason,
+			ReasonCode: int(rec.RevocationReason),
 		})
 	}
 

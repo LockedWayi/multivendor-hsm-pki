@@ -37,7 +37,7 @@ func backends(t *testing.T) []backend {
 
 	openSQLite := func(t *testing.T) store.Store {
 		t.Helper()
-		s, err := store.OpenSQLite(context.Background(), path, nil)
+		s, err := store.OpenSQLite(t.Context(), path, nil, nil)
 		if err != nil {
 			t.Fatalf("OpenSQLite: %v", err)
 		}
@@ -65,22 +65,38 @@ func forEachBackend(t *testing.T, fn func(t *testing.T, b backend)) {
 	}
 }
 
-func testRecord(serial int64, cn string) store.CertRecord {
+// messyTime is deliberately awkward: a non-UTC zone and sub-second
+// precision. Passing an already-normalized instant is what let the two
+// implementations disagree while the shared suite stayed green, so the suite
+// now hands them something only a real normalization can flatten.
+func messyTime(t *testing.T) time.Time {
+	t.Helper()
+	loc, err := time.LoadLocation("Asia/Istanbul")
+	if err != nil {
+		// A tzdata-less environment is not a reason to skip the precision
+		// half of the check.
+		return time.Now().Add(24 * time.Hour).Add(437 * time.Millisecond)
+	}
+	return time.Now().In(loc).Add(24 * time.Hour).Add(437 * time.Millisecond)
+}
+
+func testRecord(t *testing.T, serial int64, cn string) store.CertRecord {
+	t.Helper()
 	return store.CertRecord{
 		Serial:   big.NewInt(serial),
 		Subject:  pkix.Name{CommonName: cn, Organization: []string{"hsm-pki-platform test"}},
-		NotAfter: time.Now().Add(24 * time.Hour).Truncate(time.Second).UTC(),
+		NotAfter: messyTime(t),
 		Status:   store.StatusValid,
 	}
 }
 
 func TestStore_RecordAndGet(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
-		ctx := context.Background()
+		ctx := t.Context()
 		s := b.open(t)
 		defer s.Close()
 
-		rec := testRecord(1001, "leaf.example.test")
+		rec := testRecord(t, 1001, "leaf.example.test")
 		if err := s.Record(ctx, rec); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
@@ -103,8 +119,17 @@ func TestStore_RecordAndGet(t *testing.T) {
 		if len(got.Subject.Organization) != 1 || got.Subject.Organization[0] != rec.Subject.Organization[0] {
 			t.Fatalf("Organization = %v, want %v", got.Subject.Organization, rec.Subject.Organization)
 		}
-		if !got.NotAfter.Equal(rec.NotAfter) {
-			t.Fatalf("NotAfter = %v, want %v", got.NotAfter, rec.NotAfter)
+		// Both implementations must return the same normalized instant, not
+		// merely "something close to" what was passed in.
+		wantNotAfter := store.NormalizeTime(rec.NotAfter)
+		if !got.NotAfter.Equal(wantNotAfter) {
+			t.Fatalf("NotAfter = %v, want the normalized %v", got.NotAfter, wantNotAfter)
+		}
+		if got.NotAfter.Location() != time.UTC {
+			t.Fatalf("NotAfter is in %v, want UTC — the two implementations must not differ on this", got.NotAfter.Location())
+		}
+		if got.NotAfter.Nanosecond() != 0 {
+			t.Fatalf("NotAfter carries sub-second precision (%v) a CRL cannot express", got.NotAfter)
 		}
 		if got.Status != store.StatusValid {
 			t.Fatalf("Status = %q, want %q", got.Status, store.StatusValid)
@@ -129,17 +154,17 @@ func TestStore_GetUnknownSerialIsNotAnError(t *testing.T) {
 
 func TestStore_Revoke(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
-		ctx := context.Background()
+		ctx := t.Context()
 		s := b.open(t)
 		defer s.Close()
 
-		rec := testRecord(2001, "revoke.example.test")
+		rec := testRecord(t, 2001, "revoke.example.test")
 		if err := s.Record(ctx, rec); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 
-		at := time.Now().Truncate(time.Second).UTC()
-		if err := s.Revoke(ctx, rec.Serial, 1, at); err != nil {
+		at := messyTime(t)
+		if err := s.Revoke(ctx, rec.Serial, store.ReasonKeyCompromise, at); err != nil {
 			t.Fatalf("Revoke: %v", err)
 		}
 
@@ -150,11 +175,15 @@ func TestStore_Revoke(t *testing.T) {
 		if got.Status != store.StatusRevoked {
 			t.Fatalf("Status = %q, want %q", got.Status, store.StatusRevoked)
 		}
-		if got.RevocationReason != 1 {
-			t.Fatalf("RevocationReason = %d, want 1", got.RevocationReason)
+		if got.RevocationReason != store.ReasonKeyCompromise {
+			t.Fatalf("RevocationReason = %d, want %d", got.RevocationReason, store.ReasonKeyCompromise)
 		}
-		if !got.RevokedAt.Equal(at) {
-			t.Fatalf("RevokedAt = %v, want %v", got.RevokedAt, at)
+		wantRevokedAt := store.NormalizeTime(at)
+		if !got.RevokedAt.Equal(wantRevokedAt) {
+			t.Fatalf("RevokedAt = %v, want the normalized %v", got.RevokedAt, wantRevokedAt)
+		}
+		if got.RevokedAt.Location() != time.UTC || got.RevokedAt.Nanosecond() != 0 {
+			t.Fatalf("RevokedAt = %v is not normalized to UTC seconds", got.RevokedAt)
 		}
 
 		revoked, err := s.Revoked(ctx)
@@ -169,7 +198,7 @@ func TestStore_Revoke(t *testing.T) {
 
 func TestStore_RevokeUnknownSerialFails(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
-		err := s(t, b).Revoke(context.Background(), big.NewInt(31337), 0, time.Now())
+		err := s(t, b).Revoke(t.Context(), big.NewInt(31337), store.ReasonUnspecified, time.Now())
 		if !errors.Is(err, store.ErrCertNotFound) {
 			t.Fatalf("Revoke on an unknown serial returned %v, want ErrCertNotFound", err)
 		}
@@ -181,21 +210,21 @@ func TestStore_RevokeUnknownSerialFails(t *testing.T) {
 // original record is what an incident review reads.
 func TestStore_RevokeIsIdempotent(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
-		ctx := context.Background()
+		ctx := t.Context()
 		st := b.open(t)
 		defer st.Close()
 
-		rec := testRecord(3001, "idempotent.example.test")
+		rec := testRecord(t, 3001, "idempotent.example.test")
 		if err := st.Record(ctx, rec); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 
-		first := time.Now().Add(-time.Hour).Truncate(time.Second).UTC()
-		if err := st.Revoke(ctx, rec.Serial, 1, first); err != nil {
+		first := time.Now().Add(-time.Hour)
+		if err := st.Revoke(ctx, rec.Serial, store.ReasonKeyCompromise, first); err != nil {
 			t.Fatalf("first Revoke: %v", err)
 		}
 		// A second call with a different time and reason must not take.
-		if err := st.Revoke(ctx, rec.Serial, 4, time.Now()); err != nil {
+		if err := st.Revoke(ctx, rec.Serial, store.ReasonSuperseded, time.Now()); err != nil {
 			t.Fatalf("second Revoke returned an error instead of succeeding idempotently: %v", err)
 		}
 
@@ -203,18 +232,18 @@ func TestStore_RevokeIsIdempotent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		if got.RevocationReason != 1 {
-			t.Fatalf("RevocationReason = %d after re-revocation, want the original 1", got.RevocationReason)
+		if got.RevocationReason != store.ReasonKeyCompromise {
+			t.Fatalf("RevocationReason = %d after re-revocation, want the original %d", got.RevocationReason, store.ReasonKeyCompromise)
 		}
-		if !got.RevokedAt.Equal(first) {
-			t.Fatalf("RevokedAt = %v after re-revocation, want the original %v", got.RevokedAt, first)
+		if !got.RevokedAt.Equal(store.NormalizeTime(first)) {
+			t.Fatalf("RevokedAt = %v after re-revocation, want the original %v", got.RevokedAt, store.NormalizeTime(first))
 		}
 	})
 }
 
 func TestStore_CRLNumberIsStrictlyIncreasing(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
-		ctx := context.Background()
+		ctx := t.Context()
 		st := b.open(t)
 		defer st.Close()
 
@@ -242,12 +271,12 @@ func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "ca.db")
 
-	rec := testRecord(4001, "survives-restart.example.test")
-	revokedAt := time.Now().Truncate(time.Second).UTC()
+	rec := testRecord(t, 4001, "survives-restart.example.test")
+	revokedAt := messyTime(t)
 
 	var beforeCRLNumber *big.Int
 	func() {
-		st, err := store.OpenSQLite(ctx, path, nil)
+		st, err := store.OpenSQLite(ctx, path, nil, nil)
 		if err != nil {
 			t.Fatalf("OpenSQLite (first): %v", err)
 		}
@@ -256,7 +285,7 @@ func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 		if err := st.Record(ctx, rec); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
-		if err := st.Revoke(ctx, rec.Serial, 1, revokedAt); err != nil {
+		if err := st.Revoke(ctx, rec.Serial, store.ReasonKeyCompromise, revokedAt); err != nil {
 			t.Fatalf("Revoke: %v", err)
 		}
 		beforeCRLNumber, err = st.NextCRLNumber(ctx)
@@ -266,7 +295,7 @@ func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 	}()
 
 	// The process is gone. Everything below reads only what was persisted.
-	st, err := store.OpenSQLite(ctx, path, nil)
+	st, err := store.OpenSQLite(ctx, path, nil, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite (after restart): %v", err)
 	}
@@ -282,11 +311,11 @@ func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 	if revoked[0].Serial.Cmp(rec.Serial) != 0 {
 		t.Fatalf("revoked serial = %v, want %v", revoked[0].Serial, rec.Serial)
 	}
-	if !revoked[0].RevokedAt.Equal(revokedAt) {
-		t.Fatalf("RevokedAt = %v after restart, want %v", revoked[0].RevokedAt, revokedAt)
+	if !revoked[0].RevokedAt.Equal(store.NormalizeTime(revokedAt)) {
+		t.Fatalf("RevokedAt = %v after restart, want %v", revoked[0].RevokedAt, store.NormalizeTime(revokedAt))
 	}
-	if revoked[0].RevocationReason != 1 {
-		t.Fatalf("RevocationReason = %d after restart, want 1", revoked[0].RevocationReason)
+	if revoked[0].RevocationReason != store.ReasonKeyCompromise {
+		t.Fatalf("RevocationReason = %d after restart, want %d", revoked[0].RevocationReason, store.ReasonKeyCompromise)
 	}
 
 	afterCRLNumber, err := st.NextCRLNumber(ctx)
@@ -304,7 +333,7 @@ func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 // because verifiers still hold the numbers the old store issued.
 func TestSQLite_CRLNumberSeedsAboveAClockValue(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.OpenSQLite(ctx, filepath.Join(t.TempDir(), "fresh.db"), nil)
+	st, err := store.OpenSQLite(ctx, filepath.Join(t.TempDir(), "fresh.db"), nil, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite: %v", err)
 	}
@@ -314,9 +343,12 @@ func TestSQLite_CRLNumberSeedsAboveAClockValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NextCRLNumber: %v", err)
 	}
-	// Comfortably above 1, and in the region a millisecond clock produces.
-	if n.Cmp(big.NewInt(1_600_000_000_000)) < 0 {
-		t.Fatalf("a fresh store's first CRL number is %v; it must be seeded from the clock so a rebuilt store cannot reissue numbers verifiers already hold", n)
+	// Bounded dynamically rather than by a hard-coded epoch, so the test
+	// asserts "seeded from roughly now" instead of "above a date someone
+	// picked once".
+	lower := big.NewInt(time.Now().Add(-time.Hour).UnixMilli())
+	if n.Cmp(lower) < 0 {
+		t.Fatalf("a fresh store's first CRL number is %v, below %v; it must be seeded from the clock so a rebuilt store cannot reissue numbers verifiers already hold", n, lower)
 	}
 }
 
@@ -325,7 +357,7 @@ func TestSQLite_CRLNumberSeedsAboveAClockValue(t *testing.T) {
 // concurrency cannot hand out a duplicate CRL number.
 func TestStore_ConcurrentUse(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
-		ctx := context.Background()
+		ctx := t.Context()
 		st := b.open(t)
 		defer st.Close()
 
@@ -334,22 +366,30 @@ func TestStore_ConcurrentUse(t *testing.T) {
 		errs := make([]error, workers)
 		numbers := make([]*big.Int, workers)
 
+		// A start barrier, so every goroutine is already spawned and waiting
+		// when the work begins. Without it the first workers finish before
+		// the last are scheduled and the test proves far less about
+		// contention than it appears to.
+		start := make(chan struct{})
+
 		wg.Add(workers)
 		for i := 0; i < workers; i++ {
 			go func(i int) {
 				defer wg.Done()
-				rec := testRecord(int64(10_000+i), "concurrent.example.test")
+				<-start
+				rec := testRecord(t, int64(10_000+i), "concurrent.example.test")
 				if err := st.Record(ctx, rec); err != nil {
 					errs[i] = err
 					return
 				}
-				if err := st.Revoke(ctx, rec.Serial, 1, time.Now()); err != nil {
+				if err := st.Revoke(ctx, rec.Serial, store.ReasonKeyCompromise, time.Now()); err != nil {
 					errs[i] = err
 					return
 				}
 				numbers[i], errs[i] = st.NextCRLNumber(ctx)
 			}(i)
 		}
+		close(start)
 		wg.Wait()
 
 		seen := make(map[string]bool, workers)
@@ -380,4 +420,165 @@ func s(t *testing.T, b backend) store.Store {
 	st := b.open(t)
 	t.Cleanup(func() { st.Close() })
 	return st
+}
+
+// TestStore_RecordRejectsDuplicateSerial is the regression for the defect
+// this suite missed on the first pass: Record used to overwrite an existing
+// row, and because an incoming record carries StatusValid, re-recording an
+// already-revoked serial silently un-revoked it and dropped it out of the
+// CRL — the exact failure this package exists to prevent, reached through a
+// different door.
+func TestStore_RecordRejectsDuplicateSerial(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b backend) {
+		ctx := t.Context()
+		st := b.open(t)
+		defer st.Close()
+
+		rec := testRecord(t, 5001, "duplicate.example.test")
+		if err := st.Record(ctx, rec); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		if err := st.Revoke(ctx, rec.Serial, store.ReasonKeyCompromise, time.Now()); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+
+		if err := st.Record(ctx, rec); !errors.Is(err, store.ErrDuplicateSerial) {
+			t.Fatalf("re-recording an existing serial returned %v, want ErrDuplicateSerial", err)
+		}
+
+		// And the revocation must be exactly as it was.
+		got, ok, err := st.Get(ctx, rec.Serial)
+		if err != nil || !ok {
+			t.Fatalf("Get: %v (found=%v)", err, ok)
+		}
+		if got.Status != store.StatusRevoked {
+			t.Fatalf("status = %q after a rejected re-Record; the revocation was lost", got.Status)
+		}
+		revoked, err := st.Revoked(ctx)
+		if err != nil {
+			t.Fatalf("Revoked: %v", err)
+		}
+		if len(revoked) != 1 {
+			t.Fatalf("Revoked() returns %d entries after a rejected re-Record, want 1", len(revoked))
+		}
+	})
+}
+
+// TestStore_RevokeRejectsInvalidReason keeps a reason code no verifier can
+// interpret out of the CRL. Neither crypto/x509 nor the CRL builder checks
+// it, so this is the only place it can be caught.
+func TestStore_RevokeRejectsInvalidReason(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b backend) {
+		ctx := t.Context()
+		st := b.open(t)
+		defer st.Close()
+
+		rec := testRecord(t, 6001, "bad-reason.example.test")
+		if err := st.Record(ctx, rec); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+
+		for _, reason := range []store.RevocationReason{
+			-1,
+			7,   // unassigned in RFC 5280 §5.3.1
+			8,   // removeFromCRL: delta-CRL only, not a revocation reason
+			11,  // past the assigned range
+			999, // what an unvalidated API caller could send
+		} {
+			if err := st.Revoke(ctx, rec.Serial, reason, time.Now()); !errors.Is(err, store.ErrInvalidRevocationReason) {
+				t.Fatalf("Revoke with reason %d returned %v, want ErrInvalidRevocationReason", reason, err)
+			}
+		}
+
+		// None of them may have taken effect.
+		got, _, _ := st.Get(ctx, rec.Serial)
+		if got.Status != store.StatusValid {
+			t.Fatalf("status = %q after only-rejected revocations, want %q", got.Status, store.StatusValid)
+		}
+	})
+}
+
+// TestStore_ReturnedSerialIsACopy pins that a caller cannot reach into the
+// store through the *big.Int it was handed.
+func TestStore_ReturnedSerialIsACopy(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, b backend) {
+		ctx := t.Context()
+		st := b.open(t)
+		defer st.Close()
+
+		rec := testRecord(t, 7001, "aliasing.example.test")
+		original := new(big.Int).Set(rec.Serial)
+		if err := st.Record(ctx, rec); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+
+		// Mutating the caller's own serial must not reach the store.
+		rec.Serial.Add(rec.Serial, big.NewInt(1))
+
+		got, ok, err := st.Get(ctx, original)
+		if err != nil || !ok {
+			t.Fatalf("the stored record moved when the caller mutated its serial: %v (found=%v)", err, ok)
+		}
+		// And mutating what Get returned must not reach it either.
+		got.Serial.Add(got.Serial, big.NewInt(1))
+		if _, ok, _ := st.Get(ctx, original); !ok {
+			t.Fatal("the stored record moved when the value returned by Get was mutated")
+		}
+	})
+}
+
+// TestSQLite_CRLNumberFloorRaisesASeed covers the operator escape hatch for
+// the one case the clock seed cannot cover alone: a rebuilt store on a host
+// whose clock has moved backwards, where an operator who knows the last
+// issued number supplies it.
+func TestSQLite_CRLNumberFloorRaisesASeed(t *testing.T) {
+	ctx := t.Context()
+	floor := new(big.Int).Add(big.NewInt(time.Now().UnixMilli()), big.NewInt(1_000_000_000))
+
+	st, err := store.OpenSQLite(ctx, filepath.Join(t.TempDir(), "floor.db"), nil, floor)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	defer st.Close()
+
+	n, err := st.NextCRLNumber(ctx)
+	if err != nil {
+		t.Fatalf("NextCRLNumber: %v", err)
+	}
+	if n.Cmp(floor) < 0 {
+		t.Fatalf("seeded CRL number %v is below the configured floor %v", n, floor)
+	}
+}
+
+// TestSQLite_CRLNumberFloorDoesNotTouchAnExistingCounter: the floor seeds,
+// it does not reset. An operator setting it on a healthy store must not
+// cause the sequence to jump or, worse, restart.
+func TestSQLite_CRLNumberFloorDoesNotTouchAnExistingCounter(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "existing.db")
+
+	first, err := store.OpenSQLite(ctx, path, nil, nil)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	seeded, err := first.NextCRLNumber(ctx)
+	if err != nil {
+		t.Fatalf("NextCRLNumber: %v", err)
+	}
+	first.Close()
+
+	floor := new(big.Int).Add(seeded, big.NewInt(1_000_000_000))
+	second, err := store.OpenSQLite(ctx, path, nil, floor)
+	if err != nil {
+		t.Fatalf("OpenSQLite (with floor): %v", err)
+	}
+	defer second.Close()
+
+	next, err := second.NextCRLNumber(ctx)
+	if err != nil {
+		t.Fatalf("NextCRLNumber: %v", err)
+	}
+	if want := new(big.Int).Add(seeded, big.NewInt(1)); next.Cmp(want) != 0 {
+		t.Fatalf("CRL number = %v after reopening with a floor, want %v — the floor must seed, not reset", next, want)
+	}
 }

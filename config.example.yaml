@@ -98,6 +98,18 @@ ca:
   # container-local scratch space.
   store_path: "ca.db"
 
+  # Normally absent. Raises the number a FRESH store seeds its CRL counter
+  # with; an existing counter is never touched.
+  #
+  # A rebuilt store seeds from the wall clock, which is above anything the
+  # old store issued as long as the clock has not moved backwards. If it has
+  # -- a restored host with a bad time source -- the new sequence could land
+  # below numbers verifiers already hold, and RFC 5280 5.2.3 then lets them
+  # ignore every CRL this CA issues afterward. Nothing can recover the last
+  # number automatically, because the thing that remembered it is what was
+  # lost; an operator who does know it puts it here.
+  # crl_number_floor: "1756384000000"
+
 # Vault settings are unused until Phase 6.
 vault:
   address: "https://vault.example.local:8200"

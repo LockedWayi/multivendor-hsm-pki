@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"strings"
 	"time"
 
 	// modernc.org/sqlite is a pure-Go SQLite. It is chosen over mattn's cgo
@@ -47,18 +48,40 @@ CREATE TABLE IF NOT EXISTS crl_counter (
 type SQLite struct {
 	db     *sql.DB
 	logger *slog.Logger
+	// crlNumberFloor raises the value a fresh store is seeded with. See
+	// OpenSQLite.
+	crlNumberFloor *big.Int
 }
 
 // OpenSQLite opens (creating if absent) the store at path.
 //
 // logger may be nil, in which case nothing is logged; it exists for one
 // message that must not be silent — see NextCRLNumber's seeding path.
-func OpenSQLite(ctx context.Context, path string, logger *slog.Logger) (*SQLite, error) {
+//
+// crlNumberFloor may be nil. When set, it is the lowest number a *fresh*
+// store will seed its CRL counter with; an existing counter is never
+// touched. It is the operator's escape hatch for the one case the clock
+// seed cannot cover on its own: a store that was lost and is being rebuilt
+// on a host whose clock has since moved backwards, where the clock-derived
+// seed could land below numbers verifiers already hold. Nobody can recover
+// that number automatically — the thing that remembered it is what was
+// lost — so an operator who does know it supplies it here.
+func OpenSQLite(ctx context.Context, path string, logger *slog.Logger, crlNumberFloor *big.Int) (*SQLite, error) {
+	// Three pragmas, each load-bearing.
+	//
+	// synchronous=full fsyncs on every commit. It is SQLite's default today,
+	// which is exactly why it is set explicitly: WAL mode is very commonly
+	// paired with synchronous=normal for throughput, and someone doing that
+	// here would trade away the durability the CRL counter depends on. A
+	// commit lost to a power failure means reissuing a CRL number that has
+	// already been served under different content — an RFC 5280 §5.2.3
+	// violation produced by a performance tweak.
+	//
 	// _txlock=immediate takes the write lock when a transaction begins
 	// rather than on its first write. Without it, two transactions can both
 	// begin, both read, and then deadlock when the second tries to upgrade —
 	// SQLITE_BUSY on a path that has no way to retry safely.
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate")
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(full)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
 	}
@@ -75,7 +98,7 @@ func OpenSQLite(ctx context.Context, path string, logger *slog.Logger) (*SQLite,
 		_ = db.Close()
 		return nil, fmt.Errorf("store: applying schema to %s: %w", path, err)
 	}
-	return &SQLite{db: db, logger: logger}, nil
+	return &SQLite{db: db, logger: logger, crlNumberFloor: crlNumberFloor}, nil
 }
 
 // Record implements Store.
@@ -84,18 +107,35 @@ func (s *SQLite) Record(ctx context.Context, rec CertRecord) error {
 	if err != nil {
 		return err
 	}
+	// A plain INSERT, so the PRIMARY KEY constraint rejects a duplicate.
+	//
+	// This used to be an upsert, which was a quiet security defect: the
+	// incoming record carries StatusValid, so re-recording an
+	// already-revoked serial silently un-revoked it and dropped it out of
+	// the CRL. See ErrDuplicateSerial.
 	_, err = s.db.ExecContext(ctx, `
         INSERT INTO certificates (serial, subject_der, not_after, status, revoked_at, reason)
-        VALUES (?, ?, ?, ?, NULL, NULL)
-        ON CONFLICT(serial) DO UPDATE SET
-            subject_der = excluded.subject_der,
-            not_after   = excluded.not_after,
-            status      = excluded.status`,
-		rec.Serial.String(), subjectDER, rec.NotAfter.Unix(), string(rec.Status))
+        VALUES (?, ?, ?, ?, NULL, NULL)`,
+		rec.Serial.String(), subjectDER, NormalizeTime(rec.NotAfter).Unix(), string(rec.Status))
 	if err != nil {
+		if isUniqueConstraintViolation(err) {
+			return fmt.Errorf("%w: %s", ErrDuplicateSerial, rec.Serial)
+		}
 		return fmt.Errorf("store: recording certificate %s: %w", rec.Serial, err)
 	}
 	return nil
+}
+
+// isUniqueConstraintViolation reports whether err is SQLite's primary-key
+// conflict.
+//
+// Matched on the driver's message rather than a typed error: modernc's
+// driver returns its error as a formatted string, and depending on its
+// internal type here would couple this package to an implementation detail
+// that has changed across its versions. The substring it looks for is part
+// of SQLite's own stable error text, not the driver's wrapping.
+func isUniqueConstraintViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
 // Get implements Store.
@@ -121,7 +161,10 @@ func (s *SQLite) Get(ctx context.Context, serial *big.Int) (CertRecord, bool, er
 // revoked" and the second would overwrite the first's timestamp and reason —
 // quietly rewriting when and why a certificate was revoked, which is exactly
 // the record an incident review depends on.
-func (s *SQLite) Revoke(ctx context.Context, serial *big.Int, reason int, at time.Time) error {
+func (s *SQLite) Revoke(ctx context.Context, serial *big.Int, reason RevocationReason, at time.Time) error {
+	if !reason.Valid() {
+		return fmt.Errorf("%w: %d", ErrInvalidRevocationReason, reason)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: beginning revoke transaction: %w", err)
@@ -144,7 +187,7 @@ func (s *SQLite) Revoke(ctx context.Context, serial *big.Int, reason int, at tim
 
 	if _, err := tx.ExecContext(ctx, `
         UPDATE certificates SET status = ?, revoked_at = ?, reason = ? WHERE serial = ?`,
-		string(StatusRevoked), at.Unix(), reason, serial.String()); err != nil {
+		string(StatusRevoked), NormalizeTime(at).Unix(), int(reason), serial.String()); err != nil {
 		return fmt.Errorf("store: revoking certificate %s: %w", serial, err)
 	}
 	return tx.Commit()
@@ -201,6 +244,9 @@ func (s *SQLite) NextCRLNumber(ctx context.Context) (*big.Int, error) {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		next = seedCRLNumber(time.Now())
+		if s.crlNumberFloor != nil && s.crlNumberFloor.Cmp(next) > 0 {
+			next = new(big.Int).Set(s.crlNumberFloor)
+		}
 		if s.logger != nil {
 			s.logger.Warn("CRL counter is empty; seeding it from the wall clock. This is expected on a first start, and means the store was lost and rebuilt on any later one.",
 				"seeded_crl_number", next.String())
@@ -271,7 +317,7 @@ func scanRecord(sc rowScanner) (CertRecord, error) {
 		rec.RevokedAt = time.Unix(revokedAt.Int64, 0).UTC()
 	}
 	if reason.Valid {
-		rec.RevocationReason = int(reason.Int64)
+		rec.RevocationReason = RevocationReason(reason.Int64)
 	}
 	return rec, nil
 }
