@@ -90,9 +90,9 @@ func fetchCRL(t *testing.T, srvURL string) *x509.RevocationList {
 }
 
 func TestRevoke_Success(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	cert := issueTestCert(t, srv.URL, "to-revoke.example.test")
@@ -113,9 +113,9 @@ func TestRevoke_Success(t *testing.T) {
 }
 
 func TestRevoke_UnknownSerialFails(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/certificates/999999999999/revoke", nil)
@@ -133,9 +133,9 @@ func TestRevoke_UnknownSerialFails(t *testing.T) {
 }
 
 func TestRevoke_IsIdempotent(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	cert := issueTestCert(t, srv.URL, "revoke-twice.example.test")
@@ -154,9 +154,9 @@ func TestRevoke_IsIdempotent(t *testing.T) {
 }
 
 func TestCRL_ContainsRevokedSerial(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	cert := issueTestCert(t, srv.URL, "in-crl.example.test")
@@ -183,9 +183,9 @@ func TestCRL_ContainsRevokedSerial(t *testing.T) {
 }
 
 func TestCRL_EmptyWhenNothingRevoked(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	crl := fetchCRL(t, srv.URL)
@@ -207,9 +207,9 @@ func TestCRL_EmptyWhenNothingRevoked(t *testing.T) {
 // revocation must be visible on the next fetch, not on the next natural
 // cache expiry.
 func TestCRL_RevocationInvalidatesCache(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	// Populate the cache before anything is revoked.
@@ -244,9 +244,9 @@ func TestCRL_OpenSSLVerify(t *testing.T) {
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skip("openssl not found on PATH")
 	}
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	cert := issueTestCert(t, srv.URL, "openssl-crl-check.example.test")
@@ -298,15 +298,15 @@ func TestCRL_OpenSSLVerify(t *testing.T) {
 // revocations. Two independently constructed servers over the same CA stand
 // in for a restart.
 func TestCRL_NumberSurvivesRestart(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 
-	first := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, testLogger()))
+	first := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, rootArtifacts, testLogger()))
 	beforeRestart := fetchCRL(t, first.URL)
 	first.Close()
 
 	// A brand-new server with a brand-new in-memory registry: the same
 	// state a restarted process starts from.
-	second := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, testLogger()))
+	second := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, rootArtifacts, testLogger()))
 	defer second.Close()
 	afterRestart := fetchCRL(t, second.URL)
 
@@ -318,9 +318,9 @@ func TestCRL_NumberSurvivesRestart(t *testing.T) {
 // TestCRL_NumberIncreasesWithinOneRun covers the other half: two CRLs
 // generated inside the same wall-clock second must still differ.
 func TestCRL_NumberIncreasesWithinOneRun(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	first := fetchCRL(t, srv.URL)
@@ -339,8 +339,8 @@ func TestCRL_NumberIncreasesWithinOneRun(t *testing.T) {
 // TestCRL_ThisUpdateIsBackdated checks the clock-skew allowance: a verifier
 // whose clock trails this host's must not see a CRL that is not valid yet.
 func TestCRL_ThisUpdateIsBackdated(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, testLogger()))
+	c, adapter, ws, rootArtifacts := newTestCA(t)
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	crl := fetchCRL(t, srv.URL)

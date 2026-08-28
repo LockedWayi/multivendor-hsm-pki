@@ -3,7 +3,7 @@ package main
 
 import (
 	"context"
-	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"log/slog"
@@ -60,26 +60,34 @@ func run(configPath string, logger *slog.Logger) error {
 		"workspace", ws.Label,
 	)
 
-	caInstance, err := ca.Bootstrap(ctx, adapter, ws, cfg.PKCS11.SessionOptions, cfg.ResolvePIN, ca.BootstrapParams{
-		KeyLabel: cfg.CA.KeyLabel,
-		CertPath: cfg.CA.CertPath,
+	// The service loads a ceremony-produced intermediate and never creates a
+	// CA of its own. A configuration pointing it at a self-signed (root)
+	// certificate fails here rather than starting in a degraded posture
+	// (CLAUDE.md §3.4, docs/phases/phase-3b-pki-hardening.md).
+	caInstance, err := ca.LoadIntermediate(ctx, adapter, ws, cfg.PKCS11.SessionOptions, cfg.ResolvePIN, ca.LoadIntermediateParams{
+		KeyLabel: cfg.CA.IntermediateKeyLabel,
+		CertPath: cfg.CA.IntermediateCertPath,
 		Curve:    cfg.CA.Curve(),
-		Subject:  pkix.Name{CommonName: cfg.CA.SubjectCommonName},
 		CertTTL:  time.Duration(cfg.CA.CertTTLHours) * time.Hour,
 	})
 	if err != nil {
 		return err
 	}
-	logger.Info("CA ready",
+	logger.Info("intermediate CA ready",
 		"subject", caInstance.Certificate().Subject.String(),
 		"serial", caInstance.Certificate().SerialNumber.String(),
 		"not_after", caInstance.Certificate().NotAfter,
 	)
 
+	rootArtifacts, err := loadRootArtifacts(cfg)
+	if err != nil {
+		return err
+	}
+
 	registry := api.NewRegistry()
 	httpServer := &http.Server{
 		Addr:    cfg.Server.ListenAddr,
-		Handler: api.NewServer(caInstance, adapter, ws, registry, time.Duration(cfg.CA.CRLValidityHours)*time.Hour, logger),
+		Handler: api.NewServer(caInstance, adapter, ws, registry, time.Duration(cfg.CA.CRLValidityHours)*time.Hour, rootArtifacts, logger),
 	}
 
 	serveErr := make(chan error, 1)
@@ -154,6 +162,42 @@ func verifyHSMConnection(ctx context.Context, cfg *config.Config, adapter pkcs11
 	}
 
 	return ws, nil
+}
+
+// loadRootArtifacts reads the ceremony's public root certificate and root
+// CRL off disk so the service can republish them at the URLs the
+// intermediate's CDP and AIA extensions point at.
+//
+// Both are required and both are validated as PEM here rather than trusted
+// blindly: serving a truncated or wrong-typed file at a CRL distribution
+// point produces a relying party that cannot check the intermediate's
+// revocation status, and it should fail at startup where an operator sees
+// it, not silently at a verifier somewhere else (CLAUDE.md §3.4).
+func loadRootArtifacts(cfg *config.Config) (api.RootArtifacts, error) {
+	certPEM, err := readPEMFile(cfg.CA.RootCertPath, "CERTIFICATE")
+	if err != nil {
+		return api.RootArtifacts{}, err
+	}
+	crlPEM, err := readPEMFile(cfg.CA.RootCRLPath, "X509 CRL")
+	if err != nil {
+		return api.RootArtifacts{}, err
+	}
+	return api.RootArtifacts{CertPEM: certPEM, CRLPEM: crlPEM}, nil
+}
+
+func readPEMFile(path, wantType string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, errors.New(path + " does not contain a PEM block")
+	}
+	if block.Type != wantType {
+		return nil, errors.New(path + " contains a " + block.Type + " PEM block, want " + wantType)
+	}
+	return data, nil
 }
 
 type errWorkspaceNotFound string

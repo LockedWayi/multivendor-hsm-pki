@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,8 +35,10 @@ pkcs11:
 ca:
   curve: "P-256"
   cert_ttl_hours: 8760
-  key_label: "ca-signing-key"
-  cert_path: "ca-cert.pem"
+  intermediate_key_label: "ca-intermediate-key-v1"
+  intermediate_cert_path: "intermediate.pem"
+  root_cert_path: "root.pem"
+  root_crl_path: "root-crl.pem"
 `
 
 func TestLoad_Success(t *testing.T) {
@@ -144,8 +148,10 @@ pkcs11:
 ca:
   curve: "P-256"
   cert_ttl_hours: 8760
-  key_label: "ca-signing-key"
-  cert_path: "ca-cert.pem"
+  intermediate_key_label: "ca-intermediate-key-v1"
+  intermediate_cert_path: "intermediate.pem"
+  root_cert_path: "root.pem"
+  root_crl_path: "root-crl.pem"
 `
 	path := writeConfig(t, body)
 
@@ -170,8 +176,10 @@ pkcs11:
 ca:
   curve: "P-224"
   cert_ttl_hours: 8760
-  key_label: "ca-signing-key"
-  cert_path: "ca-cert.pem"
+  intermediate_key_label: "ca-intermediate-key-v1"
+  intermediate_cert_path: "intermediate.pem"
+  root_cert_path: "root.pem"
+  root_crl_path: "root-crl.pem"
 `
 	path := writeConfig(t, body)
 
@@ -192,8 +200,10 @@ pkcs11:
 ca:
   curve: "P-256"
   cert_ttl_hours: 0
-  key_label: "ca-signing-key"
-  cert_path: "ca-cert.pem"
+  intermediate_key_label: "ca-intermediate-key-v1"
+  intermediate_cert_path: "intermediate.pem"
+  root_cert_path: "root.pem"
+  root_crl_path: "root-crl.pem"
 `
 	path := writeConfig(t, body)
 
@@ -202,9 +212,29 @@ ca:
 	}
 }
 
-func TestLoad_EmptyKeyLabelFails(t *testing.T) {
-	t.Setenv("TEST_PIN", "1234")
-	body := `
+// TestLoad_RequiredCAFieldsRejectEmpty pins that every ca.* path and label
+// is required rather than defaulted. The service no longer creates a CA when
+// it finds none (internal/ca.LoadIntermediate), so an unset field is a
+// misconfiguration to report at startup — and a default would silently point
+// the service at a location the operator never chose.
+func TestLoad_RequiredCAFieldsRejectEmpty(t *testing.T) {
+	fields := []string{
+		"intermediate_key_label",
+		"intermediate_cert_path",
+		"root_cert_path",
+		"root_crl_path",
+	}
+	all := map[string]string{
+		"intermediate_key_label": `"ca-intermediate-key-v1"`,
+		"intermediate_cert_path": `"intermediate.pem"`,
+		"root_cert_path":         `"root.pem"`,
+		"root_crl_path":          `"root-crl.pem"`,
+	}
+
+	for _, omitted := range fields {
+		t.Run("missing "+omitted, func(t *testing.T) {
+			t.Setenv("TEST_PIN", "1234")
+			body := `
 pkcs11:
   adapter: "softhsm2"
   softhsm2:
@@ -214,33 +244,72 @@ pkcs11:
 ca:
   curve: "P-256"
   cert_ttl_hours: 8760
-  cert_path: "ca-cert.pem"
 `
-	path := writeConfig(t, body)
-
-	if _, err := Load(path); err == nil {
-		t.Fatal("Load with an empty ca.key_label succeeded, want an error")
+			for name, value := range all {
+				if name == omitted {
+					continue
+				}
+				body += "  " + name + ": " + value + "\n"
+			}
+			if _, err := Load(writeConfig(t, body)); err == nil {
+				t.Fatalf("Load without ca.%s succeeded, want an error", omitted)
+			}
+		})
 	}
 }
 
-func TestLoad_EmptyCertPathFails(t *testing.T) {
-	t.Setenv("TEST_PIN", "1234")
-	body := `
-pkcs11:
-  adapter: "softhsm2"
-  softhsm2:
-    module_path: "/usr/lib/softhsm/libsofthsm2.so"
-    workspace_label: "test-token"
-    pin_env: "TEST_PIN"
-ca:
-  curve: "P-256"
-  cert_ttl_hours: 8760
-  key_label: "ca-signing-key"
-`
-	path := writeConfig(t, body)
+// TestConfig_NoRootKeyReferences is sub-task 3b.2's "grep-verifiable"
+// requirement made executable.
+//
+// The security property is that a compromise of the running service cannot
+// reach the root key, and the structural reason it holds is that the
+// service's configuration has no way to name the root's token, workspace, or
+// key label — so the process never authenticates that token at all.
+//
+// A future field could erode that quietly, which is what this guards. Note
+// the distinction it encodes: RootCertPath and RootCRLPath are permitted,
+// because a certificate and a CRL are public artifacts that confer no
+// ability to use a key. A root_key_label or root_workspace_label would not
+// be, and neither would a second PIN environment variable for the root's
+// token.
+func TestConfig_NoRootKeyReferences(t *testing.T) {
+	forbidden := []string{
+		"root_key_label",
+		"root_key",
+		"root_workspace",
+		"root_workspace_label",
+		"root_token",
+		"root_slot",
+		"root_pin",
+		"root_pin_env",
+	}
 
-	if _, err := Load(path); err == nil {
-		t.Fatal("Load with an empty ca.cert_path succeeded, want an error")
+	caType := reflect.TypeOf(CAConfig{})
+	pkcs11Type := reflect.TypeOf(PKCS11Config{})
+	vendorType := reflect.TypeOf(VendorConfig{})
+
+	for _, typ := range []reflect.Type{caType, pkcs11Type, vendorType} {
+		for i := 0; i < typ.NumField(); i++ {
+			tag := typ.Field(i).Tag.Get("yaml")
+			name, _, _ := strings.Cut(tag, ",")
+			for _, bad := range forbidden {
+				if name == bad {
+					t.Fatalf("%s carries a %q field: the service's configuration must never be able to name the root's token or key (docs/phases/phase-3b-pki-hardening.md)",
+						typ.Name(), name)
+				}
+			}
+		}
+	}
+
+	// The two root fields that ARE allowed must still be exactly the public
+	// artifacts, so that a rename cannot smuggle something else past the
+	// list above.
+	allowedRootFields := map[string]bool{"root_cert_path": true, "root_crl_path": true}
+	for i := 0; i < caType.NumField(); i++ {
+		name, _, _ := strings.Cut(caType.Field(i).Tag.Get("yaml"), ",")
+		if strings.HasPrefix(name, "root_") && !allowedRootFields[name] {
+			t.Fatalf("CAConfig has an unexpected root-tier field %q; only public artifacts (%v) may be referenced", name, allowedRootFields)
+		}
 	}
 }
 

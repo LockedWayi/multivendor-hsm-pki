@@ -43,17 +43,41 @@ const (
 	crlClockSkewAllowance = 5 * time.Minute
 )
 
-// NewServer builds the HTTP handler for the CA service. issuer signs
-// certificates and CRLs; adapter and workspace back the /readyz probe;
+// RootArtifacts are the ceremony-produced, public files the service
+// republishes so that the CDP and AIA URLs baked into the intermediate
+// certificate at ceremony time actually resolve.
+//
+// Neither field is key material, and serving them grants this service no
+// ability whatsoever to use the root's key — that key exists only on a token
+// this service never names (internal/config.CAConfig). What they do is make
+// the chain verifiable by a relying party that holds neither: without the
+// root CRL reachable, nothing can check whether the intermediate has been
+// revoked, which is the one revocation signal the offline root exists to
+// publish.
+type RootArtifacts struct {
+	// CertPEM is the root certificate, served at the intermediate's AIA
+	// CA-Issuers URL.
+	CertPEM []byte
+	// CRLPEM is the root's CRL, served at the intermediate's CRL
+	// distribution point. It covers exactly one certificate: the
+	// intermediate.
+	CRLPEM []byte
+}
+
+// NewServer builds the HTTP handler for the CA service. issuer is the
+// intermediate CA: it signs leaf certificates and the leaf CRL, never
+// anything root-tier. adapter and workspace back the /readyz probe;
 // registry records what has been issued and revoked; crlValidity sets each
-// generated CRL's thisUpdate/nextUpdate window.
-func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspace, registry *Registry, crlValidity time.Duration, logger *slog.Logger) http.Handler {
+// generated CRL's thisUpdate/nextUpdate window; root carries the static
+// artifacts described on RootArtifacts.
+func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspace, registry *Registry, crlValidity time.Duration, root RootArtifacts, logger *slog.Logger) http.Handler {
 	s := &server{
 		ca:          issuer,
 		adapter:     adapter,
 		workspace:   workspace,
 		registry:    registry,
 		crlValidity: crlValidity,
+		root:        root,
 		crlNumber:   big.NewInt(0),
 	}
 
@@ -63,6 +87,12 @@ func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspa
 	mux.HandleFunc("POST /certificates", s.handleIssueCertificate)
 	mux.HandleFunc("POST /certificates/{serial}/revoke", s.handleRevoke)
 	mux.HandleFunc("GET /crl", s.handleCRL)
+	// Static, ceremony-produced artifacts. The paths are fixed and
+	// documented so an operator can point the ceremony's -root-crl-url and
+	// -root-cert-url at them before the certificates that embed those URLs
+	// are ever signed.
+	mux.HandleFunc("GET /root.crt", s.handleRootCert)
+	mux.HandleFunc("GET /root.crl", s.handleRootCRL)
 
 	return withRequestLogging(logger, http.TimeoutHandler(mux, requestTimeout, `{"error":"request timed out"}`))
 }
@@ -73,11 +103,32 @@ type server struct {
 	workspace   pk11.Workspace
 	registry    *Registry
 	crlValidity time.Duration
+	root        RootArtifacts
 
 	crlMu            sync.Mutex
 	crlNumber        *big.Int
 	cachedCRL        []byte
 	cachedNextUpdate time.Time
+}
+
+// handleRootCert serves the ceremony-produced root certificate at the AIA
+// CA-Issuers URL the intermediate points at.
+func (s *server) handleRootCert(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	_, _ = w.Write(s.root.CertPEM)
+}
+
+// handleRootCRL serves the ceremony-produced root CRL at the distribution
+// point the intermediate points at.
+//
+// It is served verbatim rather than regenerated: producing it requires the
+// root's key, which is offline and unreachable from here by design. Its
+// validity window is set at ceremony time and is deliberately long, so
+// refreshing it means re-running the ceremony (docs/phases/
+// phase-3b-pki-hardening.md, "How the root CRL is produced").
+func (s *server) handleRootCRL(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	_, _ = w.Write(s.root.CRLPEM)
 }
 
 type errorResponse struct {
@@ -136,9 +187,22 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 		Status:   StatusValid,
 	})
 
+	// Return the full chain, leaf first, then the issuing intermediate.
+	//
+	// A relying party validating this leaf needs the intermediate to build a
+	// path to the root it trusts, and returning it here means it never has
+	// to fetch it out of band. Leaf-first is the order TLS itself uses (RFC
+	// 8446 §4.4.2) and what every tool that consumes a PEM bundle expects.
+	//
+	// The root is deliberately NOT included: it is the trust anchor, and a
+	// relying party that would accept a root handed to it by the same server
+	// that issued the certificate is not actually verifying anything. It is
+	// distributed out of band, and /root.crt exists for path building, not
+	// for establishing trust.
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	w.WriteHeader(http.StatusCreated)
 	_ = pem.Encode(w, &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+	_ = pem.Encode(w, &pem.Block{Type: "CERTIFICATE", Bytes: s.ca.Certificate().Raw})
 }
 
 // parseCSR accepts either a PEM-encoded ("CERTIFICATE REQUEST" or the

@@ -10,9 +10,9 @@ import (
 )
 
 func TestHealthz_AlwaysSucceeds(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/healthz")
@@ -26,9 +26,9 @@ func TestHealthz_AlwaysSucceeds(t *testing.T) {
 }
 
 func TestHealthz_SucceedsEvenAfterAdapterClosed(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	adapter.Close()
@@ -44,9 +44,9 @@ func TestHealthz_SucceedsEvenAfterAdapterClosed(t *testing.T) {
 }
 
 func TestHealthReadyz_SucceedsWhenAdapterIsUp(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/readyz")
@@ -63,9 +63,9 @@ func TestHealthReadyz_SucceedsWhenAdapterIsUp(t *testing.T) {
 // criterion, alongside TestHealthz_SucceedsEvenAfterAdapterClosed above:
 // /readyz fails when the adapter is closed while /healthz still succeeds.
 func TestHealthReadyz_FailsWhenAdapterClosed(t *testing.T) {
-	c, adapter, ws := newTestCA(t)
+	c, adapter, ws, rootArtifacts := newTestCA(t)
 	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	adapter.Close()

@@ -236,8 +236,8 @@ func pinResolver(envVar string) ca.PINResolver {
 }
 
 // writeCertPEM writes der as a PEM-encoded certificate file. Contains no
-// private key material — 0644 is appropriate, the same reasoning as
-// internal/ca.Bootstrap's own writeCertPEM.
+// private key material, so 0644 is appropriate: this is meant to be handed
+// to anyone who needs to verify certificates from this hierarchy.
 func writeCertPEM(path string, der []byte) error {
 	block := &pem.Block{Type: "CERTIFICATE", Bytes: der}
 	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0644); err != nil {
