@@ -114,8 +114,7 @@ type server struct {
 // handleRootCert serves the ceremony-produced root certificate at the AIA
 // CA-Issuers URL the intermediate points at.
 func (s *server) handleRootCert(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/x-pem-file")
-	_, _ = w.Write(s.root.CertPEM)
+	s.serveRootArtifact(w, r, s.root.CertPEM, "root certificate")
 }
 
 // handleRootCRL serves the ceremony-produced root CRL at the distribution
@@ -127,8 +126,29 @@ func (s *server) handleRootCert(w http.ResponseWriter, r *http.Request) {
 // refreshing it means re-running the ceremony (docs/phases/
 // phase-3b-pki-hardening.md, "How the root CRL is produced").
 func (s *server) handleRootCRL(w http.ResponseWriter, r *http.Request) {
+	s.serveRootArtifact(w, r, s.root.CRLPEM, "root CRL")
+}
+
+// serveRootArtifact writes one static ceremony artifact, or fails honestly
+// if it is absent.
+//
+// The absent case matters more than it looks. cmd/hsm-pki-server validates
+// both artifacts at startup, but NewServer takes them by value and cannot
+// reject a zero-valued RootArtifacts, so an in-process caller can construct
+// a server without them. Writing an empty 200 there would be the worst
+// outcome available: a relying party fetching the CRL distribution point
+// would receive a successful response containing a malformed CRL, and the
+// most likely way it handles that is to treat revocation as unavailable and
+// carry on. A 503 says the artifact is missing, which is the truth
+// (CLAUDE.md §3.4).
+func (s *server) serveRootArtifact(w http.ResponseWriter, r *http.Request, pemBytes []byte, what string) {
+	if len(pemBytes) == 0 {
+		loggerFromContext(r.Context()).Error("root artifact is not configured", "artifact", what)
+		s.writeError(w, http.StatusServiceUnavailable, what+" is not configured on this server")
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	_, _ = w.Write(s.root.CRLPEM)
+	_, _ = w.Write(pemBytes)
 }
 
 type errorResponse struct {

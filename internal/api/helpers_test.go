@@ -30,12 +30,10 @@ func requireSoftHSM2(t *testing.T) string {
 	return modulePath
 }
 
-// newTestCA provisions a fresh SoftHSM2 token and bootstraps a CA over it,
-// returning the CA along with the adapter and workspace it was built on —
-// callers building a server also need those for the /readyz probe.
 // newTestCA provisions two SoftHSM2 tokens, runs a real root ceremony over
 // them, and returns the **intermediate** CA the service is built on, plus
-// the public root artifacts the server republishes.
+// the adapter and workspace callers need for the /readyz probe and the
+// public root artifacts the server republishes.
 //
 // It used to bootstrap a self-signed root, matching what the service did
 // before Phase 3b. That configuration is now refused at startup

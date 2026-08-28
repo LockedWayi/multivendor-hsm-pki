@@ -27,12 +27,16 @@ type CA struct {
 	certTTL time.Duration
 }
 
-// NewCA constructs a CA directly from an existing issuer certificate and
-// signer, for the case where the certificate was not produced by Bootstrap's
-// own self-signing path — an intermediate certificate signed by a separate
-// root during a two-tier ceremony (see RunCeremony), for instance. Bootstrap
-// remains the entry point for the self-signed case; this is for everything
-// else that already holds a valid (cert, signer) pair.
+// NewCA constructs a CA from an issuer certificate and signer a caller
+// already holds.
+//
+// LoadIntermediate is what the service itself uses: it reads the certificate
+// from disk and enforces the tier constraints (CA, not self-signed,
+// pathlen:0, key matches certificate) before building anything. This is the
+// unchecked constructor beneath it, for callers that obtained a validated
+// pair some other way — chiefly RunCeremony, which has the certificate it
+// just signed in hand, and tests. It performs no validation of its own, so
+// prefer LoadIntermediate anywhere the input came from configuration.
 func NewCA(cert *x509.Certificate, signer crypto.Signer, certTTL time.Duration) *CA {
 	return &CA{cert: cert, signer: signer, certTTL: certTTL}
 }

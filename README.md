@@ -82,7 +82,8 @@ verification.
 ## Status
 
 Phase 1 (PKCS#11 core), Phase 2 (CA core), and Phase 3 (infrastructure as
-code) complete.
+code) complete. **Phase 3b (PKI hardening) is in progress**: the two-tier
+hierarchy is built, durable revocation state is not yet.
 
 Phase 1: the interface, session lifecycle, PIN custody, and both the
 SoftHSM2 and ProtectServer adapters are implemented, tested, and share one
@@ -91,7 +92,7 @@ needed zero vendor-specific overrides once a second, real vendor was run
 against it. A single conformance suite (`TestConformance`) runs against
 both backends.
 
-Phase 2: an HSM-backed `crypto.Signer`, CA bootstrap and issuance with CSR
+Phase 2: an HSM-backed `crypto.Signer`, CA issuance with CSR
 validation, and a full HTTP surface — `POST /certificates`,
 `POST /certificates/{serial}/revoke`, `GET /crl`, `GET /healthz`/`GET /readyz`
 — all signing through the Phase 1 adapter, never holding a raw key.
@@ -106,10 +107,31 @@ locked-and-encrypted remote state backend on self-hosted MinIO, and
 `trivy`-based policy/secret scanning with a demonstrated real catch. See
 [`deploy/terraform/README.md`](deploy/terraform/README.md).
 
+Phase 3b (in progress): a two-tier CA. `cmd/hsm-pki-keytool ceremony` runs
+a one-time, operator-driven ceremony that generates the root and
+intermediate key pairs on **two separate tokens**, self-signs the root
+(`pathlen:1`), signs the intermediate under it (`pathlen:0`), and emits the
+root CRL — three public artifacts and no private key material. The service
+then loads that intermediate and refuses to start on a self-signed
+certificate, so a configuration that would put a root online is rejected
+rather than warned about. Issuance returns the leaf plus the intermediate;
+the root certificate and CRL are served as static artifacts at `/root.crt`
+and `/root.crl`, which is where the intermediate's AIA and CDP point.
+
+Verified against both SoftHSM2 and the maintainer's ProtectServer token in a
+single `go test -race ./...` run.
+
+**Still open in Phase 3b**, and load-bearing enough to name here rather than
+bury: revocation state is still in memory, so a restart erases it (sub-task
+3b.3). Leaf certificates do not yet carry CDP/AIA extensions (3b.4). The
+threat model and key-ceremony/recovery documents are not written (3b.5,
+3b.6).
+
 Per-sub-task detail is tracked in
 [`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md),
-[`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md), and
-[`docs/phases/phase-3-infrastructure.md`](docs/phases/phase-3-infrastructure.md).
+[`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md),
+[`docs/phases/phase-3-infrastructure.md`](docs/phases/phase-3-infrastructure.md),
+and [`docs/phases/phase-3b-pki-hardening.md`](docs/phases/phase-3b-pki-hardening.md).
 
 ## License
 

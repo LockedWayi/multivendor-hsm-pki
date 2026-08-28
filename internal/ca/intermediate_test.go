@@ -8,9 +8,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"io/fs"
 	"math/big"
-	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,15 +152,20 @@ func TestLoadIntermediate_MissingCertFileFails(t *testing.T) {
 	// No ceremony has run and no file exists. The service must report a
 	// configuration error rather than create a CA to fill the gap, which is
 	// exactly what the removed Bootstrap would have done.
-	_, err := ca.LoadIntermediate(ctx, b.adapter, b.interWS, pk11.SessionOptions{}, resolvePIN,
-		loadParams(b, filepath.Join(t.TempDir(), "does-not-exist.pem")))
+	missing := filepath.Join(t.TempDir(), "does-not-exist.pem")
+	_, err := ca.LoadIntermediate(ctx, b.adapter, b.interWS, pk11.SessionOptions{}, resolvePIN, loadParams(b, missing))
 	t.Cleanup(func() { _ = b.adapter.LogoutToken(ctx) })
 
 	if err == nil {
 		t.Fatal("LoadIntermediate with no certificate file succeeded, want an error")
 	}
-	if !os.IsNotExist(errors.Unwrap(err)) {
-		t.Logf("error (acceptable, but check it names the missing file): %v", err)
+	// The error must be recognizably "this file is not there" and must name
+	// the path, so an operator can act on it without reading the source.
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("error does not wrap fs.ErrNotExist, so a caller cannot tell a missing file from a malformed one: %v", err)
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Fatalf("error does not name the missing path %q: %v", missing, err)
 	}
 }
 
