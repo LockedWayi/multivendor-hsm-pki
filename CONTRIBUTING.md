@@ -46,6 +46,27 @@ you have your own ProtectToolkit entitlement (see
 `PROTECTSERVER_WORKSPACE`, `PROTECTSERVER_PIN`) to also run that backend's
 subtests — never in CI, always locally, against your own SDK.
 
+`internal/ca`'s **ceremony** suite follows the same two-backend pattern but
+needs *two* tokens rather than one, because the root and the intermediate
+live on separate tokens by design:
+
+```sh
+go test ./internal/ca -run TestRunCeremony -race -v
+```
+
+For ProtectServer it takes its own variables —
+`PROTECTSERVER_ROOT_WORKSPACE`, `PROTECTSERVER_INTERMEDIATE_WORKSPACE`, and a
+PIN for each. With any of them unset those subtests skip. Provisioning the
+second token is a one-time manual step; `docs/protectserver-setup.md` §3b has
+the commands.
+
+Both backends can run in one invocation by mounting the ProtectToolkit module
+and its token store into the dev container — see `docs/protectserver-setup.md`
+§5. That is how the Phase 3b results were produced, and it is worth doing
+before opening a PR that touches `internal/pkcs11` or `internal/ca`: the two
+backends have disagreed before, and a green SoftHSM2-only run does not tell
+you they still agree.
+
 ## Coverage floor
 The 70% floor is enforced by `ci/coverage.sh`, not a bare `go test -cover`:
 

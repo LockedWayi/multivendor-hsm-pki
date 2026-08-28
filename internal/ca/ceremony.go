@@ -170,6 +170,17 @@ type CeremonyResult struct {
 // every token it logs into before returning, on every path — a ceremony
 // that left a token authenticated behind it would defeat the isolation the
 // two-token decision exists to provide.
+//
+// # Callers must check the result even when the error is non-nil
+//
+// This returns a non-nil *CeremonyResult alongside an error in one case: the
+// certificates were signed successfully and logging out of the root token
+// then failed. Discarding the result there would throw away work that cannot
+// be redone — the key pairs now exist on the tokens, so a second run is
+// refused by the overwrite guard, and the certificates existed only in
+// memory. They contain no secret material, so the correct handling is to
+// persist them and then report the error, which is what
+// cmd/hsm-pki-keytool does.
 func RunCeremony(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk11.SessionOptions, params CeremonyParams) (*CeremonyResult, error) {
 	if params.RootValidity == 0 {
 		params.RootValidity = DefaultRootValidity
