@@ -83,7 +83,8 @@ verification.
 
 Phase 1 (PKCS#11 core), Phase 2 (CA core), and Phase 3 (infrastructure as
 code) complete. **Phase 3b (PKI hardening) is in progress**: the two-tier
-hierarchy is built, durable revocation state is not yet.
+hierarchy and durable revocation state are built; certificate profile
+extensions and two design documents remain.
 
 Phase 1: the interface, session lifecycle, PIN custody, and both the
 SoftHSM2 and ProtectServer adapters are implemented, tested, and share one
@@ -121,11 +122,15 @@ and `/root.crl`, which is where the intermediate's AIA and CDP point.
 Verified against both SoftHSM2 and the maintainer's ProtectServer token in a
 single `go test -race ./...` run.
 
+Revocation state and the CRL number counter live in an embedded SQLite store
+behind an interface, so a restart no longer resurrects a revoked
+certificate — proven by a regression test that issues, revokes, tears the
+server down, brings it back over the same file, and re-fetches the CRL.
+
 **Still open in Phase 3b**, and load-bearing enough to name here rather than
-bury: revocation state is still in memory, so a restart erases it (sub-task
-3b.3). Leaf certificates do not yet carry CDP/AIA extensions (3b.4). The
-threat model and key-ceremony/recovery documents are not written (3b.5,
-3b.6).
+bury: issued leaf certificates do not yet carry CDP/AIA extensions (sub-task
+3b.4 — the ceremony-time half is done). The threat model and
+key-ceremony/recovery documents are not written (3b.5, 3b.6).
 
 Per-sub-task detail is tracked in
 [`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md),

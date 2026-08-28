@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	"github.com/LockedWayi/hsm-pki-platform/internal/store"
 )
 
 const (
@@ -67,18 +69,18 @@ type RootArtifacts struct {
 // NewServer builds the HTTP handler for the CA service. issuer is the
 // intermediate CA: it signs leaf certificates and the leaf CRL, never
 // anything root-tier. adapter and workspace back the /readyz probe;
-// registry records what has been issued and revoked; crlValidity sets each
+// records is the durable store of what has been issued and revoked, and
+// the source of CRL numbers; crlValidity sets each
 // generated CRL's thisUpdate/nextUpdate window; root carries the static
 // artifacts described on RootArtifacts.
-func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspace, registry *Registry, crlValidity time.Duration, root RootArtifacts, logger *slog.Logger) http.Handler {
+func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspace, records store.Store, crlValidity time.Duration, root RootArtifacts, logger *slog.Logger) http.Handler {
 	s := &server{
 		ca:          issuer,
 		adapter:     adapter,
 		workspace:   workspace,
-		registry:    registry,
+		store:       records,
 		crlValidity: crlValidity,
 		root:        root,
-		crlNumber:   big.NewInt(0),
 	}
 
 	mux := http.NewServeMux()
@@ -101,12 +103,11 @@ type server struct {
 	ca          *ca.CA
 	adapter     pk11.VendorAdapter
 	workspace   pk11.Workspace
-	registry    *Registry
+	store       store.Store
 	crlValidity time.Duration
 	root        RootArtifacts
 
 	crlMu            sync.Mutex
-	crlNumber        *big.Int
 	cachedCRL        []byte
 	cachedNextUpdate time.Time
 }
@@ -200,12 +201,22 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	s.registry.Record(CertRecord{
+	// The record is written before the certificate is returned, and a
+	// failure to write it fails the request. The alternative — hand back a
+	// certificate whose issuance was never recorded — creates one this CA
+	// cannot later revoke, because revocation is addressed by a serial the
+	// store has never heard of. Better to fail an issuance than to issue
+	// something unrevocable (CLAUDE.md §3.4).
+	if err := s.store.Record(r.Context(), store.CertRecord{
 		Serial:   cert.SerialNumber,
 		Subject:  cert.Subject,
 		NotAfter: cert.NotAfter,
-		Status:   StatusValid,
-	})
+		Status:   store.StatusValid,
+	}); err != nil {
+		loggerFromContext(r.Context()).Error("recording an issued certificate failed", "error", err, "serial", cert.SerialNumber.String())
+		s.writeError(w, http.StatusInternalServerError, "certificate issuance failed")
+		return
+	}
 
 	// Return the full chain, leaf first, then the issuing intermediate.
 	//
@@ -274,8 +285,8 @@ func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.registry.Revoke(serial, req.Reason, time.Now()); err != nil {
-		if errors.Is(err, ErrCertNotFound) {
+	if err := s.store.Revoke(r.Context(), serial, req.Reason, time.Now()); err != nil {
+		if errors.Is(err, store.ErrCertNotFound) {
 			s.writeError(w, http.StatusNotFound, "certificate not found")
 			return
 		}
@@ -307,7 +318,7 @@ func (s *server) invalidateCRLCache() {
 // the cached one is missing or has passed its nextUpdate — never serving a
 // stale CRL past its stated validity window.
 func (s *server) handleCRL(w http.ResponseWriter, r *http.Request) {
-	der, err := s.currentCRL()
+	der, err := s.currentCRL(r.Context())
 	if err != nil {
 		loggerFromContext(r.Context()).Error("CRL generation failed", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "CRL generation failed")
@@ -317,7 +328,7 @@ func (s *server) handleCRL(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(der)
 }
 
-func (s *server) currentCRL() ([]byte, error) {
+func (s *server) currentCRL(ctx context.Context) ([]byte, error) {
 	s.crlMu.Lock()
 	defer s.crlMu.Unlock()
 
@@ -326,15 +337,27 @@ func (s *server) currentCRL() ([]byte, error) {
 		return s.cachedCRL, nil
 	}
 
-	var revoked []ca.RevokedCert
-	for _, rec := range s.registry.All() {
-		if rec.Status == StatusRevoked {
-			revoked = append(revoked, ca.RevokedCert{
-				Serial:     rec.Serial,
-				RevokedAt:  rec.RevokedAt,
-				ReasonCode: rec.RevocationReason,
-			})
-		}
+	records, err := s.store.Revoked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	revoked := make([]ca.RevokedCert, 0, len(records))
+	for _, rec := range records {
+		revoked = append(revoked, ca.RevokedCert{
+			Serial:     rec.Serial,
+			RevokedAt:  rec.RevokedAt,
+			ReasonCode: rec.RevocationReason,
+		})
+	}
+
+	// The CRL number is taken from the store, which persists it before
+	// returning. It used to be derived from the wall clock on every call
+	// because Phase 2 had nowhere to keep a counter; the clock now only
+	// seeds a store that has none, and every subsequent number is the
+	// persisted one incremented (see store.Store.NextCRLNumber).
+	number, err := s.store.NextCRLNumber(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// Backdate thisUpdate the same few minutes Issue backdates NotBefore,
@@ -342,47 +365,14 @@ func (s *server) currentCRL() ([]byte, error) {
 	// that is technically not valid yet.
 	thisUpdate := now.Add(-crlClockSkewAllowance)
 	nextUpdate := now.Add(s.crlValidity)
-	s.crlNumber = s.nextCRLNumber(now)
 
-	der, err := s.ca.BuildCRL(revoked, thisUpdate, nextUpdate, s.crlNumber)
+	der, err := s.ca.BuildCRL(revoked, thisUpdate, nextUpdate, number)
 	if err != nil {
 		return nil, err
 	}
 	s.cachedCRL = der
 	s.cachedNextUpdate = nextUpdate
 	return der, nil
-}
-
-// nextCRLNumber returns a CRL number strictly greater than any this
-// service has issued — including across a restart.
-//
-// RFC 5280 §5.2.3 requires CRL numbers to increase monotonically, and a
-// counter that starts from zero every time the process starts does not:
-// after a restart the service would reissue number 1 while verifiers hold a
-// previously distributed number 5, and a verifier keeping the higher-
-// numbered CRL would then ignore every subsequent update, revocations
-// included. Phase 2 has no persistent storage to read a counter back from
-// (deliberately — see the phase file's out-of-scope list), so the wall
-// clock supplies the monotonic component instead: Unix milliseconds only
-// ever increase, survive a restart, and need nothing stored. Seconds were
-// tried first; a same-second restart reissuing an identical number is what
-// forced the switch to milliseconds (see TestCRL_NumberSurvivesRestart).
-//
-// max(previous+1, now) keeps it strictly increasing within a run too, for
-// the case where two CRLs are generated inside the same second.
-//
-// The dependency this accepts is on the clock not moving backwards across a
-// restart. A large backward step would repeat numbers already issued; NTP
-// keeps that from happening in practice, and a persistent counter — the
-// real fix — arrives with the storage layer that Phase 2 explicitly does
-// not build.
-func (s *server) nextCRLNumber(now time.Time) *big.Int {
-	candidate := big.NewInt(now.UnixMilli())
-	incremented := new(big.Int).Add(s.crlNumber, big.NewInt(1))
-	if incremented.Cmp(candidate) > 0 {
-		return incremented
-	}
-	return candidate
 }
 
 // issueErrorResponse maps a ca.Issue error to an HTTP status and a message

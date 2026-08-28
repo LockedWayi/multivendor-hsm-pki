@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/api"
+	"github.com/LockedWayi/hsm-pki-platform/internal/store"
 )
 
 func testLogger() *slog.Logger {
@@ -39,8 +41,8 @@ func csrPEMFor(t *testing.T, priv *ecdsa.PrivateKey, cn string) []byte {
 
 func TestIssueCertificate_Success(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
+	records := store.NewMemory()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -77,22 +79,25 @@ func TestIssueCertificate_Success(t *testing.T) {
 		t.Fatalf("CheckSignatureFrom(ca): %v", err)
 	}
 
-	if len(registry.All()) != 1 {
-		t.Fatalf("registry has %d records, want 1", len(registry.All()))
+	if records.Len() != 1 {
+		t.Fatalf("store holds %d records, want 1", records.Len())
 	}
-	rec, ok := registry.Get(cert.SerialNumber)
+	rec, ok, err := records.Get(context.Background(), cert.SerialNumber)
+	if err != nil {
+		t.Fatalf("store Get: %v", err)
+	}
 	if !ok {
-		t.Fatal("issued certificate was not recorded in the registry")
+		t.Fatal("issued certificate was not recorded in the store")
 	}
-	if rec.Status != api.StatusValid {
-		t.Fatalf("recorded status = %q, want %q", rec.Status, api.StatusValid)
+	if rec.Status != store.StatusValid {
+		t.Fatalf("recorded status = %q, want %q", rec.Status, store.StatusValid)
 	}
 }
 
 func TestIssueCertificate_MalformedBodyRejected(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
+	records := store.NewMemory()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", strings.NewReader("this is not a CSR"))
@@ -104,15 +109,15 @@ func TestIssueCertificate_MalformedBodyRejected(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
-	if len(registry.All()) != 0 {
-		t.Fatalf("registry has %d records, want 0 after a rejected request", len(registry.All()))
+	if records.Len() != 0 {
+		t.Fatalf("store holds %d records, want 0 after a rejected request", records.Len())
 	}
 }
 
 func TestIssueCertificate_BrokenSignatureRejected(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
+	records := store.NewMemory()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -138,15 +143,15 @@ func TestIssueCertificate_BrokenSignatureRejected(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
-	if len(registry.All()) != 0 {
-		t.Fatalf("registry has %d records, want 0 after a rejected request", len(registry.All()))
+	if records.Len() != 0 {
+		t.Fatalf("store holds %d records, want 0 after a rejected request", records.Len())
 	}
 }
 
 func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
+	records := store.NewMemory()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -170,8 +175,8 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 	}
-	if len(registry.All()) != 0 {
-		t.Fatalf("registry has %d records, want 0 after a rejected request", len(registry.All()))
+	if records.Len() != 0 {
+		t.Fatalf("store holds %d records, want 0 after a rejected request", records.Len())
 	}
 }
 
@@ -183,8 +188,8 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 // (CLAUDE.md §3.4).
 func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
+	records := store.NewMemory()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	adapter.Close()
@@ -216,15 +221,15 @@ func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
 			t.Fatalf("response body leaked internal detail (%q): %s", leak, body)
 		}
 	}
-	if len(registry.All()) != 0 {
-		t.Fatalf("registry has %d records, want 0 after a failed request", len(registry.All()))
+	if records.Len() != 0 {
+		t.Fatalf("store holds %d records, want 0 after a failed request", records.Len())
 	}
 }
 
 func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
+	records := store.NewMemory()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	oversized := bytes.Repeat([]byte("A"), 128*1024) // well past the 64 KiB limit
@@ -237,8 +242,8 @@ func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusRequestEntityTooLarge)
 	}
-	if len(registry.All()) != 0 {
-		t.Fatalf("registry has %d records, want 0 after a rejected request", len(registry.All()))
+	if records.Len() != 0 {
+		t.Fatalf("store holds %d records, want 0 after a rejected request", records.Len())
 	}
 }
 
@@ -251,8 +256,8 @@ func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 // defect survived to be found by hand.
 func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
+	records := store.NewMemory()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	const concurrent = 8
@@ -316,8 +321,8 @@ func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 		}
 		seen[s] = true
 	}
-	if len(registry.All()) != concurrent {
-		t.Fatalf("registry has %d records, want %d", len(registry.All()), concurrent)
+	if records.Len() != concurrent {
+		t.Fatalf("store holds %d records, want %d", records.Len(), concurrent)
 	}
 }
 
@@ -331,8 +336,8 @@ func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 // anything.
 func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	registry := api.NewRegistry()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, registry, 24*time.Hour, rootArtifacts, testLogger()))
+	records := store.NewMemory()
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -421,7 +426,7 @@ func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 // can ever learn the intermediate was revoked.
 func TestRootArtifactEndpoints(t *testing.T) {
 	c, adapter, ws, rootArtifacts := newTestCA(t)
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, api.NewRegistry(), 24*time.Hour, rootArtifacts, testLogger()))
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
 	t.Run("GET /root.crt serves the ceremony root", func(t *testing.T) {

@@ -103,6 +103,11 @@ type CAConfig struct {
 	// CRLValidityHours is how long a generated CRL is valid for
 	// (thisUpdate to nextUpdate). Optional — defaulted by Load when zero.
 	CRLValidityHours int `yaml:"crl_validity_hours"`
+	// StorePath is the embedded SQLite database holding issued and revoked
+	// records and the CRL number counter. Required: losing revocation state
+	// on restart is a security regression, so there is no in-memory fallback
+	// to default to (internal/store).
+	StorePath string `yaml:"store_path"`
 }
 
 // defaultCRLValidityHours is used when ca.crl_validity_hours is left at zero
@@ -171,6 +176,7 @@ func Load(path string) (*Config, error) {
 		"ca.intermediate_cert_path": c.CA.IntermediateCertPath,
 		"ca.root_cert_path":         c.CA.RootCertPath,
 		"ca.root_crl_path":          c.CA.RootCRLPath,
+		"ca.store_path":             c.CA.StorePath,
 	} {
 		if v == "" {
 			return nil, fmt.Errorf("config: %s is empty", field)

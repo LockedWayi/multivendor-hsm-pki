@@ -40,6 +40,7 @@ func writeSoftHSM2Config(t *testing.T, modulePath, label string) string {
 		"  intermediate_key_label: \"ca-intermediate-key-v1\"\n" +
 		"  root_cert_path: \"root.pem\"\n" +
 		"  root_crl_path: \"root-crl.pem\"\n" +
+		"  store_path: \"ca.db\"\n" +
 		"  intermediate_cert_path: \"" + filepath.Join(t.TempDir(), "intermediate.pem") + "\"\n"
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(body), 0600); err != nil {

@@ -90,6 +90,14 @@ ca:
   # How long a generated leaf CRL is valid for (thisUpdate to nextUpdate).
   crl_validity_hours: 24
 
+  # Embedded SQLite database holding issued/revoked records and the CRL
+  # number counter. Required, with no in-memory fallback: a restart that
+  # erases revocations is a security regression, not a durability
+  # inconvenience -- a certificate revoked during an incident would reappear
+  # as valid in the next CRL. Back this path with a real volume, not
+  # container-local scratch space.
+  store_path: "ca.db"
+
 # Vault settings are unused until Phase 6.
 vault:
   address: "https://vault.example.local:8200"

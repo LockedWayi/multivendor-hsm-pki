@@ -17,6 +17,7 @@ import (
 	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
 	"github.com/LockedWayi/hsm-pki-platform/internal/config"
 	pkcs11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	"github.com/LockedWayi/hsm-pki-platform/internal/store"
 )
 
 // shutdownGrace bounds how long the server waits for in-flight requests to
@@ -84,10 +85,19 @@ func run(configPath string, logger *slog.Logger) error {
 		return err
 	}
 
-	registry := api.NewRegistry()
+	// The store outlives the process it is opened in — that is its whole
+	// purpose. Revocations recorded here are still revoked after a restart,
+	// which the in-memory registry this replaced could not promise
+	// (docs/phases/phase-3b-pki-hardening.md, sub-task 3b.3).
+	records, err := store.OpenSQLite(ctx, cfg.CA.StorePath, logger)
+	if err != nil {
+		return err
+	}
+	defer records.Close()
+
 	httpServer := &http.Server{
 		Addr:    cfg.Server.ListenAddr,
-		Handler: api.NewServer(caInstance, adapter, ws, registry, time.Duration(cfg.CA.CRLValidityHours)*time.Hour, rootArtifacts, logger),
+		Handler: api.NewServer(caInstance, adapter, ws, records, time.Duration(cfg.CA.CRLValidityHours)*time.Hour, rootArtifacts, logger),
 	}
 
 	serveErr := make(chan error, 1)

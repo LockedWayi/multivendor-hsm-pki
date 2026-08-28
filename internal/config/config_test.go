@@ -39,6 +39,7 @@ ca:
   intermediate_cert_path: "intermediate.pem"
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
+  store_path: "ca.db"
 `
 
 func TestLoad_Success(t *testing.T) {
@@ -152,6 +153,7 @@ ca:
   intermediate_cert_path: "intermediate.pem"
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
+  store_path: "ca.db"
 `
 	path := writeConfig(t, body)
 
@@ -180,6 +182,7 @@ ca:
   intermediate_cert_path: "intermediate.pem"
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
+  store_path: "ca.db"
 `
 	path := writeConfig(t, body)
 
@@ -204,6 +207,7 @@ ca:
   intermediate_cert_path: "intermediate.pem"
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
+  store_path: "ca.db"
 `
 	path := writeConfig(t, body)
 
@@ -223,12 +227,14 @@ func TestLoad_RequiredCAFieldsRejectEmpty(t *testing.T) {
 		"intermediate_cert_path",
 		"root_cert_path",
 		"root_crl_path",
+		"store_path",
 	}
 	all := map[string]string{
 		"intermediate_key_label": `"ca-intermediate-key-v1"`,
 		"intermediate_cert_path": `"intermediate.pem"`,
 		"root_cert_path":         `"root.pem"`,
 		"root_crl_path":          `"root-crl.pem"`,
+		"store_path":             `"ca.db"`,
 	}
 
 	for _, omitted := range fields {
