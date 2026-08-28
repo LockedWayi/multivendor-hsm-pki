@@ -23,23 +23,49 @@ import (
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
-// newTestCA bootstraps a fresh CA over a freshly provisioned SoftHSM2 token.
+// newTestCA returns the issuing CA these tests exercise: a real,
+// ceremony-produced **intermediate** over two freshly provisioned SoftHSM2
+// tokens.
+//
+// It used to bootstrap a self-signed root, which is what the service itself
+// used to do. Phase 3b removed that from the product, so it is removed from
+// the tests too — running the issuance suite against a root would exercise a
+// configuration this platform now refuses to start in.
 func newTestCA(t *testing.T) *ca.CA {
 	t.Helper()
-	adapter, ws, resolvePIN := newTestAdapter(t)
-
-	c, err := ca.Bootstrap(context.Background(), adapter, ws, pk11.SessionOptions{}, resolvePIN, ca.BootstrapParams{
-		KeyLabel:     "ca-issue-test-key",
-		CertPath:     filepath.Join(t.TempDir(), "ca-cert.pem"),
-		Curve:        pk11.P256,
-		Subject:      pkix.Name{CommonName: "hsm-pki-platform test CA"},
-		RootValidity: 24 * time.Hour,
-		CertTTL:      time.Hour,
-	})
-	if err != nil {
-		t.Fatalf("Bootstrap: %v", err)
-	}
+	c, _ := newTestCAWithRoot(t)
 	return c
+}
+
+// newTestCAWithRoot is newTestCA plus the ceremony's root certificate, for
+// the tests that need to build or verify a full chain. The root is returned
+// as DER and is only ever used as a trust anchor — nothing in these tests
+// signs with it, which mirrors the platform: after the ceremony, the root's
+// key is not reachable from anything that runs online.
+func newTestCAWithRoot(t *testing.T) (*ca.CA, []byte) {
+	t.Helper()
+	ctx := context.Background()
+	b := setupSoftHSM2CeremonyBackend(t)
+
+	result, err := ca.RunCeremony(ctx, b.adapter, pk11.SessionOptions{}, testCeremonyParams(b))
+	if err != nil {
+		t.Fatalf("RunCeremony: %v", err)
+	}
+	interCert, err := x509.ParseCertificate(result.IntermediateCertDER)
+	if err != nil {
+		t.Fatalf("parsing intermediate certificate: %v", err)
+	}
+
+	if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), pk11.RoleUser); err != nil {
+		t.Fatalf("LoginToken (intermediate): %v", err)
+	}
+	t.Cleanup(func() { _ = b.adapter.LogoutToken(ctx) })
+
+	signer, err := ca.NewSigner(ctx, b.adapter, b.interWS, pk11.SessionOptions{}, b.interKeyLabel(), pk11.P256)
+	if err != nil {
+		t.Fatalf("NewSigner (intermediate): %v", err)
+	}
+	return ca.NewCA(interCert, signer, time.Hour), result.RootCertDER
 }
 
 // signedCSR builds and signs a CSR with priv (an *ecdsa.PrivateKey,
@@ -76,13 +102,21 @@ func TestIssue_Success(t *testing.T) {
 	}
 }
 
-// TestIssue_OpenSSLVerify is sub-task 2.3's own Done-when criterion: an
-// issued certificate passes `openssl verify` against the CA certificate.
+// TestIssue_OpenSSLVerify is sub-task 2.3's Done-when criterion, carried
+// forward into the two-tier hierarchy: an issued certificate passes
+// `openssl verify` against the real chain.
+//
+// The verification changed shape in Phase 3b and the change is the point.
+// It used to be `openssl verify -CAfile <the CA's own cert> leaf.pem`, which
+// worked only because that certificate was self-signed and therefore its own
+// trust anchor. Now the issuer is an intermediate, so the trust anchor is
+// the offline root and the intermediate is supplied as an untrusted
+// path-building certificate — exactly what a relying party has to do.
 func TestIssue_OpenSSLVerify(t *testing.T) {
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skip("openssl not found on PATH")
 	}
-	c := newTestCA(t)
+	c, rootDER := newTestCAWithRoot(t)
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -95,16 +129,20 @@ func TestIssue_OpenSSLVerify(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	caPath := filepath.Join(dir, "ca.pem")
+	caPath := filepath.Join(dir, "root.pem")
+	interPath := filepath.Join(dir, "intermediate.pem")
 	leafPath := filepath.Join(dir, "leaf.pem")
-	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Certificate().Raw}), 0644); err != nil {
-		t.Fatalf("WriteFile(ca): %v", err)
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}), 0644); err != nil {
+		t.Fatalf("WriteFile(root): %v", err)
+	}
+	if err := os.WriteFile(interPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Certificate().Raw}), 0644); err != nil {
+		t.Fatalf("WriteFile(intermediate): %v", err)
 	}
 	if err := os.WriteFile(leafPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), 0644); err != nil {
 		t.Fatalf("WriteFile(leaf): %v", err)
 	}
 
-	out, err := exec.Command("openssl", "verify", "-CAfile", caPath, leafPath).CombinedOutput()
+	out, err := exec.Command("openssl", "verify", "-CAfile", caPath, "-untrusted", interPath, leafPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("openssl verify: %v: %s", err, out)
 	}

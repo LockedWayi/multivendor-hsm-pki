@@ -62,32 +62,56 @@ type VendorConfig struct {
 	PINEnv         string `yaml:"pin_env"`
 }
 
-// CAConfig configures certificate issuance policy and where the CA's own
-// identity lives: its key pair on the HSM (by label) and its self-signed
-// certificate on disk (by path) — see internal/ca.Bootstrap for how the two
-// are used together.
+// CAConfig configures certificate issuance policy and where the service's
+// signing identity lives: the **intermediate's** key pair on the HSM (by
+// label) and the ceremony-produced intermediate certificate on disk (by
+// path) — see internal/ca.LoadIntermediate for how the two are used
+// together.
+//
+// # What this struct deliberately cannot express
+//
+// There is no field here naming the root's token, workspace, or key label,
+// and adding one would be a defect rather than a feature. The root is
+// reachable only from the offline ceremony (internal/ca.RunCeremony,
+// cmd/hsm-pki-keytool), so a compromise of this service cannot reach it —
+// that is the whole point of the two-tier hierarchy this phase introduced
+// (docs/phases/phase-3b-pki-hardening.md, CLAUDE.md §3.6).
+//
+// RootCertPath and RootCRLPath are not exceptions to that. Both name public
+// artifacts the ceremony emitted — a certificate and a CRL, containing no
+// key material and conferring no ability to use the root's key. The service
+// serves them as static files so that the CDP and AIA URLs baked into the
+// intermediate at ceremony time actually resolve; see TestConfig_NoRootKeyReferences,
+// which pins the distinction so a future field cannot quietly cross it.
 type CAConfig struct {
 	CurveName    string `yaml:"curve"`
 	CertTTLHours int    `yaml:"cert_ttl_hours"`
-	KeyLabel     string `yaml:"key_label"`
-	CertPath     string `yaml:"cert_path"`
-	// SubjectCommonName names the CA's own certificate subject. Optional —
-	// defaulted by Load when empty, since it is not security-relevant the
-	// way the PIN/module/label fields are.
-	SubjectCommonName string `yaml:"subject_common_name"`
+	// IntermediateKeyLabel is the CKA_LABEL of the intermediate key pair the
+	// ceremony created, on the token this service authenticates.
+	IntermediateKeyLabel string `yaml:"intermediate_key_label"`
+	// IntermediateCertPath is the ceremony-produced intermediate certificate
+	// (PEM). The service refuses to start if it is self-signed.
+	IntermediateCertPath string `yaml:"intermediate_cert_path"`
+	// RootCertPath is the ceremony-produced root certificate (PEM), served
+	// as a static artifact at the AIA CA-Issuers URL. Public, no key
+	// material — see the type's doc comment.
+	RootCertPath string `yaml:"root_cert_path"`
+	// RootCRLPath is the ceremony-produced root CRL (PEM), served as a
+	// static artifact at the intermediate's CRL distribution point. It
+	// covers exactly one certificate: the intermediate itself.
+	RootCRLPath string `yaml:"root_crl_path"`
 	// CRLValidityHours is how long a generated CRL is valid for
 	// (thisUpdate to nextUpdate). Optional — defaulted by Load when zero.
 	CRLValidityHours int `yaml:"crl_validity_hours"`
 }
 
-const (
-	// defaultSubjectCommonName is used when ca.subject_common_name is left
-	// empty in config.yaml.
-	defaultSubjectCommonName = "hsm-pki-platform CA"
-	// defaultCRLValidityHours is used when ca.crl_validity_hours is left
-	// at zero in config.yaml.
-	defaultCRLValidityHours = 24
-)
+// defaultCRLValidityHours is used when ca.crl_validity_hours is left at zero
+// in config.yaml.
+//
+// There is no default subject common name any more: the service no longer
+// creates a certificate, so it has no subject to name. The intermediate's
+// subject was fixed at ceremony time and is read off the certificate.
+const defaultCRLValidityHours = 24
 
 // Load reads and validates the config file at path. Validation is
 // deliberately strict and fails fast: an unknown adapter name or a missing
@@ -137,14 +161,20 @@ func Load(path string) (*Config, error) {
 	if c.CA.CertTTLHours <= 0 {
 		return nil, fmt.Errorf("config: ca.cert_ttl_hours must be positive, got %d", c.CA.CertTTLHours)
 	}
-	if c.CA.KeyLabel == "" {
-		return nil, fmt.Errorf("config: ca.key_label is empty")
-	}
-	if c.CA.CertPath == "" {
-		return nil, fmt.Errorf("config: ca.cert_path is empty")
-	}
-	if c.CA.SubjectCommonName == "" {
-		c.CA.SubjectCommonName = defaultSubjectCommonName
+	// Each of these is required rather than defaulted. The service no longer
+	// creates a CA when it finds none (see internal/ca.LoadIntermediate), so
+	// an unset path is a misconfiguration to report at startup, not a state
+	// to repair — and a defaulted path would silently point the service
+	// somewhere the operator never chose.
+	for field, v := range map[string]string{
+		"ca.intermediate_key_label": c.CA.IntermediateKeyLabel,
+		"ca.intermediate_cert_path": c.CA.IntermediateCertPath,
+		"ca.root_cert_path":         c.CA.RootCertPath,
+		"ca.root_crl_path":          c.CA.RootCRLPath,
+	} {
+		if v == "" {
+			return nil, fmt.Errorf("config: %s is empty", field)
+		}
 	}
 	if c.CA.CRLValidityHours == 0 {
 		c.CA.CRLValidityHours = defaultCRLValidityHours

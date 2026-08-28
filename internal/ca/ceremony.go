@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/url"
@@ -13,6 +14,11 @@ import (
 
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
+
+// DefaultRootValidity is how long a ceremony-produced root certificate is
+// valid for. A root that outlives many intermediate rotations is the normal
+// shape of a CA hierarchy, even one this small.
+const DefaultRootValidity = 10 * 365 * 24 * time.Hour
 
 // DefaultIntermediateValidity is how long a freshly ceremony-produced
 // intermediate certificate is valid for. Shorter than DefaultRootValidity —
@@ -382,6 +388,22 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 		IntermediateCertDER: interDER,
 		RootCRLDER:          rootCRLDER,
 	}, nil
+}
+
+// keyPairExists reports whether a private key with label already exists on
+// the token, distinguishing "does not exist" (ErrKeyNotFound) from any other
+// error opening a session or searching for it.
+func keyPairExists(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, label string) (bool, error) {
+	return withSession(ctx, adapter, ws, sessionOpts, func(s *pk11.Session) (bool, error) {
+		_, err := findKeyByLabel(ctx, adapter, s, pk11.ClassPrivateKey, label)
+		if errors.Is(err, ErrKeyNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	})
 }
 
 // withTokenLogin logs into ws for the span of fn and logs back out

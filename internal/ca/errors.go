@@ -4,9 +4,27 @@ import "errors"
 
 var (
 	// ErrKeyNotFound is returned when no HSM object matches the class and
-	// label a lookup was searching for. Bootstrap uses this specifically to
+	// label a lookup was searching for. The ceremony uses it specifically to
 	// distinguish "key does not exist yet" from any other failure.
 	ErrKeyNotFound = errors.New("ca: no key object found")
+
+	// ErrRootCertificateRejected is returned by LoadIntermediate when the
+	// certificate it was pointed at is self-signed — a root. The online
+	// service holds the intermediate only; a configuration that would put a
+	// root online is refused rather than warned about
+	// (docs/phases/phase-3b-pki-hardening.md, CLAUDE.md §3.4).
+	ErrRootCertificateRejected = errors.New("ca: refusing to run an online service on a root certificate")
+
+	// ErrNotAnIntermediate is returned by LoadIntermediate when the
+	// certificate is not usable as this platform's intermediate tier: not a
+	// CA at all, or not constrained to pathlen:0.
+	ErrNotAnIntermediate = errors.New("ca: certificate is not a valid intermediate for this platform")
+
+	// ErrKeyCertMismatch is returned by LoadIntermediate when the HSM key
+	// found under the configured label is not the key the loaded certificate
+	// certifies. Signing with it would produce certificates that chain to
+	// nothing.
+	ErrKeyCertMismatch = errors.New("ca: HSM key does not match the loaded certificate")
 
 	// ErrInvalidCSRSignature is returned by Issue when the CSR's
 	// self-signature does not verify — the strongest evidence a CSR was
