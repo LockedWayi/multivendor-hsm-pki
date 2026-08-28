@@ -27,6 +27,16 @@ type CA struct {
 	certTTL time.Duration
 }
 
+// NewCA constructs a CA directly from an existing issuer certificate and
+// signer, for the case where the certificate was not produced by Bootstrap's
+// own self-signing path — an intermediate certificate signed by a separate
+// root during a two-tier ceremony (see RunCeremony), for instance. Bootstrap
+// remains the entry point for the self-signed case; this is for everything
+// else that already holds a valid (cert, signer) pair.
+func NewCA(cert *x509.Certificate, signer crypto.Signer, certTTL time.Duration) *CA {
+	return &CA{cert: cert, signer: signer, certTTL: certTTL}
+}
+
 // Certificate returns the CA's own issuer certificate.
 func (c *CA) Certificate() *x509.Certificate {
 	return c.cert
