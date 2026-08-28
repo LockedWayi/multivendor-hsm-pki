@@ -211,8 +211,13 @@ func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 				continue
 			}
 			out = append(out, Workspace{
-				SlotID:  id,
-				Label:   strings.TrimRight(ti.Label, " "),
+				SlotID: id,
+				Label:  strings.TrimRight(ti.Label, " "),
+				// PKCS#11 pads both of these fixed-width fields with
+				// spaces; the padding is an encoding artifact, not part of
+				// the value, and leaving it in would make every serial
+				// comparison depend on a vendor's field width.
+				Serial:  strings.TrimRight(ti.SerialNumber, " "),
 				Present: true,
 			})
 		}
