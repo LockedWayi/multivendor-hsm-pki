@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"math/big"
 	"os"
 	"time"
 
@@ -108,6 +109,19 @@ type CAConfig struct {
 	// on restart is a security regression, so there is no in-memory fallback
 	// to default to (internal/store).
 	StorePath string `yaml:"store_path"`
+	// CRLNumberFloor raises the number a *fresh* store seeds its CRL counter
+	// with. Optional, and normally absent.
+	//
+	// It exists for one recovery case. A rebuilt store seeds its counter
+	// from the wall clock, which is above any number the old store issued as
+	// long as the clock has not moved backwards. If it has — a restored host
+	// with a bad clock, a VM whose time source was wrong — the new sequence
+	// could land below numbers verifiers already hold, and RFC 5280 §5.2.3
+	// then lets them ignore every CRL this CA issues afterward. Nothing can
+	// recover the last number automatically, because the thing that
+	// remembered it is what was lost; an operator who does know it sets it
+	// here. An existing counter is never affected.
+	CRLNumberFloor string `yaml:"crl_number_floor"`
 }
 
 // defaultCRLValidityHours is used when ca.crl_validity_hours is left at zero
@@ -182,6 +196,11 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("config: %s is empty", field)
 		}
 	}
+	if c.CA.CRLNumberFloor != "" {
+		if _, ok := new(big.Int).SetString(c.CA.CRLNumberFloor, 10); !ok {
+			return nil, fmt.Errorf("config: ca.crl_number_floor %q is not a decimal integer", c.CA.CRLNumberFloor)
+		}
+	}
 	if c.CA.CRLValidityHours == 0 {
 		c.CA.CRLValidityHours = defaultCRLValidityHours
 	}
@@ -201,6 +220,16 @@ func ParseCurve(s string) (pkcs11.ECCurve, error) {
 	default:
 		return 0, fmt.Errorf("config: unknown ca.curve %q (want \"P-256\", \"P-384\", or \"P-521\")", s)
 	}
+}
+
+// CRLFloor returns the parsed ca.crl_number_floor, or nil when unset. Load
+// already validated it, so this is safe to call unchecked afterward.
+func (c *CAConfig) CRLFloor() *big.Int {
+	if c.CRLNumberFloor == "" {
+		return nil
+	}
+	n, _ := new(big.Int).SetString(c.CRLNumberFloor, 10)
+	return n
 }
 
 // Curve returns the parsed pkcs11.ECCurve for ca.curve. Load already

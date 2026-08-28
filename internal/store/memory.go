@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sync"
 	"time"
@@ -15,7 +16,11 @@ import (
 // durability inconvenience — which is precisely why SQLite exists alongside
 // it (see the package doc). Nothing in cmd/ constructs this.
 type Memory struct {
-	mu        sync.Mutex
+	// RWMutex rather than Mutex: Get, Revoked and Len are read-only and are
+	// what a parallel test suite calls most, so letting them proceed
+	// together costs nothing and removes them from contending with each
+	// other.
+	mu        sync.RWMutex
 	records   map[string]*CertRecord // keyed by CertRecord.Serial.String()
 	crlNumber *big.Int
 }
@@ -29,29 +34,52 @@ func NewMemory() *Memory {
 func (m *Memory) Record(_ context.Context, rec CertRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Store an explicit copy rather than &rec. Taking the address of a
-	// by-value parameter is safe in Go, but it reads as though the caller's
-	// variable is being aliased and the next reader should not have to work
-	// out that it is not. Serial stays shared — a *big.Int nobody mutates
-	// after issuance.
-	stored := rec
-	m.records[rec.Serial.String()] = &stored
+	key := rec.Serial.String()
+	if _, exists := m.records[key]; exists {
+		return ErrDuplicateSerial
+	}
+	stored := copyRecord(rec)
+	m.records[key] = &stored
 	return nil
+}
+
+// copyRecord returns a deep copy: the struct is copied by value, and Serial
+// — the one pointer field — is copied rather than aliased.
+//
+// Sharing the *big.Int would make the store's contents mutable through a
+// reference the caller still holds. In today's call path nothing mutates a
+// serial after issuance, so this is defence against a future caller rather
+// than a live defect; it costs one allocation on a path that already
+// allocates, and it makes the type's promise ("this is what the store
+// holds") true rather than conditional on everyone's good behaviour.
+func copyRecord(rec CertRecord) CertRecord {
+	out := rec
+	if rec.Serial != nil {
+		out.Serial = new(big.Int).Set(rec.Serial)
+	}
+	out.NotAfter = NormalizeTime(rec.NotAfter)
+	if !rec.RevokedAt.IsZero() {
+		out.RevokedAt = NormalizeTime(rec.RevokedAt)
+	}
+	return out
 }
 
 // Get implements Store.
 func (m *Memory) Get(_ context.Context, serial *big.Int) (CertRecord, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	rec, ok := m.records[serial.String()]
 	if !ok {
 		return CertRecord{}, false, nil
 	}
-	return *rec, true, nil
+	return copyRecord(*rec), true, nil
 }
 
 // Revoke implements Store.
-func (m *Memory) Revoke(_ context.Context, serial *big.Int, reason int, at time.Time) error {
+func (m *Memory) Revoke(_ context.Context, serial *big.Int, reason RevocationReason, at time.Time) error {
+	if !reason.Valid() {
+		return fmt.Errorf("%w: %d", ErrInvalidRevocationReason, reason)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	rec, ok := m.records[serial.String()]
@@ -62,19 +90,19 @@ func (m *Memory) Revoke(_ context.Context, serial *big.Int, reason int, at time.
 		return nil
 	}
 	rec.Status = StatusRevoked
-	rec.RevokedAt = at
+	rec.RevokedAt = NormalizeTime(at)
 	rec.RevocationReason = reason
 	return nil
 }
 
 // Revoked implements Store.
 func (m *Memory) Revoked(_ context.Context) ([]CertRecord, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var out []CertRecord
 	for _, rec := range m.records {
 		if rec.Status == StatusRevoked {
-			out = append(out, *rec)
+			out = append(out, copyRecord(*rec))
 		}
 	}
 	return out, nil
@@ -109,8 +137,8 @@ func (m *Memory) Close() error { return nil }
 // test would make every implementation carry an operation the product does
 // not use — and would push SQLite into materializing rows nobody reads.
 func (m *Memory) Len() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return len(m.records)
 }
 

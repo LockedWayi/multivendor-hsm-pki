@@ -371,7 +371,7 @@ func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 
 	openStore := func() *store.SQLite {
 		t.Helper()
-		s, err := store.OpenSQLite(ctx, dbPath, nil)
+		s, err := store.OpenSQLite(ctx, dbPath, nil, nil)
 		if err != nil {
 			t.Fatalf("OpenSQLite: %v", err)
 		}

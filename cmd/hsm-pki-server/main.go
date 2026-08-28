@@ -89,7 +89,7 @@ func run(configPath string, logger *slog.Logger) error {
 	// purpose. Revocations recorded here are still revoked after a restart,
 	// which the in-memory registry this replaced could not promise
 	// (docs/phases/phase-3b-pki-hardening.md, sub-task 3b.3).
-	records, err := store.OpenSQLite(ctx, cfg.CA.StorePath, logger)
+	records, err := store.OpenSQLite(ctx, cfg.CA.StorePath, logger, cfg.CA.CRLFloor())
 	if err != nil {
 		return err
 	}
