@@ -177,8 +177,17 @@ func Load(path string) (*Config, error) {
 	if vendor.PINEnv == "" {
 		return nil, fmt.Errorf("config: pkcs11.%s.pin_env is empty", c.PKCS11.Adapter)
 	}
-	if _, ok := os.LookupEnv(vendor.PINEnv); !ok {
+	// Present-but-empty is checked, not just present. LookupEnv reports
+	// true for PIN="", so a deployment that exports the variable without a
+	// value would pass startup validation and then fail at ResolvePIN, at
+	// the point of an HSM login — which is both later and further from the
+	// cause than it needs to be (CLAUDE.md §3.4). The value is compared
+	// against "" and never read into anything that outlives this check.
+	if pin, ok := os.LookupEnv(vendor.PINEnv); !ok {
 		return nil, fmt.Errorf("config: environment variable %s (pkcs11.%s.pin_env) is not set",
+			vendor.PINEnv, c.PKCS11.Adapter)
+	} else if pin == "" {
+		return nil, fmt.Errorf("config: environment variable %s (pkcs11.%s.pin_env) is set but empty",
 			vendor.PINEnv, c.PKCS11.Adapter)
 	}
 
@@ -215,8 +224,17 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	if c.CA.CRLNumberFloor != "" {
-		if _, ok := new(big.Int).SetString(c.CA.CRLNumberFloor, 10); !ok {
+		floor, ok := new(big.Int).SetString(c.CA.CRLNumberFloor, 10)
+		if !ok {
 			return nil, fmt.Errorf("config: ca.crl_number_floor %q is not a decimal integer", c.CA.CRLNumberFloor)
+		}
+		// RFC 5280 §5.2.3 makes the CRL number a non-negative integer, and
+		// ca.BuildCRL rejects a non-positive one outright. Catching it here
+		// means a typed minus sign fails at startup rather than at the
+		// first GET /crl, which is when this field's whole purpose —
+		// surviving a rebuilt store — would be needed most.
+		if floor.Sign() < 0 {
+			return nil, fmt.Errorf("config: ca.crl_number_floor %q is negative; RFC 5280 §5.2.3 CRL numbers are non-negative", c.CA.CRLNumberFloor)
 		}
 	}
 	if c.CA.CRLValidityHours == 0 {
@@ -308,10 +326,18 @@ func (p *PKCS11Config) selectedVendor() (*VendorConfig, error) {
 // pkcs11.SessionOptions, defaulting either one that was left empty.
 func (s SessionConfig) parse() (pkcs11.SessionOptions, error) {
 	d := pkcs11.DefaultSessionOptions()
+	// time.ParseDuration accepts "-5m" and "0s" happily. A session budget
+	// that is zero or negative is not a shorter budget, it is a session
+	// that is already over its limit the instant it opens — so it is
+	// rejected here rather than handed to the adapter's janitor to
+	// interpret (CLAUDE.md §3.4).
 	if s.IdleTimeout != "" {
 		v, err := time.ParseDuration(s.IdleTimeout)
 		if err != nil {
 			return pkcs11.SessionOptions{}, fmt.Errorf("config: pkcs11.session.idle_timeout: %w", err)
+		}
+		if v <= 0 {
+			return pkcs11.SessionOptions{}, fmt.Errorf("config: pkcs11.session.idle_timeout must be positive, got %s", v)
 		}
 		d.IdleTimeout = v
 	}
@@ -319,6 +345,9 @@ func (s SessionConfig) parse() (pkcs11.SessionOptions, error) {
 		v, err := time.ParseDuration(s.MaxTTL)
 		if err != nil {
 			return pkcs11.SessionOptions{}, fmt.Errorf("config: pkcs11.session.max_ttl: %w", err)
+		}
+		if v <= 0 {
+			return pkcs11.SessionOptions{}, fmt.Errorf("config: pkcs11.session.max_ttl must be positive, got %s", v)
 		}
 		d.MaxTTL = v
 	}

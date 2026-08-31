@@ -416,3 +416,48 @@ func TestLoad_AcceptsBaseURLWithPathPrefix(t *testing.T) {
 		t.Fatalf("BaseURL = %q, want the configured value unchanged", cfg.CA.BaseURL)
 	}
 }
+
+// TestLoad_RejectsEmptyPINEnvVar covers the difference between "set" and
+// "usable". os.LookupEnv reports true for PIN="", so without this the
+// service passes startup validation and fails later, at an HSM login,
+// further from the cause than it needs to be.
+func TestLoad_RejectsEmptyPINEnvVar(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "")
+	if _, err := Load(writeConfig(t, validSoftHSM2Config)); err == nil {
+		t.Fatal("Load with an empty PIN environment variable succeeded, want an error")
+	}
+}
+
+// TestLoad_RejectsNegativeCRLNumberFloor pins RFC 5280 §5.2.3: a CRL number
+// is a non-negative integer. big.Int parses "-1" happily, and the value is
+// only consumed when a rebuilt store seeds its counter — the one moment
+// this field exists for, and the worst moment to discover a typo.
+func TestLoad_RejectsNegativeCRLNumberFloor(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	body := validSoftHSM2Config + "  crl_number_floor: \"-1\"\n"
+	if _, err := Load(writeConfig(t, body)); err == nil {
+		t.Fatal("Load with a negative ca.crl_number_floor succeeded, want an error")
+	}
+}
+
+// TestLoad_RejectsNonPositiveSessionBudgets covers durations that parse but
+// cannot describe a usable session: a budget of zero or less is not a
+// shorter budget, it is one that is already exceeded when the session opens.
+func TestLoad_RejectsNonPositiveSessionBudgets(t *testing.T) {
+	for _, tc := range []struct{ name, field, value string }{
+		{"negative idle_timeout", "idle_timeout", "-5m"},
+		{"zero idle_timeout", "idle_timeout", "0s"},
+		{"negative max_ttl", "max_ttl", "-1h"},
+		{"zero max_ttl", "max_ttl", "0s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+			body := strings.Replace(validSoftHSM2Config,
+				"    idle_timeout: \"5m\"\n    max_ttl: \"1h\"\n",
+				"    "+tc.field+": \""+tc.value+"\"\n", 1)
+			if _, err := Load(writeConfig(t, body)); err == nil {
+				t.Fatalf("Load with %s=%s succeeded, want an error", tc.field, tc.value)
+			}
+		})
+	}
+}
