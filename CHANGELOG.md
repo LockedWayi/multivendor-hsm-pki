@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Security
+- **Private keys were generated with `CKA_SENSITIVE` explicitly false, and on
+  ProtectToolkit 7.3.3 the private scalar was readable in plaintext by any
+  authenticated session.** `KeyPairRequest` carried a `Sensitive` field no
+  caller ever set, so the zero value went into every template — every CA key
+  this platform had ever created, root included. PKCS#11 permits a token to
+  reveal a non-sensitive private key through `C_GetAttributeValue`, and
+  `CKA_EXTRACTABLE=false` does not cover that: it governs `C_WrapKey`, a
+  different door.
+  Measured on both backends, which disagreed: SoftHSM2 2.6.1 refuses the read
+  (`CKR_ATTRIBUTE_SENSITIVE`) even though the attribute permits it, while
+  ProtectToolkit returned all 32 bytes. Both are conformant, so the platform's
+  central claim — private keys never leave the HSM — was false on the vendor
+  backend and true on the one CI runs, with a green suite throughout.
+  Fixed by removing the choice rather than correcting the call sites:
+  `GenerateKeyPair` now forces `CKA_SENSITIVE=true` and the field is gone.
+  `TestConformance/GenerateKeyPair_PrivateKeyIsSensitiveAndNonExtractable`
+  reads both attributes back off the token on every configured backend.
+  **Keys generated before this fix should be treated as exposed and rotated**
+  if they were ever created on a token whose module discloses them; for the
+  maintainer's ProtectServer development tokens, that is all of them.
+
 ### Added
 - **`docs/threat-model.md`** (Phase 3b sub-task 3b.5): assets ordered by what
   their loss costs, six trust boundaries, eight attacker classes, and for
