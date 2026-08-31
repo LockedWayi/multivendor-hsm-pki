@@ -890,6 +890,126 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
+	// WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip is the demo sub-task 3b.6
+	// asks for: wrap → destroy → unwrap → sign, proving the wrap-based
+	// backup design in docs/key-ceremony-and-recovery.md actually round-trips
+	// rather than merely being described. It is a primitive proof, not the
+	// ceremony itself — a real backup unwraps onto a *different* token under
+	// separate custody, but C_UnwrapKey does not care which token performs
+	// it, so exercising both halves on one token here proves the mechanism
+	// without needing a third token in the harness.
+	//
+	// Extractable: true on the EC key pair is the one deliberate exception
+	// to this platform's default (KeyPairRequest's doc comment, CLAUDE.md
+	// §3.7) — it is what makes this key backup-eligible at all.
+	// CKA_SENSITIVE stays forced true regardless (GenerateKeyPair never
+	// takes it as a parameter), so C_WrapKey is the only door this key can
+	// leave through — C_GetAttributeValue still refuses it, per the finding
+	// in docs/pkcs11-vendor-notes.md.
+	//
+	// This test is also where the two backends were found to diverge on
+	// whether a restore honors the restrictive attributes the operator
+	// asked for — see the comment on the final GetAttributes call below,
+	// and docs/pkcs11-vendor-notes.md.
+	t.Run("WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip", func(t *testing.T) {
+		s := b.openLoggedInSession(t, pk11.SessionOptions{})
+
+		wrappingKey, err := b.adapter.GenerateSecretKey(ctx, s, pk11.SecretKeyRequest{
+			KeyBits: 256, Label: b.label("backup-wrap-key"), Wrap: true, Unwrap: true, Sensitive: true,
+		})
+		if err != nil {
+			t.Fatalf("GenerateSecretKey (wrapping key): %v", err)
+		}
+
+		kp, err := b.adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
+			Curve: pk11.P256, Label: b.label("backup-target"), Sign: true, Verify: true, Extractable: true,
+		})
+		if err != nil {
+			t.Fatalf("GenerateKeyPair: %v", err)
+		}
+
+		// A real digest of real data — never an all-zero or otherwise
+		// degenerate stand-in (see the package doc comment on why that
+		// matters here specifically).
+		digest := sha256.Sum256([]byte("wrap-based backup round trip, " + b.name))
+		originalSig, err := b.adapter.Sign(ctx, s, kp.Private, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:])
+		if err != nil {
+			t.Fatalf("Sign (before backup): %v", err)
+		}
+		if err := b.adapter.Verify(ctx, s, kp.Public, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:], originalSig); err != nil {
+			t.Fatalf("Verify (before backup) = %v, want nil", err)
+		}
+
+		mech := pk11.Mechanism{Type: pk11.MechAESKeyWrap}
+		wrapped, err := b.adapter.Wrap(ctx, s, wrappingKey, kp.Private, mech)
+		if err != nil {
+			t.Fatalf("Wrap: %v", err)
+		}
+		if len(wrapped) == 0 {
+			t.Fatal("Wrap returned empty ciphertext")
+		}
+
+		// The original object is destroyed here — simulating the token it
+		// lived on being lost. Everything below this line works only from
+		// the wrapped backup, not from any surviving handle to the original.
+		if err := b.adapter.DestroyObject(ctx, s, kp.Private); err != nil {
+			t.Fatalf("DestroyObject (original private key): %v", err)
+		}
+
+		// No CKA_EC_PARAMS in this template, deliberately — SoftHSM2 2.6.1
+		// rejects an explicit value here with CKR_ATTRIBUTE_READ_ONLY,
+		// because it derives the curve from the wrapped object itself
+		// rather than accepting the caller's assertion of it. Both backends
+		// unwrap correctly without it (docs/pkcs11-vendor-notes.md).
+		restored, err := b.adapter.Unwrap(ctx, s, wrappingKey, mech, wrapped, []pk11.Attribute{
+			pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPrivateKey)),
+			pk11.NumericAttribute(pk11.AttrKeyType, uint64(pk11.KeyTypeEC)),
+			{Type: pk11.AttrLabel, Value: []byte(b.label("backup-target-restored"))},
+			{Type: pk11.AttrSign, Value: []byte{1}},
+			{Type: pk11.AttrExtractable, Value: []byte{0}},
+		})
+		if err != nil {
+			t.Fatalf("Unwrap: %v", err)
+		}
+		if restored == 0 {
+			t.Fatal("Unwrap returned a zero handle")
+		}
+
+		restoredSig, err := b.adapter.Sign(ctx, s, restored, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:])
+		if err != nil {
+			t.Fatalf("Sign (after restore): %v", err)
+		}
+		// Verified against the *original* public key, which was never
+		// touched: this is the proof that restore produced the same key,
+		// not merely a working one.
+		if err := b.adapter.Verify(ctx, s, kp.Public, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:], restoredSig); err != nil {
+			t.Fatalf("Verify (after restore) = %v, want nil — the restored key should produce signatures the original public key still accepts", err)
+		}
+
+		// Whether the restored object actually stays non-extractable is not
+		// something this platform's own code can guarantee here: Unwrap is
+		// a generic primitive — WrapUnwrap_AESKeyWrapRoundTrip above needs
+		// it to honor Extractable: true for a payload key — so there is no
+		// place to force this attribute the way GenerateKeyPair forces
+		// CKA_SENSITIVE (3b.7). Measured, not assumed (CLAUDE.md §3.10):
+		// SoftHSM2 2.6.1 honors the template's CKA_EXTRACTABLE=false;
+		// ProtectToolkit 7.3.3 does not — the restored key comes back
+		// extractable regardless of what the template asked for
+		// (docs/pkcs11-vendor-notes.md). The operational consequence is in
+		// docs/key-ceremony-and-recovery.md: a real restore reads this
+		// attribute back off the token before trusting it, on every vendor,
+		// rather than trusting the template it sent.
+		attrs, err := b.adapter.GetAttributes(ctx, s, restored, []pk11.AttributeType{pk11.AttrExtractable})
+		if err != nil {
+			t.Fatalf("GetAttributes (restored): %v", err)
+		}
+		gotExtractable := len(attrs[0].Value) > 0 && attrs[0].Value[0] != 0
+		t.Logf("restored private key CKA_EXTRACTABLE=%v (template asked for false)", gotExtractable)
+		if b.name == "SoftHSM2" && gotExtractable {
+			t.Fatal("SoftHSM2 restored private key is CKA_EXTRACTABLE=true, contradicting the unwrap template — this backend was previously observed honoring it")
+		}
+	})
+
 	// GenerateSecretKey_InvalidKeySizeRejected checks the adapter refuses a
 	// bad AES key length itself rather than passing bits/8 down and letting
 	// each vendor decide. 200 bits is the interesting case: it divides to a
