@@ -67,6 +67,34 @@ before opening a PR that touches `internal/pkcs11` or `internal/ca`: the two
 backends have disagreed before, and a green SoftHSM2-only run does not tell
 you they still agree.
 
+## Running the service locally
+
+Tests prove the packages; this proves the deployed shape. One command builds
+the image, initializes two SoftHSM2 tokens, runs the real offline root
+ceremony against them, takes the root's token out of the store the service
+can reach, and starts the containerized service read-only and non-root:
+
+```sh
+deploy/docker/run-local.sh          # --reset to discard the local state first
+```
+
+Worth knowing before you debug it:
+
+- **No PKCS#11 module is inside the image.** Every module is mounted at run
+  time, so `failed to load module` means the mount is wrong, not the build.
+  On Debian, mount the *target* of `/usr/lib/softhsm/libsofthsm2.so`, not the
+  symlink.
+- **Only two paths are writable**, `/var/lib/hsm-pki` (the CA store) and
+  `/var/lib/softhsm/tokens`. The container runs `--read-only`; if something
+  new needs to write, that is a design question, not a mount to add
+  reflexively.
+- **The local state lives in `.local/`**, which is excluded from git *and*
+  from the Docker build context — it holds token directories, which hold
+  private keys.
+
+`deploy/docker/README.md` has the mount contract and what has actually been
+run against each backend.
+
 ## Coverage floor
 The 70% floor is enforced by `ci/coverage.sh`, not a bare `go test -cover`:
 

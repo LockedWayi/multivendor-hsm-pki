@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **The service image** (`deploy/docker/Dockerfile`): multi-stage, cgo-enabled
+  build onto a digest-pinned `distroless/cc` base — 53.8 MB, no shell, no
+  package manager, non-root UID 65532, read-only-root-filesystem compatible.
+  `cmd/hsm-pki-keytool` is deliberately not in it: it is the only binary here
+  that can reach a root token.
+- **`hsm-pki-server -healthcheck`**, a self-probe against the process's own
+  `/healthz`, so the image can carry a `HEALTHCHECK` without gaining a shell
+  or an HTTP client. Liveness only — readiness touches the HSM, and a failed
+  health check causes a restart.
+- **`deploy/docker/run-local.sh`**: the whole platform on a machine with no
+  HSM and no vendor SDK. Initializes two SoftHSM2 tokens, runs the real root
+  ceremony, moves the root's token out of the store the service can reach,
+  and starts the service read-only and non-root.
+
+### Changed
+- **No PKCS#11 module ships in any image.** Every module, SoftHSM2 included,
+  is mounted at run time, so the backend CI exercises and the backend
+  production uses are delivered by one mechanism rather than two. The image
+  therefore contains no key store, and the same image runs against SoftHSM2
+  and ProtectToolkit with only `config.yaml` changing — verified both ways.
+  The cost, recorded rather than glossed: the image cannot start alone, which
+  is what `run-local.sh` above exists to answer.
+
 ### Fixed
 - **`FindObjects` silently truncated every search to 50 objects.** The
   pagination loop broke on the boolean `miekg/pkcs11` returns, which that
