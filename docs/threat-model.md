@@ -344,4 +344,6 @@ not a threat model:
 - The rules these conclusions are enforced by: [`../CLAUDE.md`](../CLAUDE.md) §3
 - The hierarchy, the store, and the distribution points as built:
   [`phases/phase-3b-pki-hardening.md`](phases/phase-3b-pki-hardening.md)
-- Ceremony and recovery procedures: `key-ceremony-and-recovery.md` (Phase 3b.6)
+- Ceremony and recovery procedures, including the A7 manifest mitigation
+  and the A6 wrap-based backup boundary:
+  [`key-ceremony-and-recovery.md`](key-ceremony-and-recovery.md)
