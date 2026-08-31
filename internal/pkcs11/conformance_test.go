@@ -649,6 +649,44 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
+	t.Run("GenerateKeyPair_PrivateKeyIsSensitiveAndNonExtractable", func(t *testing.T) {
+		// The property this whole platform rests on: a private key can be
+		// used through the token and cannot be taken out of it.
+		//
+		// The assertion deliberately asks the *token* rather than trusting
+		// the request that was sent. CKA_SENSITIVE used to be whatever
+		// KeyPairRequest's zero value happened to be, so every CA key was
+		// created explicitly non-sensitive — and no test noticed, because
+		// SoftHSM2 refused to disclose the scalar regardless. ProtectToolkit
+		// 7.3.3 did disclose it, all 32 bytes, to any authenticated session.
+		// A test that only checked what we asked for would have passed on
+		// both backends while one of them was handing out the key
+		// (CLAUDE.md §3.10, docs/pkcs11-vendor-notes.md).
+		s := b.openLoggedInSession(t, pk11.SessionOptions{})
+		kp, err := b.adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
+			Curve: pk11.P256, Label: b.label("protection"), Sign: true, Verify: true,
+		})
+		if err != nil {
+			t.Fatalf("GenerateKeyPair: %v", err)
+		}
+
+		attrs, err := b.adapter.GetAttributes(ctx, s, kp.Private,
+			[]pk11.AttributeType{pk11.AttrSensitive, pk11.AttrExtractable})
+		if err != nil {
+			t.Fatalf("GetAttributes: %v", err)
+		}
+		got := map[pk11.AttributeType]bool{}
+		for _, a := range attrs {
+			got[a.Type] = len(a.Value) > 0 && a.Value[0] != 0
+		}
+		if !got[pk11.AttrSensitive] {
+			t.Error("CKA_SENSITIVE is false: PKCS#11 permits the token to reveal this private key in plaintext via C_GetAttributeValue")
+		}
+		if got[pk11.AttrExtractable] {
+			t.Error("CKA_EXTRACTABLE is true: this private key can be wrapped off the token")
+		}
+	})
+
 	t.Run("EncryptDecrypt_AESRoundTrip", func(t *testing.T) {
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 		key, err := b.adapter.GenerateSecretKey(ctx, s, pk11.SecretKeyRequest{

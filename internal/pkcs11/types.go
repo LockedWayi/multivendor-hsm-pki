@@ -189,13 +189,21 @@ const (
 // default and this is the key type it needs; RSA support is deferred until
 // a phase actually requires it (CLAUDE.md: no speculative abstraction).
 type KeyPairRequest struct {
-	Curve       ECCurve
-	Label       string
-	ID          []byte // nil = adapter generates 8 random bytes
-	Sign        bool
-	Verify      bool
+	Curve  ECCurve
+	Label  string
+	ID     []byte // nil = adapter generates 8 random bytes
+	Sign   bool
+	Verify bool
+	// Extractable permits the private key to leave the token wrapped under
+	// another key (C_WrapKey). Default false, and it should stay false for
+	// every key this platform generates today: the wrap-based backup design
+	// that would need it is documented in
+	// docs/key-ceremony-and-recovery.md and not built.
+	//
+	// There is deliberately no Sensitive field. CKA_SENSITIVE is always
+	// set true by GenerateKeyPair — see the comment there for what happened
+	// when it was a caller's choice.
 	Extractable bool
-	Sensitive   bool
 }
 
 // KeyPairHandle holds the two object handles produced by GenerateKeyPair.

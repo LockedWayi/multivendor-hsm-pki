@@ -173,9 +173,21 @@ revocations, and read or corrupt the store.
   extinction event: the response is to revoke the intermediate through the
   root's CRL and re-run the ceremony, not to rebuild every trust store.
 - **The intermediate's private key itself.** Keys are generated on the token
-  with `CKA_EXTRACTABLE=false`, so the attacker can *use* the key while they
-  hold the process, but cannot walk away with it. Eviction ends the
-  capability; it does not leave a copy behind.
+  with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, so the attacker can
+  *use* the key while they hold the process, but cannot walk away with it.
+  Eviction ends the capability; it does not leave a copy behind.
+
+  Both attributes are load-bearing and neither implies the other. Writing
+  this document is what prompted checking them, and the check found that
+  `CKA_SENSITIVE` had been false on every key this platform ever generated:
+  on ProtectToolkit 7.3.3 the private scalar was readable by any
+  authenticated session, which would have made this entire paragraph false
+  — an attacker at A3 could have taken the key and kept using it after
+  eviction. SoftHSM2 refused to disclose it, so CI was green throughout.
+  Fixed and now asserted against both backends by reading the attributes
+  back off the token
+  ([`pkcs11-vendor-notes.md`](pkcs11-vendor-notes.md), "A non-sensitive
+  private key really is readable here").
 - **The ability to issue a CA certificate.** The intermediate carries
   `pathlen:0`, enforced by every compliant verifier, not by this code. An
   attacker who issues a sub-CA produces a certificate that fails path

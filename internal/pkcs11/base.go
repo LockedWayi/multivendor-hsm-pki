@@ -412,7 +412,27 @@ func (a *pkcs11Adapter) GenerateKeyPair(ctx context.Context, s *Session, req Key
 		p11.NewAttribute(p11.CKA_LABEL, req.Label),
 		p11.NewAttribute(p11.CKA_ID, id),
 		p11.NewAttribute(p11.CKA_SIGN, req.Sign),
-		p11.NewAttribute(p11.CKA_SENSITIVE, req.Sensitive),
+		// CKA_SENSITIVE is forced true and is not a caller's choice.
+		//
+		// PKCS#11 says a private key with CKA_SENSITIVE false "may be
+		// revealed in plaintext" through C_GetAttributeValue, and it used to
+		// be whatever the request's zero value happened to be — which for a
+		// struct literal that does not mention it is false. Every CA key
+		// this platform generated, root included, was therefore explicitly
+		// marked non-sensitive.
+		//
+		// Measured on both backends, 2026-08-31, because the two disagree
+		// and only one of them made the defect visible: SoftHSM2 refused to
+		// disclose the scalar anyway (CKR_ATTRIBUTE_SENSITIVE), while
+		// ProtectToolkit 7.3.3 returned all 32 bytes of the private key to
+		// any authenticated session. The CI backend hid it; the real vendor
+		// did not. See docs/pkcs11-vendor-notes.md.
+		//
+		// So this is not a default a caller may override: for the keys this
+		// platform creates there is no legitimate use for a readable
+		// private key, and leaving it as a field meant every future caller
+		// had to remember something they could silently get wrong.
+		p11.NewAttribute(p11.CKA_SENSITIVE, true),
 		p11.NewAttribute(p11.CKA_EXTRACTABLE, req.Extractable),
 	}
 
