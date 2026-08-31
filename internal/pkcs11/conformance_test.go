@@ -36,6 +36,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -149,7 +150,7 @@ func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
 		t.Fatalf("Workspaces: %v", err)
 	}
 
-	return &conformanceBackend{
+	b := &conformanceBackend{
 		name:     "SoftHSM2",
 		adapter:  adapter,
 		ws:       ws,
@@ -157,6 +158,65 @@ func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
 		wrongPIN: []byte(softhsm2WrongPIN),
 		runID:    runID,
 	}
+	b.registerCleanup(t)
+	return b
+}
+
+// registerCleanup destroys every object this run created, once the suite
+// has finished with the backend.
+//
+// The conformance suite is the heaviest key producer in the repository, and
+// a vendor's tokens persist between runs: without this it deposited dozens
+// of key pairs per run on the maintainer's token, permanently. Hardware
+// token memory is finite, so a suite that cannot clean up cannot be pointed
+// at an nShield or a Luna more than a handful of times
+// (docs/test-matrix.md).
+//
+// Only this run's objects are touched — matched by the runID prefix every
+// label from b.label carries. Litter from earlier runs is left alone,
+// because a test suite deleting objects it did not create is a destructive
+// operation aimed at somebody else's token.
+func (b *conformanceBackend) registerCleanup(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx := context.Background()
+		// Log out first: PKCS#11 authenticates a token application-wide, so
+		// a session opened while another token is authenticated cannot see
+		// this one's private objects, and cleanup would silently remove
+		// only the public half of every key pair.
+		_ = b.adapter.LogoutToken(ctx)
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+			t.Logf("conformance cleanup: login: %v", err)
+			return
+		}
+		defer func() { _ = b.adapter.LogoutToken(ctx) }()
+
+		s, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
+		if err != nil {
+			t.Logf("conformance cleanup: open session: %v", err)
+			return
+		}
+		defer b.adapter.CloseSession(ctx, s)
+
+		objs, err := b.adapter.FindObjects(ctx, s, nil)
+		if err != nil {
+			t.Logf("conformance cleanup: find objects: %v", err)
+			return
+		}
+		prefix := "conf-" + b.runID + "-"
+		for _, o := range objs {
+			attrs, err := b.adapter.GetAttributes(ctx, s, o, []pk11.AttributeType{pk11.AttrLabel})
+			if err != nil || len(attrs) == 0 {
+				continue
+			}
+			if !strings.HasPrefix(string(attrs[0].Value), prefix) {
+				continue
+			}
+			if err := b.adapter.DestroyObject(ctx, s, o); err != nil {
+				t.Logf("conformance cleanup: destroy %s: %v", attrs[0].Value, err)
+			}
+		}
+	})
 }
 
 // ─── ProtectServer backend setup ─────────────────────────────────────────
@@ -190,7 +250,7 @@ func setupProtectServerBackend(t *testing.T) *conformanceBackend {
 		t.Fatalf("Workspaces: %v", err)
 	}
 
-	return &conformanceBackend{
+	b := &conformanceBackend{
 		name:     "ProtectServer",
 		adapter:  adapter,
 		ws:       ws,
@@ -198,6 +258,8 @@ func setupProtectServerBackend(t *testing.T) *conformanceBackend {
 		wrongPIN: []byte(protectServerWrongPIN),
 		runID:    fmt.Sprintf("%d", time.Now().UnixNano()),
 	}
+	b.registerCleanup(t)
+	return b
 }
 
 func findWorkspace(adapter pk11.VendorAdapter, label string) (pk11.Workspace, error) {
@@ -684,6 +746,76 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 		if got[pk11.AttrExtractable] {
 			t.Error("CKA_EXTRACTABLE is true: this private key can be wrapped off the token")
+		}
+	})
+
+	t.Run("FindObjects_ReturnsMoreThanOneBatch", func(t *testing.T) {
+		// C_FindObjects is paginated, and the pagination used to stop after
+		// the first batch of 50 — so every search silently returned at most
+		// 50 objects, with no error and a perfectly well-formed result.
+		// Invisible on a token holding fewer than 50 objects, which was
+		// every test token this repository had.
+		//
+		// 60 AES keys under one label: cheap to generate, and more than one
+		// batch by construction. The assertion is a count, because the
+		// defect was a count.
+		const want = 60
+		s := b.openLoggedInSession(t, pk11.SessionOptions{})
+		label := b.label("batching")
+		for i := 0; i < want; i++ {
+			if _, err := b.adapter.GenerateSecretKey(ctx, s, pk11.SecretKeyRequest{
+				KeyBits: 128, Label: label, Encrypt: true, Decrypt: true,
+			}); err != nil {
+				t.Fatalf("GenerateSecretKey %d: %v", i, err)
+			}
+		}
+
+		found, err := b.adapter.FindObjects(ctx, s, []pk11.Attribute{
+			{Type: pk11.AttrLabel, Value: []byte(label)},
+		})
+		if err != nil {
+			t.Fatalf("FindObjects: %v", err)
+		}
+		if len(found) != want {
+			t.Fatalf("FindObjects returned %d objects, want %d — the search is truncating", len(found), want)
+		}
+
+		for _, o := range found {
+			if err := b.adapter.DestroyObject(ctx, s, o); err != nil {
+				t.Fatalf("DestroyObject: %v", err)
+			}
+		}
+	})
+
+	t.Run("DestroyObject_RemovesTheObject", func(t *testing.T) {
+		// The operation the key lifecycle needs to retire a version
+		// (CLAUDE.md §3.7) and the one every test suite needs to not
+		// accumulate keys on a token that persists between runs.
+		s := b.openLoggedInSession(t, pk11.SessionOptions{})
+		label := b.label("destroy-me")
+		kp, err := b.adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
+			Curve: pk11.P256, Label: label, Sign: true, Verify: true,
+		})
+		if err != nil {
+			t.Fatalf("GenerateKeyPair: %v", err)
+		}
+
+		for _, h := range []pk11.ObjectHandle{kp.Private, kp.Public} {
+			if err := b.adapter.DestroyObject(ctx, s, h); err != nil {
+				t.Fatalf("DestroyObject: %v", err)
+			}
+		}
+
+		// Asked of the token, not inferred from the absence of an error:
+		// the point of the operation is that the object is gone.
+		found, err := b.adapter.FindObjects(ctx, s, []pk11.Attribute{
+			{Type: pk11.AttrLabel, Value: []byte(label)},
+		})
+		if err != nil {
+			t.Fatalf("FindObjects: %v", err)
+		}
+		if len(found) != 0 {
+			t.Fatalf("%d objects still carry label %q after DestroyObject", len(found), label)
 		}
 	})
 

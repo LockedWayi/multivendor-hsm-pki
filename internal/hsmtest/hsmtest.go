@@ -6,7 +6,7 @@
 // Go cannot share test helpers across packages, so before this existed
 // internal/ca and internal/api each carried their own copy of "provision a
 // SoftHSM2 token, build an adapter, find the workspace". Two copies is a
-// duplication problem; five vendors across two copies is a correctness
+// duplication problem; four vendors across two copies is a correctness
 // problem, because the copies drift and a vendor added to one is silently
 // missing from the other. The registry below is the single place a backend
 // is declared, so adding nShield or Luna is one entry plus an adapter —
@@ -38,6 +38,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -71,7 +72,9 @@ type Backend struct {
 	ModulePath  string
 	AdapterName string
 
-	closeOnce sync.Once
+	closeOnce  sync.Once
+	releaseMu  sync.Mutex
+	isReleased bool
 
 	// RunID is folded into every label a run creates by Label.
 	//
@@ -82,6 +85,124 @@ type Backend struct {
 	// failure. SoftHSM2 gets fresh tokens each run and would not need it;
 	// both paths use it anyway so they cannot drift.
 	RunID string
+}
+
+// labelPrefix is what every label from Label starts with, and what cleanup
+// matches on.
+func (b *Backend) labelPrefix() string { return "t-" + b.RunID + "-" }
+
+// Cleanup destroys every object this run created on both tokens.
+//
+// Registered automatically by the harness, so a test that creates keys does
+// not have to remember. It matters because a vendor's tokens persist: before
+// this existed, the maintainer's ProtectServer store had accumulated
+// thousands of objects from previous runs, and running the suite on real
+// nShield or Luna hardware — where token memory is finite and small — would
+// have exhausted it.
+//
+// It destroys only objects whose label carries this run's id. Litter from
+// earlier runs is deliberately left alone: a cleanup that deleted anything
+// it did not create would be a destructive operation pointed at a token it
+// does not own, which is not something a test suite should ever do.
+//
+// Failures are reported, not fatal. The test's actual assertions have
+// already run by this point, and turning a cleanup problem into a test
+// failure would report the wrong thing.
+func (b *Backend) Cleanup(t *testing.T) {
+	t.Helper()
+
+	adapter := b.Adapter
+	if b.released() {
+		// A test that handed the module to a CLI released the adapter. The
+		// objects it created are still on the token, so take a fresh
+		// connection rather than skipping cleanup — this is the path that
+		// matters most on hardware, where the litter is permanent.
+		fresh, err := newAdapterByName(b.AdapterName, b.ModulePath)
+		if err != nil {
+			t.Logf("hsmtest: reopening %s for cleanup: %v", b.Name, err)
+			return
+		}
+		defer fresh.Close()
+		adapter = fresh
+	}
+
+	for _, ws := range []pk11.Workspace{b.Primary, b.Secondary} {
+		if err := b.destroyRunObjects(adapter, ws); err != nil {
+			t.Logf("hsmtest: cleaning up %s objects on token %q: %v", b.Name, ws.Label, err)
+		}
+	}
+}
+
+func newAdapterByName(name, modulePath string) (pk11.VendorAdapter, error) {
+	switch name {
+	case "protectserver":
+		return pk11.NewProtectServerAdapter(modulePath)
+	default:
+		return pk11.NewSoftHSM2Adapter(modulePath)
+	}
+}
+
+// destroyRunObjects enumerates the token and destroys what this run made.
+//
+// PKCS#11 searches match an attribute exactly, and there is no prefix
+// search, so this lists every object and filters in Go. That is the only
+// way to find "everything this run created" without keeping a handle
+// registry that a failed test would never get to use.
+func (b *Backend) destroyRunObjects(adapter pk11.VendorAdapter, ws pk11.Workspace) error {
+	ctx := context.Background()
+
+	// Authenticate this specific token, and log out of whatever else was
+	// authenticated first.
+	//
+	// PKCS#11 authenticates a token for the whole application, not per
+	// session, so a session opened on token B while the application is
+	// logged into token A cannot see B's *private* objects. The first
+	// version of this trusted TokenLoggedIn() and skipped the login when
+	// anything was authenticated — which meant cleanup ran, reported no
+	// error, and silently removed only the public half of each key pair.
+	// It was found by counting objects on the token afterwards rather than
+	// by any failure, which is the only way a silent partial success ever
+	// is found.
+	pin := b.PrimaryPIN
+	if ws.Serial == b.Secondary.Serial {
+		pin = b.SecondaryPIN
+	}
+	_ = adapter.LogoutToken(ctx)
+	if err := adapter.LoginToken(ctx, ws, []byte(pin), pk11.RoleUser); err != nil {
+		return fmt.Errorf("login: %w", err)
+	}
+	defer func() { _ = adapter.LogoutToken(ctx) }()
+
+	s, err := adapter.OpenSession(ctx, ws, pk11.SessionOptions{})
+	if err != nil {
+		return fmt.Errorf("open session: %w", err)
+	}
+	defer adapter.CloseSession(ctx, s)
+
+	objs, err := adapter.FindObjects(ctx, s, nil)
+	if err != nil {
+		return fmt.Errorf("find objects: %w", err)
+	}
+	prefix := b.labelPrefix()
+	for _, o := range objs {
+		attrs, err := adapter.GetAttributes(ctx, s, o, []pk11.AttributeType{pk11.AttrLabel})
+		if err != nil || len(attrs) == 0 {
+			continue
+		}
+		if !strings.HasPrefix(string(attrs[0].Value), prefix) {
+			continue
+		}
+		if err := adapter.DestroyObject(ctx, s, o); err != nil {
+			return fmt.Errorf("destroy %s: %w", attrs[0].Value, err)
+		}
+	}
+	return nil
+}
+
+func (b *Backend) released() bool {
+	b.releaseMu.Lock()
+	defer b.releaseMu.Unlock()
+	return b.isReleased
 }
 
 // Release closes the harness's adapter early.
@@ -98,7 +219,12 @@ type Backend struct {
 // Safe to call more than once, and safe not to call at all: the backend's
 // own cleanup closes the adapter through the same guard.
 func (b *Backend) Release() {
-	b.closeOnce.Do(func() { b.Adapter.Close() })
+	b.closeOnce.Do(func() {
+		b.releaseMu.Lock()
+		b.isReleased = true
+		b.releaseMu.Unlock()
+		b.Adapter.Close()
+	})
 }
 
 // Label returns a run-unique object label ending in suffix.
@@ -237,7 +363,12 @@ func setupSoftHSM2(t *testing.T) *Backend {
 		AdapterName:  "softhsm2",
 		RunID:        runID(),
 	}
+	// LIFO: Release is registered first so it runs last, after Cleanup has
+	// had a live adapter to work with. SoftHSM2's tokens are thrown away
+	// with the temp directory anyway, but keeping both backends on the same
+	// path is what stops them drifting.
 	t.Cleanup(b.Release)
+	t.Cleanup(func() { b.Cleanup(t) })
 	return b
 }
 
@@ -281,6 +412,7 @@ func setupProtectServer(t *testing.T) *Backend {
 		RunID:        runID(),
 	}
 	t.Cleanup(b.Release)
+	t.Cleanup(func() { b.Cleanup(t) })
 	return b
 }
 

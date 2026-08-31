@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- **`FindObjects` silently truncated every search to 50 objects.** The
+  pagination loop broke on the boolean `miekg/pkcs11` returns, which that
+  library documents as "deprecated and should be ignored" and computes as
+  `ulCount > max` — a condition `C_FindObjects` can never satisfy. Every
+  search therefore returned at most one batch, with no error and a
+  well-formed short list, which is invisible on a token holding fewer than
+  50 objects. It now loops until a batch comes back empty.
+  Consequences beyond the immediate: any future key inventory, rotation or
+  audit that enumerates a populated token would have seen a truncated view.
+
+### Added
+- **`VendorAdapter.DestroyObject`** and per-run object cleanup in the test
+  harnesses, pulled forward from Phase 4.8. A full both-backend run left
+  +215 objects on a persistent token before this and +23 after. It takes an
+  object handle rather than a label, because `CKA_LABEL` cannot identify an
+  object (CLAUDE.md §3.8).
+
 ### Security
 - **Private keys were generated with `CKA_SENSITIVE` explicitly false, and on
   ProtectToolkit 7.3.3 the private scalar was readable in plaintext by any
