@@ -69,5 +69,17 @@ USER 65532:65532
 # The only port served. server.listen_addr must agree with it.
 EXPOSE 8080
 
+# The binary probes itself. A HEALTHCHECK normally shells out to curl or
+# wget, and this image has neither, nor a shell to run them from -- which is
+# the property worth keeping, so the check adapts to the image rather than
+# the image to the check. Exec form: there is no shell to parse a string.
+#
+# It probes /healthz (liveness), never /readyz. Readiness here touches the
+# HSM, and a container marked unhealthy gets restarted -- so wiring
+# readiness to this would turn a transient HSM failure into a restart loop
+# against a dependency that restarting cannot fix.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD ["/usr/local/bin/hsm-pki-server", "-healthcheck", "-config", "/etc/hsm-pki/config.yaml"]
+
 ENTRYPOINT ["/usr/local/bin/hsm-pki-server"]
 CMD ["-config", "/etc/hsm-pki/config.yaml"]
