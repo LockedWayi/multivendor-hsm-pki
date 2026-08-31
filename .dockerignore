@@ -1,0 +1,23 @@
+# The build context is the repository root, and most of it has no business
+# being sent to the daemon or landing in a layer.
+
+# Version control: excluded deliberately, which is why the build passes
+# -buildvcs=false. Sending .git would also send every historical blob.
+.git
+.github
+
+# Local secrets and state. config.yaml is gitignored and may hold a real
+# workspace label; a token store or a database copied into a build context is
+# exactly the kind of accident CLAUDE.md 3.2 exists to prevent.
+config.yaml
+*.db
+*.pem
+*.crl
+tokens/
+softhsm2.conf
+
+# Nothing here is needed to compile the service.
+docs/
+deploy/terraform/
+ci/
+*.md
