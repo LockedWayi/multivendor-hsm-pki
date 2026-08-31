@@ -394,11 +394,7 @@ func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 
 	// The chain the response carries must verify to the root the ceremony
 	// produced, with no certificate fetched from anywhere else.
-	rootBlock, _ := pem.Decode(rootArtifacts.CertPEM)
-	if rootBlock == nil {
-		t.Fatal("root artifact is not PEM")
-	}
-	root, err := x509.ParseCertificate(rootBlock.Bytes)
+	root, err := x509.ParseCertificate(rootArtifacts.CertDER)
 	if err != nil {
 		t.Fatalf("parsing root: %v", err)
 	}
@@ -430,7 +426,7 @@ func TestRootArtifactEndpoints(t *testing.T) {
 	srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
 	defer srv.Close()
 
-	t.Run("GET /root.crt serves the ceremony root", func(t *testing.T) {
+	t.Run("GET /root.crt serves the ceremony root as DER", func(t *testing.T) {
 		resp, err := http.Get(srv.URL + "/root.crt")
 		if err != nil {
 			t.Fatalf("GET /root.crt: %v", err)
@@ -440,20 +436,22 @@ func TestRootArtifactEndpoints(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
 		}
-		block, _ := pem.Decode(body)
-		if block == nil || block.Type != "CERTIFICATE" {
-			t.Fatalf("response is not a CERTIFICATE PEM block")
+		if ct := resp.Header.Get("Content-Type"); ct != api.ContentTypeCert {
+			t.Fatalf("Content-Type = %q, want %q (RFC 2585 §3)", ct, api.ContentTypeCert)
 		}
-		root, err := x509.ParseCertificate(block.Bytes)
+		// Parsed as DER directly, with no PEM decode: this is exactly what
+		// a client following the AIA URL does, and it is the assertion that
+		// would have caught the PEM body this used to serve.
+		root, err := x509.ParseCertificate(body)
 		if err != nil {
-			t.Fatalf("parsing served root: %v", err)
+			t.Fatalf("parsing served root as DER: %v", err)
 		}
 		if err := root.CheckSignatureFrom(root); err != nil {
 			t.Fatalf("served root is not self-signed, so it is not a trust anchor: %v", err)
 		}
 	})
 
-	t.Run("GET /root.crl serves the ceremony root CRL", func(t *testing.T) {
+	t.Run("GET /root.crl serves the ceremony root CRL as DER", func(t *testing.T) {
 		resp, err := http.Get(srv.URL + "/root.crl")
 		if err != nil {
 			t.Fatalf("GET /root.crl: %v", err)
@@ -463,13 +461,12 @@ func TestRootArtifactEndpoints(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
 		}
-		block, _ := pem.Decode(body)
-		if block == nil || block.Type != "X509 CRL" {
-			t.Fatal("response is not an X509 CRL PEM block")
+		if ct := resp.Header.Get("Content-Type"); ct != api.ContentTypeCRL {
+			t.Fatalf("Content-Type = %q, want %q (RFC 2585 §3)", ct, api.ContentTypeCRL)
 		}
-		crl, err := x509.ParseRevocationList(block.Bytes)
+		crl, err := x509.ParseRevocationList(body)
 		if err != nil {
-			t.Fatalf("parsing served root CRL: %v", err)
+			t.Fatalf("parsing served root CRL as DER: %v", err)
 		}
 		// The root CRL covers the intermediate and nothing else, so a fresh
 		// ceremony's CRL is empty. It must never carry the leaf revocations
@@ -518,13 +515,12 @@ func TestIntermediateCertEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	block, _ := pem.Decode(body)
-	if block == nil || block.Type != "CERTIFICATE" {
-		t.Fatal("response is not a CERTIFICATE PEM block")
+	if ct := resp.Header.Get("Content-Type"); ct != api.ContentTypeCert {
+		t.Fatalf("Content-Type = %q, want %q (RFC 2585 §3)", ct, api.ContentTypeCert)
 	}
-	served, err := x509.ParseCertificate(block.Bytes)
+	served, err := x509.ParseCertificate(body)
 	if err != nil {
-		t.Fatalf("parsing served intermediate: %v", err)
+		t.Fatalf("parsing served intermediate as DER: %v", err)
 	}
 	if !served.Equal(c.Certificate()) {
 		t.Fatalf("served certificate is %q, want this service's own intermediate %q",
@@ -665,13 +661,12 @@ func getCertificate(t *testing.T, url string) *x509.Certificate {
 		t.Fatalf("GET %s: status = %d, want 200", url, resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	block, _ := pem.Decode(body)
-	if block == nil || block.Type != "CERTIFICATE" {
-		t.Fatalf("GET %s did not return a CERTIFICATE PEM block", url)
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
+	// DER, not PEM: RFC 2585 §3 is what a client following an AIA URL
+	// implements, and parsing it this way here is what keeps that promise
+	// under test.
+	cert, err := x509.ParseCertificate(body)
 	if err != nil {
-		t.Fatalf("parsing the certificate served at %s: %v", url, err)
+		t.Fatalf("parsing the certificate served at %s as DER: %v", url, err)
 	}
 	return cert
 }

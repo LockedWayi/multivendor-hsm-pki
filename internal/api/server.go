@@ -96,7 +96,29 @@ func LeafDistributionFor(baseURL string) ca.LeafDistribution {
 	}
 }
 
-// RootArtifacts are the ceremony-produced, public files the service
+// MIME types and encodings for the artifacts served at the URLs embedded in
+// certificates.
+//
+// These are DER, not PEM, and that is a correctness requirement rather than
+// a preference. RFC 5280 §4.2.1.13 and §4.2.2.1 point a relying party at
+// these URLs, and RFC 2585 §3 defines what it will find there:
+// application/pkix-cert and application/pkix-crl, each a single DER object.
+// A client following a CRL distribution point does not sniff the encoding —
+// measured against OpenSSL 3.x, a PEM body at a CDP fails outright with
+// "No supported data to decode. Input type: DER", which a verifier is most
+// likely to treat as "revocation unavailable" and carry on.
+//
+// PEM remains the on-disk format for the ceremony's output files, because
+// that is what an operator copies between hosts and what the ceremony
+// writes. The conversion happens once, at startup (cmd/hsm-pki-server).
+const (
+	// ContentTypeCert is RFC 2585 §3's type for a single DER certificate.
+	ContentTypeCert = "application/pkix-cert"
+	// ContentTypeCRL is RFC 2585 §3's type for a single DER CRL.
+	ContentTypeCRL = "application/pkix-crl"
+)
+
+// RootArtifacts are the ceremony-produced, public artifacts the service
 // republishes so that the CDP and AIA URLs baked into the intermediate
 // certificate at ceremony time actually resolve.
 //
@@ -107,14 +129,17 @@ func LeafDistributionFor(baseURL string) ca.LeafDistribution {
 // root CRL reachable, nothing can check whether the intermediate has been
 // revoked, which is the one revocation signal the offline root exists to
 // publish.
+//
+// Both are DER, the encoding a relying party following those URLs expects —
+// see the content-type constants above.
 type RootArtifacts struct {
-	// CertPEM is the root certificate, served at the intermediate's AIA
+	// CertDER is the root certificate, served at the intermediate's AIA
 	// CA-Issuers URL.
-	CertPEM []byte
-	// CRLPEM is the root's CRL, served at the intermediate's CRL
+	CertDER []byte
+	// CRLDER is the root's CRL, served at the intermediate's CRL
 	// distribution point. It covers exactly one certificate: the
 	// intermediate.
-	CRLPEM []byte
+	CRLDER []byte
 }
 
 // NewServer builds the HTTP handler for the CA service. issuer is the
@@ -133,11 +158,11 @@ func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspa
 		crlValidity: crlValidity,
 		root:        root,
 	}
-	// Encoded once here rather than per request: the intermediate
-	// certificate is fixed for the process's lifetime — it was signed at
-	// ceremony time and this service cannot re-issue it.
+	// The certificate's own DER, served as-is at the AIA CA-Issuers URL.
+	// No encoding step: x509.Certificate.Raw is already exactly the octets
+	// RFC 2585 says belong at that URL.
 	if issuer != nil && issuer.Certificate() != nil {
-		s.intermediatePEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw})
+		s.intermediateDER = issuer.Certificate().Raw
 	}
 
 	mux := http.NewServeMux()
@@ -167,9 +192,9 @@ type server struct {
 	store       store.Store
 	crlValidity time.Duration
 	root        RootArtifacts
-	// intermediatePEM is this service's own CA certificate, pre-encoded for
+	// intermediateDER is this service's own CA certificate, served at
 	// GET /intermediate.crt.
-	intermediatePEM []byte
+	intermediateDER []byte
 
 	crlMu            sync.Mutex
 	cachedCRL        []byte
@@ -186,13 +211,13 @@ type server struct {
 // why no OCSP pointer is set anywhere in this platform until the responder
 // exists (Phase 5b).
 func (s *server) handleIntermediateCert(w http.ResponseWriter, r *http.Request) {
-	s.servePEMArtifact(w, r, s.intermediatePEM, "intermediate certificate")
+	s.serveDERArtifact(w, r, s.intermediateDER, ContentTypeCert, "intermediate certificate")
 }
 
 // handleRootCert serves the ceremony-produced root certificate at the AIA
 // CA-Issuers URL the intermediate points at.
 func (s *server) handleRootCert(w http.ResponseWriter, r *http.Request) {
-	s.servePEMArtifact(w, r, s.root.CertPEM, "root certificate")
+	s.serveDERArtifact(w, r, s.root.CertDER, ContentTypeCert, "root certificate")
 }
 
 // handleRootCRL serves the ceremony-produced root CRL at the distribution
@@ -204,36 +229,35 @@ func (s *server) handleRootCert(w http.ResponseWriter, r *http.Request) {
 // refreshing it means re-running the ceremony (docs/phases/
 // phase-3b-pki-hardening.md, "How the root CRL is produced").
 func (s *server) handleRootCRL(w http.ResponseWriter, r *http.Request) {
-	s.servePEMArtifact(w, r, s.root.CRLPEM, "root CRL")
+	s.serveDERArtifact(w, r, s.root.CRLDER, ContentTypeCRL, "root CRL")
 }
 
-// servePEMArtifact writes one static PEM artifact, or fails honestly if it
-// is absent.
+// serveDERArtifact writes one static DER artifact under contentType, or
+// fails honestly if it is absent.
 //
 // The absent case matters more than it looks. cmd/hsm-pki-server validates
 // the root artifacts at startup and always has an intermediate certificate
 // by then, but NewServer takes both by value and cannot reject a
 // zero-valued RootArtifacts or a nil issuer, so an in-process caller can
 // construct a server without them. Writing an empty 200 there would be the
-// worst
-// outcome available: a relying party fetching the CRL distribution point
-// would receive a successful response containing a malformed CRL, and the
-// most likely way it handles that is to treat revocation as unavailable and
-// carry on. A 503 says the artifact is missing, which is the truth
+// worst outcome available: a relying party fetching the CRL distribution
+// point would receive a successful response containing a malformed CRL, and
+// the most likely way it handles that is to treat revocation as unavailable
+// and carry on. A 503 says the artifact is missing, which is the truth
 // (CLAUDE.md §3.4).
-func (s *server) servePEMArtifact(w http.ResponseWriter, r *http.Request, pemBytes []byte, what string) {
-	if len(pemBytes) == 0 {
-		loggerFromContext(r.Context()).Error("PEM artifact is not available", "artifact", what)
+func (s *server) serveDERArtifact(w http.ResponseWriter, r *http.Request, der []byte, contentType, what string) {
+	if len(der) == 0 {
+		loggerFromContext(r.Context()).Error("artifact is not available", "artifact", what)
 		s.writeError(w, http.StatusServiceUnavailable, what+" is not available on this server")
 		return
 	}
-	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Type", contentType)
 	// These change only when a new ceremony runs, which is a rare,
 	// deliberate operator act. An hour is short enough that a re-ceremony
 	// propagates on a human timescale and long enough that a CDN is not
 	// re-fetching a static file on every request.
 	w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
-	_, _ = w.Write(pemBytes)
+	_, _ = w.Write(der)
 }
 
 type errorResponse struct {
@@ -500,6 +524,18 @@ func (s *server) currentCRL(ctx context.Context) ([]byte, error) {
 	// that is technically not valid yet.
 	thisUpdate := now.Add(-crlClockSkewAllowance)
 	nextUpdate := now.Add(s.crlValidity)
+	// A CRL may not promise to be authoritative past the point its issuer
+	// stops being able to sign anything at all. Clamping rather than
+	// refusing, which is the opposite of what Issue does with the same
+	// overrun, and deliberately so: a shortened CRL is completely valid and
+	// simply asks the verifier to come back sooner, whereas a shortened
+	// *certificate* would hand its holder a lifetime they did not ask for.
+	// Refusing here would instead remove the CA's ability to publish
+	// revocations during the very window in which its expiry makes
+	// re-issuance most likely.
+	if issuerNotAfter := s.ca.Certificate().NotAfter; nextUpdate.After(issuerNotAfter) {
+		nextUpdate = issuerNotAfter
+	}
 
 	der, err := s.ca.BuildCRL(revoked, thisUpdate, nextUpdate, number)
 	if err != nil {
