@@ -51,6 +51,27 @@ including the capstone auto-unseal mechanism — runs in CI with no HSM and no
 proprietary SDK. Clone it, run `go test ./...` in the provided dev container,
 and everything CI checks runs on your machine too.
 
+The whole platform runs the same way, not just its tests:
+
+```sh
+deploy/docker/run-local.sh
+```
+
+That initializes two SoftHSM2 tokens, runs the real offline root ceremony
+against them, moves the root's token out of the store the service can reach,
+and starts the containerized CA read-only and non-root. Then:
+
+```sh
+curl -s localhost:8080/readyz
+curl -s localhost:8080/root.crl | openssl crl -inform DER -noout -text
+curl -X POST --data-binary @your.csr localhost:8080/certificates
+```
+
+No PKCS#11 module ships inside the service image — every module is mounted at
+run time, so the image contains no key store and the same image runs against
+SoftHSM2 and a vendor HSM with only configuration changing. That decision and
+what it costs are in [`deploy/docker/README.md`](deploy/docker/README.md).
+
 A second adapter targets **Thales ProtectServer** through the ProtectToolkit
 PKCS#11 module. It is optional, and it is the part you cannot reproduce without
 your own Thales entitlement — the SDK is proprietary and is never vendored

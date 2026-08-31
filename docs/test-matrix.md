@@ -76,6 +76,9 @@ nothing:
 
 - `internal/config` — YAML parsing and validation
 - `internal/store` — SQLite records, revocation, CRL counter
+- `cmd/hsm-pki-server`'s health-check probe (`healthcheck_test.go`) — HTTP
+  against a local test server and listen-address rewriting; it never opens a
+  token, and `/healthz` is deliberately the endpoint that does not
 - `internal/ca` white-box certificate checks (`intermediate_internal_test.go`)
   — properties of a certificate, built in software
 - URL composition, error mapping, PEM/DER handling in `internal/api`
