@@ -201,6 +201,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   instead of implying more.
 
 ### Changed
+- **Breaking (API, `internal/api`):** the artifacts behind the URLs embedded
+  in certificates are served as **DER**, not PEM — `/root.crt`,
+  `/root.crl` and `/intermediate.crt`, under `application/pkix-cert` and
+  `application/pkix-crl` (RFC 2585 §3). `api.RootArtifacts` carries
+  `CertDER`/`CRLDER` accordingly. PEM remains the on-disk format the
+  ceremony writes and an operator copies; the conversion happens once at
+  startup. See the Fixed entry below for why this is a correctness change
+  rather than a preference.
 - **Breaking (config):** `ca.base_url` is now required. Defaulting it, or
   omitting the extensions when it is unset, would mean the service silently
   issues certificates whose revocation cannot be discovered — and would do so
@@ -244,6 +252,57 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   today rather than implying all four are working.
 
 ### Fixed
+- **A relying party could not parse the CRL at the intermediate's
+  distribution point.** `/root.crl` served PEM, and a client following a CRL
+  distribution point expects a single DER object (RFC 5280 §4.2.1.13,
+  RFC 2585 §3). Measured against OpenSSL 3.x, the PEM body fails with
+  "No supported data to decode. Input type: DER" — which a verifier is most
+  likely to treat as "revocation unavailable" and carry on past. This
+  affected the one channel by which anyone learns the *intermediate* has
+  been revoked, and the URL was fixed by the offline root at ceremony time.
+  `/root.crt` and `/intermediate.crt` had the same defect for AIA
+  CA-Issuers.
+- **The intermediate's `keyUsage` was never checked at startup.** A
+  compliant verifier enforces `keyUsage` independently of
+  `basicConstraints` (RFC 5280 §4.2.1.3), so an intermediate lacking
+  `keyCertSign` issued certificates this platform accepted and everything
+  else rejected. `cRLSign` is required too, since this service publishes the
+  CRL. `basicConstraints` presence is now asserted explicitly alongside it.
+- **Neither the intermediate nor the issuer was checked against its own
+  validity window.** `ca.LoadIntermediate` refuses an expired or not-yet-valid
+  certificate at startup and `ca.CA.Issue` re-checks per issuance — a service
+  that started before the expiry is still running after it. New sentinel
+  `ca.ErrIssuerNotValid`.
+- **A leaf could be issued that outlives its issuer** (`ca.ErrValidityExceedsIssuer`).
+  `ca.cert_ttl_hours` knows nothing about when the intermediate expires.
+  Rejected rather than clamped, matching the ceremony's existing rule for an
+  intermediate outliving its root: the consequence is that a service stops
+  issuing one TTL before its intermediate expires, which is a loud prompt to
+  re-issue it rather than a quiet shortening of everything it signs.
+- **A CRL could claim authority past its issuer's expiry.** `nextUpdate` is
+  clamped to the intermediate's `NotAfter`.
+- **The service resolved its HSM workspace by first label match.**
+  PKCS#11 places no uniqueness constraint on `CKA_LABEL`, so the driver's
+  enumeration order decided which token held the CA key — possibly
+  differently on the next boot (CLAUDE.md §3.8). It now lists the colliding
+  serials and refuses. `cmd/hsm-pki-keytool` already behaved this way.
+- **The ceremony's root CRL carried no clock-skew backdate** while the
+  certificates signed beside it did, so a verifier with a trailing clock
+  could fetch the root CDP and find a CRL that is not valid yet.
+- **A multi-block PEM file was silently reduced to its first block**, in
+  both `ca.intermediate_cert_path` and the root artifact paths — a chain
+  pasted in by an operator would have had file order decide which
+  certificate the CA ran as. Both reject now, and the root artifacts are
+  parsed at startup rather than trusted for having a well-formed envelope.
+- **`http.Server` had no timeouts**, leaving connections that never finish
+  sending to hold a goroutine and a descriptor indefinitely (Slowloris).
+  `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout` and `IdleTimeout` are
+  set well above the handler deadline, so they catch only a client making no
+  progress.
+- **Three config values parsed but were never sanity-checked:** a PIN
+  environment variable that is set but empty, a negative
+  `ca.crl_number_floor` (RFC 5280 §5.2.3 makes CRL numbers non-negative),
+  and a zero or negative PKCS#11 session budget.
 - Certificate `KeyUsage` now follows the subject's key algorithm.
   `keyEncipherment` was asserted unconditionally, which describes an RSA
   operation an EC key cannot perform (RFC 5480 §3) — and P-256 is this CA's
