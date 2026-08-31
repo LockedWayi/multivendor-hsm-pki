@@ -82,7 +82,9 @@ verification.
 ## Status
 
 Phase 1 (PKCS#11 core), Phase 2 (CA core), and Phase 3 (infrastructure as
-code) complete.
+code) complete. **Phase 3b (PKI hardening) is in progress**: the two-tier
+hierarchy and durable revocation state are built; certificate profile
+extensions and two design documents remain.
 
 Phase 1: the interface, session lifecycle, PIN custody, and both the
 SoftHSM2 and ProtectServer adapters are implemented, tested, and share one
@@ -91,7 +93,7 @@ needed zero vendor-specific overrides once a second, real vendor was run
 against it. A single conformance suite (`TestConformance`) runs against
 both backends.
 
-Phase 2: an HSM-backed `crypto.Signer`, CA bootstrap and issuance with CSR
+Phase 2: an HSM-backed `crypto.Signer`, CA issuance with CSR
 validation, and a full HTTP surface — `POST /certificates`,
 `POST /certificates/{serial}/revoke`, `GET /crl`, `GET /healthz`/`GET /readyz`
 — all signing through the Phase 1 adapter, never holding a raw key.
@@ -106,10 +108,53 @@ locked-and-encrypted remote state backend on self-hosted MinIO, and
 `trivy`-based policy/secret scanning with a demonstrated real catch. See
 [`deploy/terraform/README.md`](deploy/terraform/README.md).
 
+Phase 3b (in progress): a two-tier CA. `cmd/hsm-pki-keytool ceremony` runs
+a one-time, operator-driven ceremony that generates the root and
+intermediate key pairs on **two separate tokens**, self-signs the root
+(`pathlen:1`), signs the intermediate under it (`pathlen:0`), and emits the
+root CRL — three public artifacts and no private key material. The service
+then loads that intermediate and refuses to start on a self-signed
+certificate, so a configuration that would put a root online is rejected
+rather than warned about. Issuance returns the leaf plus the intermediate;
+the root certificate and CRL are served as static artifacts at `/root.crt`
+and `/root.crl`, which is where the intermediate's AIA and CDP point.
+
+Every issued leaf in turn carries its own CRL distribution point
+(`<ca.base_url>/crl`) and AIA CA-Issuers pointer
+(`<ca.base_url>/intermediate.crt`), both served by this service as DER under
+the RFC 2585 media types a relying party following those URLs expects, and
+the CA
+refuses to issue at all if it has nowhere to publish revocation — an
+extension is fixed by its signature, so a certificate issued without a
+distribution point can never gain one. No OCSP URL is written anywhere until
+the responder exists in Phase 5b: pointing a verifier at a responder that
+will not answer is worse than pointing it at nothing.
+
+Verified against both SoftHSM2 and the maintainer's ProtectServer token in a
+single `go test -race -p 1 ./...` run. (`-p 1` matters: the package test
+binaries `go test` would otherwise run in parallel all open the same
+emulator token store — see `docs/protectserver-setup.md` §5.)
+
+Revocation state and the CRL number counter live in an embedded SQLite store
+behind an interface, so a restart no longer resurrects a revoked
+certificate — proven by a regression test that issues, revokes, tears the
+server down, brings it back over the same file, and re-fetches the CRL.
+
+Phase 3b is now complete — code and documents both.
+
+The security reasoning behind all of this — what each key is worth, what an
+attacker gets by compromising the service process and what they still do not
+get, and the seven things this platform deliberately does not defend
+against — is in [`docs/threat-model.md`](docs/threat-model.md). The root
+ceremony as an operator procedure, the manifest it produces, disaster
+recovery per tier, and the wrap-based backup design are in
+[`docs/key-ceremony-and-recovery.md`](docs/key-ceremony-and-recovery.md).
+
 Per-sub-task detail is tracked in
 [`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md),
-[`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md), and
-[`docs/phases/phase-3-infrastructure.md`](docs/phases/phase-3-infrastructure.md).
+[`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md),
+[`docs/phases/phase-3-infrastructure.md`](docs/phases/phase-3-infrastructure.md),
+and [`docs/phases/phase-3b-pki-hardening.md`](docs/phases/phase-3b-pki-hardening.md).
 
 ## License
 
