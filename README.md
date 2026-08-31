@@ -144,6 +144,11 @@ server down, brings it back over the same file, and re-fetches the CRL.
 bury: the threat model and key-ceremony/recovery documents are not written
 (3b.5, 3b.6). Every code sub-task in the phase is complete.
 
+The security reasoning behind all of this — what each key is worth, what an
+attacker gets by compromising the service process and what they still do not
+get, and the seven things this platform deliberately does not defend
+against — is in [`docs/threat-model.md`](docs/threat-model.md).
+
 Per-sub-task detail is tracked in
 [`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md),
 [`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md),

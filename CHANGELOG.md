@@ -6,6 +6,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- **`docs/threat-model.md`** (Phase 3b sub-task 3b.5): assets ordered by what
+  their loss costs, six trust boundaries, eight attacker classes, and for
+  each one what a compromise yields *and* what it still does not. The
+  centrepiece is the compromised-service-process case, since that is the
+  compromise the two-tier hierarchy was built against. Seven explicit
+  non-goals, including the two that matter most — the online tier is not
+  defended against host root, and ceremonies in this repository have no
+  separation of duties.
+  It states plainly that `POST /certificates` has no authentication until
+  Phase 5.5, so the deployment boundary is currently the authentication
+  boundary.
+  Two findings came out of writing it: that a PKCS#11 token login
+  authenticates a *token* and not a key, so purpose-separated signing keys
+  need separated tokens to deliver what CLAUDE.md §3.6 claims (now a
+  "decide before provisioning" item in Phase 4.8); and that the revocation
+  channel's *availability* is a security property, since a blocked CRL fetch
+  and an unparseable CRL produce the same "proceed anyway" at the relying
+  party.
 - **CRL distribution point and AIA CA-Issuers extensions on every issued
   certificate** (`internal/ca`, Phase 3b sub-task 3b.4). A leaf now states
   where its revocation status is published (`<ca.base_url>/crl`) and where
