@@ -2,7 +2,7 @@
 //
 // The interface (VendorAdapter) is designed against the standard PKCS#11
 // surface only — no vendor extension leaks into it. A concrete adapter
-// (SoftHSM2Adapter today; nShield/Luna/ProtectServer later, see
+// (SoftHSM2Adapter, ProtectServerAdapter today; nShield/Luna later, see
 // docs/phases/phase-1-pkcs11-core.md and docs/phases/phase-7-hsm-unseal.md)
 // resolves vendor quirks internally and presents this one interface, the
 // way a travel power adapter presents one plug to an appliance regardless

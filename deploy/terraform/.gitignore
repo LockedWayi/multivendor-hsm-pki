@@ -1,0 +1,37 @@
+# Local plugin cache and working state — reinitialized by `tofu init`
+**/.terraform/*
+
+# State: never committed. Phase 3.4 moves state to a remote, locked,
+# encrypted backend; until then a local *.tfstate must never land in git.
+*.tfstate
+*.tfstate.*
+
+# Crash logs may contain resource attribute values
+crash.log
+crash.*.log
+
+# Saved plan output can embed sensitive attribute values (e.g. the
+# hostinger_vps root password) even for attributes marked sensitive in HCL
+*.tfplan
+
+# Variable files carry the real, environment-specific values (including
+# backend credentials such as backend.tfvars, see 3.4) — only the
+# committed *.example companion documents the shape
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!*.tfvars.json.example
+
+# Local override files are for uncommitted, machine-specific experimentation
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI config can carry credentials (e.g. a registry token)
+.terraformrc
+terraform.rc
+
+# Deliberately NOT ignored: .terraform.lock.hcl — the provider dependency
+# lock file contains no secrets and is committed so every environment and
+# every contributor resolves the identical, hash-verified provider build.

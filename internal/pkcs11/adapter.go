@@ -6,10 +6,10 @@ import (
 )
 
 // VendorAdapter is the vendor-agnostic PKCS#11 surface every HSM backend
-// (SoftHSM2 today; nShield, Luna, ProtectServer later — Phase 7) implements.
-// It is written against the standard PKCS#11 operation set only; a vendor's
-// quirks and extensions are resolved inside that vendor's adapter and never
-// appear here (docs/phases/phase-1-pkcs11-core.md).
+// (SoftHSM2 and ProtectServer today; nShield and Luna later — Phase 7)
+// implements. It is written against the standard PKCS#11 operation set
+// only; a vendor's quirks and extensions are resolved inside that vendor's
+// adapter and never appear here (docs/phases/phase-1-pkcs11-core.md).
 //
 // Every method that operates within a session takes the *Session returned
 // by OpenSession. Implementations must reject the call once that session's
@@ -25,9 +25,32 @@ type VendorAdapter interface {
 	// CloseSession releases the underlying PKCS#11 session. Idempotent.
 	CloseSession(ctx context.Context, s *Session) error
 
-	// Login authenticates the session as the given Role. pin is consumed:
-	// callers must not reuse it afterward (see SecurePIN).
+	// LoginToken authenticates the token backing ws and keeps it
+	// authenticated until LogoutToken or Close. This is the login a
+	// long-running service wants: PKCS#11 authenticates a token for the
+	// whole application, so sessions opened afterward are already
+	// authenticated and need no login of their own. See tokenlogin.go.
+	// pin is consumed: it is zeroed in place before this returns.
+	LoginToken(ctx context.Context, ws Workspace, pin []byte, role Role) error
+	// LogoutToken drops the token's authentication. Idempotent.
+	LogoutToken(ctx context.Context) error
+	// TokenLoggedIn reports whether the token is currently authenticated.
+	TokenLoggedIn() bool
+
+	// Login authenticates as the given Role via s.
+	//
+	// Despite taking a session, this authenticates the whole TOKEN, not
+	// that session — PKCS#11 has no per-session login. Every other session
+	// on the token becomes authenticated too, a second Login returns
+	// CKR_USER_ALREADY_LOGGED_IN, and Logout de-authenticates all of them
+	// at once. That makes a login/logout pair around each operation unsafe
+	// with concurrent callers, no matter how the calls are serialized.
+	//
+	// Prefer LoginToken. This remains for callers that genuinely want to
+	// drive the login themselves — chiefly tests exercising login failure
+	// modes. pin is consumed: it is zeroed in place before this returns.
 	Login(ctx context.Context, s *Session, pin []byte, role Role) error
+	// Logout drops the token's authentication, for every session on it.
 	Logout(ctx context.Context, s *Session) error
 
 	// GenerateKeyPair creates an asymmetric (EC) key pair on the HSM. The

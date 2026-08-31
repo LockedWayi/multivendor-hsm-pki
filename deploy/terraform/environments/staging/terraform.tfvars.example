@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars (gitignored). staging is plan-only for this
+# phase -- see the "Dev/staging with only one real VPS" decision in
+# docs/phases/phase-3-infrastructure.md -- so these values are illustrative
+# of how a second environment would differ, not a real second VPS to
+# import or apply against.
+#
+# hostinger_api_token is NOT set here -- export TF_VAR_hostinger_api_token
+# instead. A secret does not belong in a file, even a gitignored one.
+
+vps_plan           = "hostingercom-vps-kvm1-usd-1m"
+vps_data_center_id = 13
+vps_template_id    = 1002
+vps_hostname       = "staging.example.invalid"
+vps_ssh_key_ids    = []
