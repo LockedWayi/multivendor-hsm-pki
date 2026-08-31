@@ -296,7 +296,7 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 	rootTemplate := &x509.Certificate{
 		SerialNumber:          rootSerial,
 		Subject:               params.RootSubject,
-		NotBefore:             now.Add(-5 * time.Minute),
+		NotBefore:             now.Add(-issuanceClockSkewAllowance),
 		NotAfter:              now.Add(params.RootValidity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
@@ -331,7 +331,7 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 	interTemplate := &x509.Certificate{
 		SerialNumber:          interSerial,
 		Subject:               params.IntermediateSubject,
-		NotBefore:             now.Add(-5 * time.Minute),
+		NotBefore:             now.Add(-issuanceClockSkewAllowance),
 		NotAfter:              now.Add(params.IntermediateValidity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
@@ -366,7 +366,13 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 	// intermediate has not been revoked, not a record of any revocation
 	// having happened yet.
 	rootForCRL := &CA{cert: rootCert, signer: rootSigner}
-	rootCRLDER, err := rootForCRL.BuildCRL(nil, now, now.Add(params.RootCRLValidity), big.NewInt(1))
+	// thisUpdate gets the same backdate the certificates above get. Without
+	// it, a relying party whose clock trails this host's fetches the root
+	// CDP and finds a CRL that is not valid yet — and "no usable CRL" is
+	// indistinguishable, to that verifier, from "the intermediate has not
+	// been revoked". The certificates were already backdated for exactly
+	// this reason; the CRL served alongside them needs it just as much.
+	rootCRLDER, err := rootForCRL.BuildCRL(nil, now.Add(-issuanceClockSkewAllowance), now.Add(params.RootCRLValidity), big.NewInt(1))
 	if err != nil {
 		return nil, fmt.Errorf("ca: building root CRL: %w", err)
 	}

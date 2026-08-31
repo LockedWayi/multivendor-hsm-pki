@@ -448,3 +448,45 @@ func crlContains(crl *x509.RevocationList, serial *big.Int) bool {
 	}
 	return false
 }
+
+// TestCRL_NextUpdateNeverOutlivesTheIssuer pins the clamp in currentCRL. A
+// CRL may not claim to be authoritative past the point its issuer stops
+// being able to sign anything, and the configured crl_validity_hours knows
+// nothing about when the intermediate expires.
+//
+// The clamp is the opposite choice from the one Issue makes on the same
+// overrun, and deliberately: a shortened CRL is entirely valid and merely
+// asks the verifier back sooner, while refusing to publish one would remove
+// the CA's ability to announce revocations during exactly the window where
+// its impending expiry makes re-issuance most likely.
+func TestCRL_NextUpdateNeverOutlivesTheIssuer(t *testing.T) {
+	c, adapter, ws, rootArtifacts := newTestCA(t)
+
+	// A CRL validity far beyond the ceremony intermediate's own lifetime.
+	crlValidity := 100 * 365 * 24 * time.Hour
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), crlValidity, rootArtifacts, testLogger()))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/crl")
+	if err != nil {
+		t.Fatalf("GET /crl: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	crl, err := x509.ParseRevocationList(body)
+	if err != nil {
+		t.Fatalf("parsing CRL: %v", err)
+	}
+
+	issuerNotAfter := c.Certificate().NotAfter
+	if crl.NextUpdate.After(issuerNotAfter) {
+		t.Fatalf("CRL nextUpdate %s is after the issuer's NotAfter %s: the CRL claims authority past its issuer's life",
+			crl.NextUpdate, issuerNotAfter)
+	}
+	if !crl.NextUpdate.Equal(issuerNotAfter) {
+		t.Fatalf("CRL nextUpdate %s was not clamped to the issuer's NotAfter %s", crl.NextUpdate, issuerNotAfter)
+	}
+}

@@ -17,8 +17,23 @@ var (
 
 	// ErrNotAnIntermediate is returned by LoadIntermediate when the
 	// certificate is not usable as this platform's intermediate tier: not a
-	// CA at all, or not constrained to pathlen:0.
+	// CA at all, not constrained to pathlen:0, or missing the key usages an
+	// issuing CA needs (keyCertSign for certificates, cRLSign for the CRL
+	// this service also publishes).
 	ErrNotAnIntermediate = errors.New("ca: certificate is not a valid intermediate for this platform")
+
+	// ErrIssuerNotValid is returned when the issuing certificate is outside
+	// its own validity window — expired, or not yet valid. Nothing it signs
+	// can chain, because RFC 5280 path validation checks every certificate
+	// in the path against the same instant, so signing under it produces
+	// certificates that are invalid from the moment they are issued.
+	ErrIssuerNotValid = errors.New("ca: issuing certificate is outside its own validity window")
+
+	// ErrValidityExceedsIssuer is returned by Issue when the requested leaf
+	// lifetime would end after the issuer's own NotAfter. Such a
+	// certificate advertises a validity the chain cannot honor: it becomes
+	// unusable when its issuer expires, whatever its own NotAfter claims.
+	ErrValidityExceedsIssuer = errors.New("ca: certificate validity would outlive its issuer")
 
 	// ErrKeyCertMismatch is returned by LoadIntermediate when the HSM key
 	// found under the configured label is not the key the loaded certificate
