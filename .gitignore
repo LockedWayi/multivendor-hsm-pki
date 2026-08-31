@@ -38,3 +38,8 @@ coverage.txt
 .DS_Store
 .idea/
 .vscode/
+
+# Local run state created by deploy/docker/run-local.sh: SoftHSM2 tokens
+# (which hold real private keys, throwaway or not), ceremony artifacts, and
+# the CA database. Never committed -- CLAUDE.md §3.1, §3.2.
+.local/
