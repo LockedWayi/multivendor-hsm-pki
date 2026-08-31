@@ -16,6 +16,14 @@ config.yaml
 tokens/
 softhsm2.conf
 
+# Local run state (deploy/docker/run-local.sh). It holds SoftHSM2 token
+# directories -- real private keys, throwaway or not -- so it must never
+# reach a build context, let alone a layer. It is also unreadable to the
+# build: SoftHSM2 creates those directories 0700 owned by the user that
+# initialized them, so without this line the build fails with a permission
+# error rather than silently shipping them. Both reasons point the same way.
+.local/
+
 # Nothing here is needed to compile the service.
 docs/
 deploy/terraform/
