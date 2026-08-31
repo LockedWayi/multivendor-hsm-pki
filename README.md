@@ -119,8 +119,19 @@ rather than warned about. Issuance returns the leaf plus the intermediate;
 the root certificate and CRL are served as static artifacts at `/root.crt`
 and `/root.crl`, which is where the intermediate's AIA and CDP point.
 
+Every issued leaf in turn carries its own CRL distribution point
+(`<ca.base_url>/crl`) and AIA CA-Issuers pointer
+(`<ca.base_url>/intermediate.crt`), both served by this service, and the CA
+refuses to issue at all if it has nowhere to publish revocation — an
+extension is fixed by its signature, so a certificate issued without a
+distribution point can never gain one. No OCSP URL is written anywhere until
+the responder exists in Phase 5b: pointing a verifier at a responder that
+will not answer is worse than pointing it at nothing.
+
 Verified against both SoftHSM2 and the maintainer's ProtectServer token in a
-single `go test -race ./...` run.
+single `go test -race -p 1 ./...` run. (`-p 1` matters: the package test
+binaries `go test` would otherwise run in parallel all open the same
+emulator token store — see `docs/protectserver-setup.md` §5.)
 
 Revocation state and the CRL number counter live in an embedded SQLite store
 behind an interface, so a restart no longer resurrects a revoked
@@ -128,9 +139,8 @@ certificate — proven by a regression test that issues, revokes, tears the
 server down, brings it back over the same file, and re-fetches the CRL.
 
 **Still open in Phase 3b**, and load-bearing enough to name here rather than
-bury: issued leaf certificates do not yet carry CDP/AIA extensions (sub-task
-3b.4 — the ceremony-time half is done). The threat model and
-key-ceremony/recovery documents are not written (3b.5, 3b.6).
+bury: the threat model and key-ceremony/recovery documents are not written
+(3b.5, 3b.6). Every code sub-task in the phase is complete.
 
 Per-sub-task detail is tracked in
 [`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md),

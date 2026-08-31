@@ -6,6 +6,33 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- **CRL distribution point and AIA CA-Issuers extensions on every issued
+  certificate** (`internal/ca`, Phase 3b sub-task 3b.4). A leaf now states
+  where its revocation status is published (`<ca.base_url>/crl`) and where
+  the certificate that signed it can be fetched
+  (`<ca.base_url>/intermediate.crt`), so a relying party holding only the
+  leaf can both build the path and check revocation. The intermediate's own
+  equivalents were set at ceremony time in 3b.1 and point one tier up, at the
+  offline root's CRL and certificate.
+  `(*ca.CA).Issue` **fails closed** when it has no distribution points
+  (`ca.ErrNoDistributionPoints`), checked before the CSR is parsed: an
+  extension is fixed by the signature, so a certificate issued without a CDP
+  can never gain one — it can only be revoked into a CRL nobody was told to
+  fetch. No OCSP responder URL is written anywhere, and `ca.LeafDistribution`
+  has no field for one, until the responder exists in Phase 5b.
+- `GET /intermediate.crt` (`internal/api`): the service's own intermediate
+  certificate, which is what every leaf's AIA CA-Issuers URL now points at.
+  Without it the platform would have shipped certificates naming an endpoint
+  that 404s — the same fail-honest violation it refuses for OCSP, one tier
+  down. A server constructed without an issuer answers 503 rather than an
+  empty 200, since a successful empty response is indistinguishable from a
+  zero-length certificate to whoever fetched it.
+- `ca.base_url` (`internal/config`): required, no default. The externally
+  reachable origin of the service, which behind an ingress is not
+  `server.listen_addr`. Validated as a URL that could actually be fetched,
+  through the same check the ceremony's own distribution URLs use, and
+  additionally rejected if it carries a query string or fragment, since the
+  route paths are appended to it.
 - **Anchor login** (`internal/pkcs11/tokenlogin.go`): `LoginToken` /
   `LogoutToken` / `TokenLoggedIn`. The service authenticates its token once
   at startup and stays authenticated until shutdown; sessions opened
@@ -174,6 +201,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   instead of implying more.
 
 ### Changed
+- **Breaking (config):** `ca.base_url` is now required. Defaulting it, or
+  omitting the extensions when it is unset, would mean the service silently
+  issues certificates whose revocation cannot be discovered — and would do so
+  most readily in exactly the deployment that forgot to configure it.
+- **Breaking (API, `internal/ca`):** `NewCA` takes a fourth argument, a
+  `ca.LeafDistribution`, and `ca.LoadIntermediateParams` gains a
+  `Distribution` field. `LoadIntermediate` validates it before touching the
+  token, so a service that could only reject every issuance fails at startup
+  where an operator is watching instead.
 - `internal/pkcs11/base.go`: the shared PKCS#11 plumbing (`pkcs11Adapter`)
   extracted from `SoftHSM2Adapter` and `ProtectServerAdapter` now that both
   have been run against real hardware. Every operation the conformance
