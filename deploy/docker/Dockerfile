@@ -1,0 +1,73 @@
+# The CA service image.
+#
+# Two properties of this file are decisions rather than conventions, and both
+# are recorded in docs/phases/phase-4-container-k8s.md:
+#
+#  1. No PKCS#11 module ships here -- not the proprietary vendor ones, and not
+#     SoftHSM2 either. Every module arrives as a read-only mount at run time,
+#     so the CI backend and a vendor backend are delivered by one mechanism
+#     instead of two, and the published artifact contains no key store.
+#
+#  2. The runtime base is distroless/cc rather than distroless/base, and that
+#     is a consequence of (1) measured rather than assumed. A mounted module is
+#     dlopen'ed into *this* process, so its link-time dependencies have to
+#     resolve inside *this* filesystem. libsofthsm2.so is C++ and needs
+#     libstdc++.so.6 and libgcc_s.so.1, which distroless/base does not carry
+#     and distroless/cc does. The vendor module (libctsw.so) needs only glibc,
+#     so cc covers both.
+#
+# Both stages are pinned by digest. The tag beside each digest is there for a
+# human reading the file; Docker resolves the digest and ignores it.
+
+# ---- build stage -------------------------------------------------------
+# cgo is not optional. github.com/miekg/pkcs11 binds the C PKCS#11 API, so a
+# CGO_ENABLED=0 build does not merely produce a static binary -- it does not
+# compile. That is what forces a runtime base with a dynamic loader, and it is
+# why "scratch" was never available to this service.
+FROM golang:1.27-bookworm@sha256:ded31c68586d2e49e760acc2e65a884b23d032e9bbbed0ae0c55abd3fcaf4452 AS build
+
+ENV CGO_ENABLED=1
+
+WORKDIR /src
+
+# Dependencies first, as their own layer: the module graph changes far less
+# often than the source, so an unchanged go.mod/go.sum reuses this layer and
+# the download is skipped entirely.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+
+# -trimpath keeps absolute build paths out of the binary, so the same source
+# builds byte-identically from any directory. -buildvcs=false because the
+# build context excludes .git (see .dockerignore) and Go would otherwise fail
+# rather than silently omit the stamp.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -buildvcs=false -ldflags='-s -w' \
+        -o /out/hsm-pki-server ./cmd/hsm-pki-server
+
+# ---- runtime stage -----------------------------------------------------
+# distroless/cc: glibc, libssl, libstdc++, ca-certificates. No shell, no
+# package manager, no compiler -- verified by test, not by trust
+# (deploy/docker/README.md).
+#
+# cmd/hsm-pki-keytool is deliberately NOT copied here. It is the offline
+# ceremony tool: it is the one binary in this repository that knows how to
+# reach a root token, and the whole point of the two-tier hierarchy is that
+# nothing running online can. An operator tool in the online image would put
+# it one exec away from a compromised pod.
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
+
+COPY --from=build /out/hsm-pki-server /usr/local/bin/hsm-pki-server
+
+# Fixed, non-zero UID. The nonroot base already sets it; stating it here means
+# a base image change cannot silently return this container to root.
+USER 65532:65532
+
+# The only port served. server.listen_addr must agree with it.
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/hsm-pki-server"]
+CMD ["-config", "/etc/hsm-pki/config.yaml"]
