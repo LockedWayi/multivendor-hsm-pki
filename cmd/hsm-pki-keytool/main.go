@@ -68,6 +68,7 @@ func runCeremonyCmd(args []string) error {
 	rootCRLOut := fs.String("root-crl-out", "", "path to write the root CRL PEM")
 	rootCRLURL := fs.String("root-crl-url", "", "URL the root CRL will be served from (becomes the intermediate's CRL distribution point)")
 	rootCertURL := fs.String("root-cert-url", "", "URL the root certificate will be served from (becomes the intermediate's AIA CA-Issuers pointer)")
+	rootKeyExtractable := fs.Bool("root-key-extractable", true, "set CKA_EXTRACTABLE on the root private key, enabling wrap-based backup (docs/key-ceremony-and-recovery.md); does not affect CKA_SENSITIVE, which is always forced true")
 
 	interWorkspaceLabel := fs.String("intermediate-workspace", "", "token label the intermediate key pair is generated on")
 	interWorkspaceSerial := fs.String("intermediate-workspace-serial", "", "token serial number, to disambiguate when several tokens share the intermediate label")
@@ -125,13 +126,14 @@ func runCeremonyCmd(args []string) error {
 	}
 
 	result, ceremonyErr := ca.RunCeremony(ctx, adapter, pk11.DefaultSessionOptions(), ca.CeremonyParams{
-		RootWorkspace: rootWS,
-		RootPIN:       pinResolver(*rootPINEnv),
-		RootKeyLabel:  *rootKeyLabel,
-		RootSubject:   pkix.Name{CommonName: *rootCN},
-		RootCurve:     curve,
-		RootCRLURL:    *rootCRLURL,
-		RootCertURL:   *rootCertURL,
+		RootWorkspace:      rootWS,
+		RootPIN:            pinResolver(*rootPINEnv),
+		RootKeyLabel:       *rootKeyLabel,
+		RootSubject:        pkix.Name{CommonName: *rootCN},
+		RootCurve:          curve,
+		RootCRLURL:         *rootCRLURL,
+		RootCertURL:        *rootCertURL,
+		RootKeyExtractable: *rootKeyExtractable,
 
 		IntermediateWorkspace: interWS,
 		IntermediatePIN:       pinResolver(*interPINEnv),
@@ -159,6 +161,11 @@ func runCeremonyCmd(args []string) error {
 		fmt.Printf("ceremony artifacts written:\n  root certificate:         %s\n  intermediate certificate: %s\n  root CRL:                 %s\n",
 			*rootCertOut, *interCertOut, *rootCRLOut)
 		fmt.Println("no private key material was written anywhere — both key pairs remain on their respective HSM tokens")
+		if *rootKeyExtractable {
+			fmt.Println("root private key: CKA_EXTRACTABLE=true — eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)")
+		} else {
+			fmt.Println("root private key: CKA_EXTRACTABLE=false — no wrap-based backup; recovery on loss is a fresh ceremony and cross-signing")
+		}
 	}
 	if ceremonyErr != nil {
 		return fmt.Errorf("ceremony: %w", ceremonyErr)

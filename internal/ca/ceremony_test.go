@@ -384,6 +384,69 @@ func TestRunCeremony_RefusesToOverwriteExistingKeyLabel(t *testing.T) {
 	})
 }
 
+// TestRunCeremony_RootKeyExtractableIsOperatorControlled proves
+// CeremonyParams.RootKeyExtractable actually reaches the token's
+// CKA_EXTRACTABLE attribute in both directions — asked of the token, not
+// assumed from the request that was sent, the same discipline 3b.7
+// established after CKA_SENSITIVE turned out to be a silent lie on one
+// backend (docs/pkcs11-vendor-notes.md, "A non-sensitive private key really
+// is readable here"). Maintainer decision, 2026-08-31
+// (docs/key-ceremony-and-recovery.md, "Deciding root-key extractability"):
+// whether the root key can ever leave its token wrapped is an operator
+// choice made at ceremony time, not a fixed default baked into RunCeremony —
+// this is the regression test for that choice actually taking effect.
+func TestRunCeremony_RootKeyExtractableIsOperatorControlled(t *testing.T) {
+	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
+		for _, extractable := range []bool{true, false} {
+			t.Run(fmt.Sprintf("extractable=%v", extractable), func(t *testing.T) {
+				ctx := context.Background()
+				params := testCeremonyParams(b)
+				// Distinct labels per iteration: the ceremony refuses to
+				// overwrite a key label it has already used, and this test
+				// runs two ceremonies against the same pair of tokens.
+				params.RootKeyLabel = b.label(fmt.Sprintf("root-key-ext-%v", extractable))
+				params.IntermediateKeyLabel = b.label(fmt.Sprintf("inter-key-ext-%v", extractable))
+				params.RootKeyExtractable = extractable
+
+				if _, err := ca.RunCeremony(ctx, b.adapter, pk11.SessionOptions{}, params); err != nil {
+					t.Fatalf("RunCeremony: %v", err)
+				}
+
+				if err := b.adapter.LoginToken(ctx, b.rootWS, []byte(b.rootPIN), pk11.RoleUser); err != nil {
+					t.Fatalf("LoginToken (root): %v", err)
+				}
+				defer func() { _ = b.adapter.LogoutToken(ctx) }()
+
+				s, err := b.adapter.OpenSession(ctx, b.rootWS, pk11.SessionOptions{})
+				if err != nil {
+					t.Fatalf("OpenSession: %v", err)
+				}
+				defer b.adapter.CloseSession(ctx, s)
+
+				found, err := b.adapter.FindObjects(ctx, s, []pk11.Attribute{
+					pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPrivateKey)),
+					{Type: pk11.AttrLabel, Value: []byte(params.RootKeyLabel)},
+				})
+				if err != nil {
+					t.Fatalf("FindObjects: %v", err)
+				}
+				if len(found) != 1 {
+					t.Fatalf("found %d private keys under label %q, want 1", len(found), params.RootKeyLabel)
+				}
+
+				attrs, err := b.adapter.GetAttributes(ctx, s, found[0], []pk11.AttributeType{pk11.AttrExtractable})
+				if err != nil {
+					t.Fatalf("GetAttributes: %v", err)
+				}
+				gotExtractable := len(attrs[0].Value) > 0 && attrs[0].Value[0] != 0
+				if gotExtractable != extractable {
+					t.Fatalf("token reports CKA_EXTRACTABLE=%v, want %v", gotExtractable, extractable)
+				}
+			})
+		}
+	})
+}
+
 // TestRunCeremony_LeafDoesNotVerifyAgainstUnrelatedRoot proves the ceremony
 // output is bound to its own run (phase-3b-pki-hardening.md 3b.1's Done-when,
 // "rejection of a leaf signed directly by the root of a different ceremony

@@ -69,6 +69,24 @@ type CeremonyParams struct {
 	// party that lacks the root build the path. Required for the same
 	// irreversibility reason as RootCRLURL.
 	RootCertURL string
+
+	// RootKeyExtractable sets CKA_EXTRACTABLE on the root private key.
+	// Maintainer decision, 2026-08-31 (docs/key-ceremony-and-recovery.md,
+	// "Deciding root-key extractability"): this is asked at ceremony time,
+	// as an explicit operator choice, rather than hard-coded — the
+	// consequence differs by deployment (a disposable dev token has nothing
+	// worth restoring; a real root does), so the ceremony command's default
+	// leans toward recoverability (see -root-key-extractable's default in
+	// cmd/hsm-pki-keytool) rather than this field defaulting on its own.
+	//
+	// true is what makes the wrap-based backup design usable for the root:
+	// without it, C_WrapKey has nothing to export and a lost root token has
+	// no recovery but a fresh ceremony and cross-signing. It does not weaken
+	// CKA_SENSITIVE, which GenerateKeyPair still forces true unconditionally
+	// (CLAUDE.md §3.7, docs/pkcs11-vendor-notes.md "A non-sensitive private
+	// key really is readable here") — C_WrapKey is a different door than
+	// C_GetAttributeValue, and only Extractable governs it.
+	RootKeyExtractable bool
 }
 
 // validate checks every parameter that can be checked without touching an
@@ -269,6 +287,7 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 	if _, err := withSession(ctx, adapter, params.RootWorkspace, sessionOpts, func(s *pk11.Session) (struct{}, error) {
 		_, err := adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
 			Curve: params.RootCurve, Label: params.RootKeyLabel, Sign: true, Verify: true,
+			Extractable: params.RootKeyExtractable,
 		})
 		return struct{}{}, err
 	}); err != nil {
