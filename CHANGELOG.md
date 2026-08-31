@@ -5,7 +5,101 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- **`FindObjects` silently truncated every search to 50 objects.** The
+  pagination loop broke on the boolean `miekg/pkcs11` returns, which that
+  library documents as "deprecated and should be ignored" and computes as
+  `ulCount > max` — a condition `C_FindObjects` can never satisfy. Every
+  search therefore returned at most one batch, with no error and a
+  well-formed short list, which is invisible on a token holding fewer than
+  50 objects. It now loops until a batch comes back empty.
+  Consequences beyond the immediate: any future key inventory, rotation or
+  audit that enumerates a populated token would have seen a truncated view.
+
 ### Added
+- **`VendorAdapter.DestroyObject`** and per-run object cleanup in the test
+  harnesses, pulled forward from Phase 4.8. A full both-backend run left
+  +215 objects on a persistent token before this and +23 after. It takes an
+  object handle rather than a label, because `CKA_LABEL` cannot identify an
+  object (CLAUDE.md §3.8).
+
+### Security
+- **Private keys were generated with `CKA_SENSITIVE` explicitly false, and on
+  ProtectToolkit 7.3.3 the private scalar was readable in plaintext by any
+  authenticated session.** `KeyPairRequest` carried a `Sensitive` field no
+  caller ever set, so the zero value went into every template — every CA key
+  this platform had ever created, root included. PKCS#11 permits a token to
+  reveal a non-sensitive private key through `C_GetAttributeValue`, and
+  `CKA_EXTRACTABLE=false` does not cover that: it governs `C_WrapKey`, a
+  different door.
+  Measured on both backends, which disagreed: SoftHSM2 2.6.1 refuses the read
+  (`CKR_ATTRIBUTE_SENSITIVE`) even though the attribute permits it, while
+  ProtectToolkit returned all 32 bytes. Both are conformant, so the platform's
+  central claim — private keys never leave the HSM — was false on the vendor
+  backend and true on the one CI runs, with a green suite throughout.
+  Fixed by removing the choice rather than correcting the call sites:
+  `GenerateKeyPair` now forces `CKA_SENSITIVE=true` and the field is gone.
+  `TestConformance/GenerateKeyPair_PrivateKeyIsSensitiveAndNonExtractable`
+  reads both attributes back off the token on every configured backend.
+  **Keys generated before this fix should be treated as exposed and rotated**
+  if they were ever created on a token whose module discloses them; for the
+  maintainer's ProtectServer development tokens, that is all of them.
+
+### Added
+- **`internal/hsmtest`**, the single registry every HSM-touching test now
+  acquires its backend from, and **`docs/test-matrix.md`**, the inventory of
+  what runs where. Before this, `internal/ca` and `internal/api` each carried
+  their own copy of "provision a SoftHSM2 token, build an adapter, find the
+  workspace", which is why 65 tests across the CA, the HTTP surface and both
+  commands ran against SoftHSM2 alone. They now run against every configured
+  backend as a subtest per vendor: a full run executes 59 vendor-parameterised
+  subtests on each of SoftHSM2 and ProtectServer, up from 12.
+  Adding nShield and Luna (Phase 7) is one registry entry and an adapter.
+- **`docs/threat-model.md`** (Phase 3b sub-task 3b.5): assets ordered by what
+  their loss costs, six trust boundaries, eight attacker classes, and for
+  each one what a compromise yields *and* what it still does not. The
+  centrepiece is the compromised-service-process case, since that is the
+  compromise the two-tier hierarchy was built against. Seven explicit
+  non-goals, including the two that matter most — the online tier is not
+  defended against host root, and ceremonies in this repository have no
+  separation of duties.
+  It states plainly that `POST /certificates` has no authentication until
+  Phase 5.5, so the deployment boundary is currently the authentication
+  boundary.
+  Two findings came out of writing it: that a PKCS#11 token login
+  authenticates a *token* and not a key, so purpose-separated signing keys
+  need separated tokens to deliver what CLAUDE.md §3.6 claims (now a
+  "decide before provisioning" item in Phase 4.8); and that the revocation
+  channel's *availability* is a security property, since a blocked CRL fetch
+  and an unparseable CRL produce the same "proceed anyway" at the relying
+  party.
+- **CRL distribution point and AIA CA-Issuers extensions on every issued
+  certificate** (`internal/ca`, Phase 3b sub-task 3b.4). A leaf now states
+  where its revocation status is published (`<ca.base_url>/crl`) and where
+  the certificate that signed it can be fetched
+  (`<ca.base_url>/intermediate.crt`), so a relying party holding only the
+  leaf can both build the path and check revocation. The intermediate's own
+  equivalents were set at ceremony time in 3b.1 and point one tier up, at the
+  offline root's CRL and certificate.
+  `(*ca.CA).Issue` **fails closed** when it has no distribution points
+  (`ca.ErrNoDistributionPoints`), checked before the CSR is parsed: an
+  extension is fixed by the signature, so a certificate issued without a CDP
+  can never gain one — it can only be revoked into a CRL nobody was told to
+  fetch. No OCSP responder URL is written anywhere, and `ca.LeafDistribution`
+  has no field for one, until the responder exists in Phase 5b.
+- `GET /intermediate.crt` (`internal/api`): the service's own intermediate
+  certificate, which is what every leaf's AIA CA-Issuers URL now points at.
+  Without it the platform would have shipped certificates naming an endpoint
+  that 404s — the same fail-honest violation it refuses for OCSP, one tier
+  down. A server constructed without an issuer answers 503 rather than an
+  empty 200, since a successful empty response is indistinguishable from a
+  zero-length certificate to whoever fetched it.
+- `ca.base_url` (`internal/config`): required, no default. The externally
+  reachable origin of the service, which behind an ingress is not
+  `server.listen_addr`. Validated as a URL that could actually be fetched,
+  through the same check the ceremony's own distribution URLs use, and
+  additionally rejected if it carries a query string or fragment, since the
+  route paths are appended to it.
 - **Anchor login** (`internal/pkcs11/tokenlogin.go`): `LoginToken` /
   `LogoutToken` / `TokenLoggedIn`. The service authenticates its token once
   at startup and stays authenticated until shutdown; sessions opened
@@ -174,6 +268,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   instead of implying more.
 
 ### Changed
+- **Breaking (API, `internal/api`):** the artifacts behind the URLs embedded
+  in certificates are served as **DER**, not PEM — `/root.crt`,
+  `/root.crl` and `/intermediate.crt`, under `application/pkix-cert` and
+  `application/pkix-crl` (RFC 2585 §3). `api.RootArtifacts` carries
+  `CertDER`/`CRLDER` accordingly. PEM remains the on-disk format the
+  ceremony writes and an operator copies; the conversion happens once at
+  startup. See the Fixed entry below for why this is a correctness change
+  rather than a preference.
+- **Breaking (config):** `ca.base_url` is now required. Defaulting it, or
+  omitting the extensions when it is unset, would mean the service silently
+  issues certificates whose revocation cannot be discovered — and would do so
+  most readily in exactly the deployment that forgot to configure it.
+- **Breaking (API, `internal/ca`):** `NewCA` takes a fourth argument, a
+  `ca.LeafDistribution`, and `ca.LoadIntermediateParams` gains a
+  `Distribution` field. `LoadIntermediate` validates it before touching the
+  token, so a service that could only reject every issuance fails at startup
+  where an operator is watching instead.
 - `internal/pkcs11/base.go`: the shared PKCS#11 plumbing (`pkcs11Adapter`)
   extracted from `SoftHSM2Adapter` and `ProtectServerAdapter` now that both
   have been run against real hardware. Every operation the conformance
@@ -208,6 +319,57 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   today rather than implying all four are working.
 
 ### Fixed
+- **A relying party could not parse the CRL at the intermediate's
+  distribution point.** `/root.crl` served PEM, and a client following a CRL
+  distribution point expects a single DER object (RFC 5280 §4.2.1.13,
+  RFC 2585 §3). Measured against OpenSSL 3.x, the PEM body fails with
+  "No supported data to decode. Input type: DER" — which a verifier is most
+  likely to treat as "revocation unavailable" and carry on past. This
+  affected the one channel by which anyone learns the *intermediate* has
+  been revoked, and the URL was fixed by the offline root at ceremony time.
+  `/root.crt` and `/intermediate.crt` had the same defect for AIA
+  CA-Issuers.
+- **The intermediate's `keyUsage` was never checked at startup.** A
+  compliant verifier enforces `keyUsage` independently of
+  `basicConstraints` (RFC 5280 §4.2.1.3), so an intermediate lacking
+  `keyCertSign` issued certificates this platform accepted and everything
+  else rejected. `cRLSign` is required too, since this service publishes the
+  CRL. `basicConstraints` presence is now asserted explicitly alongside it.
+- **Neither the intermediate nor the issuer was checked against its own
+  validity window.** `ca.LoadIntermediate` refuses an expired or not-yet-valid
+  certificate at startup and `ca.CA.Issue` re-checks per issuance — a service
+  that started before the expiry is still running after it. New sentinel
+  `ca.ErrIssuerNotValid`.
+- **A leaf could be issued that outlives its issuer** (`ca.ErrValidityExceedsIssuer`).
+  `ca.cert_ttl_hours` knows nothing about when the intermediate expires.
+  Rejected rather than clamped, matching the ceremony's existing rule for an
+  intermediate outliving its root: the consequence is that a service stops
+  issuing one TTL before its intermediate expires, which is a loud prompt to
+  re-issue it rather than a quiet shortening of everything it signs.
+- **A CRL could claim authority past its issuer's expiry.** `nextUpdate` is
+  clamped to the intermediate's `NotAfter`.
+- **The service resolved its HSM workspace by first label match.**
+  PKCS#11 places no uniqueness constraint on `CKA_LABEL`, so the driver's
+  enumeration order decided which token held the CA key — possibly
+  differently on the next boot (CLAUDE.md §3.8). It now lists the colliding
+  serials and refuses. `cmd/hsm-pki-keytool` already behaved this way.
+- **The ceremony's root CRL carried no clock-skew backdate** while the
+  certificates signed beside it did, so a verifier with a trailing clock
+  could fetch the root CDP and find a CRL that is not valid yet.
+- **A multi-block PEM file was silently reduced to its first block**, in
+  both `ca.intermediate_cert_path` and the root artifact paths — a chain
+  pasted in by an operator would have had file order decide which
+  certificate the CA ran as. Both reject now, and the root artifacts are
+  parsed at startup rather than trusted for having a well-formed envelope.
+- **`http.Server` had no timeouts**, leaving connections that never finish
+  sending to hold a goroutine and a descriptor indefinitely (Slowloris).
+  `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout` and `IdleTimeout` are
+  set well above the handler deadline, so they catch only a client making no
+  progress.
+- **Three config values parsed but were never sanity-checked:** a PIN
+  environment variable that is set but empty, a negative
+  `ca.crl_number_floor` (RFC 5280 §5.2.3 makes CRL numbers non-negative),
+  and a zero or negative PKCS#11 session budget.
 - Certificate `KeyUsage` now follows the subject's key algorithm.
   `keyEncipherment` was asserted unconditionally, which describes an RSA
   operation an EC key cannot perform (RFC 5480 §3) — and P-256 is this CA's

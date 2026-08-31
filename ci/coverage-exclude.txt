@@ -16,3 +16,13 @@
 # their files here — this list, not a naming convention or a build tag, is
 # the single place that decision lives.
 internal/pkcs11/protectserver.go
+#
+# internal/hsmtest is test scaffolding that has to be a package rather than a
+# _test.go file, because Go cannot share test helpers across packages. It is
+# not product code, so it does not belong in a product-code coverage figure —
+# and its per-vendor setup paths are unreachable in CI for exactly the reason
+# above: no ProtectServer, no nShield, no Luna. Counting it dropped the
+# reported number from 79.6% to 75.0% while nothing about the product's
+# tested-ness changed, which is precisely the distortion this file exists to
+# prevent.
+internal/hsmtest/hsmtest.go

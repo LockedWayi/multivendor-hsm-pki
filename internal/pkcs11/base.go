@@ -211,8 +211,13 @@ func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 				continue
 			}
 			out = append(out, Workspace{
-				SlotID:  id,
-				Label:   strings.TrimRight(ti.Label, " "),
+				SlotID: id,
+				Label:  strings.TrimRight(ti.Label, " "),
+				// PKCS#11 pads both of these fixed-width fields with
+				// spaces; the padding is an encoding artifact, not part of
+				// the value, and leaving it in would make every serial
+				// comparison depend on a vendor's field width.
+				Serial:  strings.TrimRight(ti.SerialNumber, " "),
 				Present: true,
 			})
 		}
@@ -407,7 +412,27 @@ func (a *pkcs11Adapter) GenerateKeyPair(ctx context.Context, s *Session, req Key
 		p11.NewAttribute(p11.CKA_LABEL, req.Label),
 		p11.NewAttribute(p11.CKA_ID, id),
 		p11.NewAttribute(p11.CKA_SIGN, req.Sign),
-		p11.NewAttribute(p11.CKA_SENSITIVE, req.Sensitive),
+		// CKA_SENSITIVE is forced true and is not a caller's choice.
+		//
+		// PKCS#11 says a private key with CKA_SENSITIVE false "may be
+		// revealed in plaintext" through C_GetAttributeValue, and it used to
+		// be whatever the request's zero value happened to be — which for a
+		// struct literal that does not mention it is false. Every CA key
+		// this platform generated, root included, was therefore explicitly
+		// marked non-sensitive.
+		//
+		// Measured on both backends, 2026-08-31, because the two disagree
+		// and only one of them made the defect visible: SoftHSM2 refused to
+		// disclose the scalar anyway (CKR_ATTRIBUTE_SENSITIVE), while
+		// ProtectToolkit 7.3.3 returned all 32 bytes of the private key to
+		// any authenticated session. The CI backend hid it; the real vendor
+		// did not. See docs/pkcs11-vendor-notes.md.
+		//
+		// So this is not a default a caller may override: for the keys this
+		// platform creates there is no legitimate use for a readable
+		// private key, and leaving it as a field meant every future caller
+		// had to remember something they could silently get wrong.
+		p11.NewAttribute(p11.CKA_SENSITIVE, true),
 		p11.NewAttribute(p11.CKA_EXTRACTABLE, req.Extractable),
 	}
 
@@ -509,6 +534,37 @@ func (a *pkcs11Adapter) GenerateRandom(ctx context.Context, s *Session, n int) (
 
 // ─── Find / attributes ──────────────────────────────────────────────────
 
+// DestroyObject removes obj from the token permanently. See the interface
+// for why it takes a handle and not a label.
+//
+// Needed for two things this platform has been putting off: a key lifecycle
+// that can actually retire a version rather than only adding new ones
+// (CLAUDE.md §3.7 — "retire it by destroying it on the token"), and tests
+// that clean up after themselves. The second turned urgent when every
+// token-touching test began running against every backend: on a vendor
+// whose tokens persist, the object count grows with the size of the suite,
+// and hardware token memory is finite.
+func (a *pkcs11Adapter) DestroyObject(ctx context.Context, s *Session, obj ObjectHandle) error {
+	if err := checkCtx(ctx); err != nil {
+		return err
+	}
+	if err := s.touch(); err != nil {
+		return err
+	}
+	return a.withStateLock(func() error {
+		if err := a.ctx.DestroyObject(s.handle, p11.ObjectHandle(obj)); err != nil {
+			return fmt.Errorf("C_DestroyObject: %w", err)
+		}
+		return nil
+	})
+}
+
+// findObjectsBatch is how many handles one C_FindObjects call asks for.
+// The value is a round-trip/allocation trade-off only: the loop that uses
+// it continues until the token returns nothing, so it never bounds how many
+// objects a search can return.
+const findObjectsBatch = 50
+
 func (a *pkcs11Adapter) FindObjects(ctx context.Context, s *Session, tmpl []Attribute) ([]ObjectHandle, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -524,16 +580,33 @@ func (a *pkcs11Adapter) FindObjects(ctx context.Context, s *Session, tmpl []Attr
 			return fmt.Errorf("C_FindObjectsInit: %w", err)
 		}
 		defer a.ctx.FindObjectsFinal(s.handle)
+		// Loop until a batch comes back empty, which is the PKCS#11 idiom
+		// and what miekg/pkcs11 documents: "Calling the function repeatedly
+		// may yield additional results until an empty slice is returned.
+		// The returned boolean value is deprecated and should be ignored."
+		//
+		// This used to break on that boolean, which the binding computes as
+		// ulCount > max — a condition C_FindObjects can never satisfy,
+		// because it never returns more handles than the maximum it was
+		// given. So the loop always stopped after the first batch and every
+		// search silently returned at most 50 objects.
+		//
+		// Silently is the word that matters: nothing errored, the caller
+		// got a well-formed short list, and on a token holding fewer than
+		// 50 objects — every test token this repository had until the suite
+		// went multi-backend — the truncation was invisible. It surfaced
+		// only when a cleanup routine reported destroying nothing on a
+		// token with thousands of objects on it.
 		for {
-			batch, more, err := a.ctx.FindObjects(s.handle, 50)
+			batch, _, err := a.ctx.FindObjects(s.handle, findObjectsBatch)
 			if err != nil {
 				return fmt.Errorf("C_FindObjects: %w", err)
 			}
+			if len(batch) == 0 {
+				break
+			}
 			for _, h := range batch {
 				out = append(out, ObjectHandle(h))
-			}
-			if !more {
-				break
 			}
 		}
 		return nil

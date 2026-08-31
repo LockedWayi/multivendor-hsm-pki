@@ -20,9 +20,36 @@ import (
 // PKCS#11 standard call it a token in a slot. Modeling it abstractly here,
 // rather than as a SoftHSM2-shaped concept, is what lets future vendor
 // adapters map their own term onto it without this interface changing.
+//
+// # Which field identifies a token
+//
+// Label is for *addressing* — it is what an operator knows and types, and
+// what config.yaml carries. Serial is for *identity* — it is what two
+// workspace values must be compared on to decide whether they are the same
+// physical token.
+//
+// The two are not interchangeable, and using Label as identity is a real
+// defect rather than a shortcut. PKCS#11 places no uniqueness constraint on
+// CKA_LABEL (it is documented as a description), so two distinct tokens may
+// legitimately carry the same one. SlotID is worse still: the standard
+// explicitly allows it to change between reboots and reinsertions, so it
+// identifies a position, not a token. CK_TOKEN_INFO.serialNumber is the
+// field the standard intends for this, which is why RFC 7512's PKCS#11 URI
+// scheme carries `token=` (label) and `serial=` as separate attributes for
+// exactly this reason.
+//
+// Serial is treated as an opaque string and never parsed. Vendors format it
+// very differently — SoftHSM2 emits a hex-like token serial, ProtectToolkit
+// emits forms such as "0000:57270" — and nothing here needs its structure,
+// only its equality.
 type Workspace struct {
-	SlotID  uint
-	Label   string
+	SlotID uint
+	Label  string
+	// Serial is CK_TOKEN_INFO.serialNumber, trailing padding trimmed. It is
+	// the field to compare when deciding whether two Workspace values name
+	// the same token; see the type's doc comment for why Label and SlotID
+	// are not.
+	Serial  string
 	Present bool
 }
 
@@ -162,13 +189,21 @@ const (
 // default and this is the key type it needs; RSA support is deferred until
 // a phase actually requires it (CLAUDE.md: no speculative abstraction).
 type KeyPairRequest struct {
-	Curve       ECCurve
-	Label       string
-	ID          []byte // nil = adapter generates 8 random bytes
-	Sign        bool
-	Verify      bool
+	Curve  ECCurve
+	Label  string
+	ID     []byte // nil = adapter generates 8 random bytes
+	Sign   bool
+	Verify bool
+	// Extractable permits the private key to leave the token wrapped under
+	// another key (C_WrapKey). Default false, and it should stay false for
+	// every key this platform generates today: the wrap-based backup design
+	// that would need it is documented in
+	// docs/key-ceremony-and-recovery.md and not built.
+	//
+	// There is deliberately no Sensitive field. CKA_SENSITIVE is always
+	// set true by GenerateKeyPair — see the comment there for what happened
+	// when it was a caller's choice.
 	Extractable bool
-	Sensitive   bool
 }
 
 // KeyPairHandle holds the two object handles produced by GenerateKeyPair.

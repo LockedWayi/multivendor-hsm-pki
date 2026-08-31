@@ -54,20 +54,82 @@ ca:
   # ECDSA P-256 is the default curve; P-384 is available where a larger
   # security margin is warranted (see docs/architecture.md).
   curve: "P-256"
-  # Validity window for certificates this CA issues (not its own — see
-  # internal/ca.DefaultRootValidity for that).
+  # Validity window for the leaf certificates this service issues. The
+  # intermediate's own validity was fixed at ceremony time and is not
+  # configurable here.
   cert_ttl_hours: 8760
-  # CKA_LABEL the CA's own key pair is created with in the HSM, and looked
-  # up by on every later restart. Change this and the CA will bootstrap a
-  # brand new key pair under the new label, alongside the old one.
-  key_label: "hsm-pki-ca"
-  # Where the CA's self-signed certificate is read from and written to.
-  # Contains no private key material — the private key never leaves the
-  # HSM — so this file is safe to distribute to anyone verifying
-  # certificates this CA issues. Not gitignored on principle, but a real
-  # deployment's actual cert_path (outside this repo) has nothing to do
-  # with git either way.
-  cert_path: "ca-cert.pem"
+
+  # This service holds the INTERMEDIATE and nothing above it.
+  #
+  # There is no field naming the root's token, workspace, or key label, and
+  # that absence is the security property, not an omission: the root lives
+  # on a separate token reachable only from the offline ceremony
+  # (cmd/hsm-pki-keytool), so compromising this service cannot reach it.
+  # Both values below come from a ceremony run — see
+  # docs/phases/phase-3b-pki-hardening.md.
+
+  # CKA_LABEL of the intermediate key pair the ceremony created. Versioned,
+  # so rotation provisions -v2 alongside -v1 rather than overwriting it
+  # (CLAUDE.md 3.7).
+  intermediate_key_label: "ca-intermediate-key-v1"
+  # The ceremony-produced intermediate certificate. Contains no private key
+  # material. The service refuses to start if this is self-signed, since a
+  # self-signed CA certificate here would mean a root had been put online.
+  intermediate_cert_path: "intermediate.pem"
+
+  # Public ceremony artifacts this service republishes so the CDP and AIA
+  # URLs baked into the intermediate at ceremony time actually resolve.
+  # Neither is key material; serving them grants no ability to use the
+  # root's key. Served at GET /root.crt and GET /root.crl respectively, so
+  # a ceremony should be run with:
+  #   -root-cert-url https://<this-host>/root.crt
+  #   -root-crl-url  https://<this-host>/root.crl
+  # PEM on disk -- that is what the ceremony writes and what you copy
+  # between hosts. They are served as DER (application/pkix-cert and
+  # application/pkix-crl), because that is what a client following a CDP or
+  # an AIA pointer expects per RFC 2585; the conversion happens at startup.
+  root_cert_path: "root.pem"
+  root_crl_path: "root-crl.pem"
+
+  # Externally reachable origin of THIS service -- the address a relying
+  # party can resolve, which behind an ingress or load balancer is not what
+  # server.listen_addr binds to. Required, with no default.
+  #
+  # Every certificate this service issues carries two URLs built from it:
+  #   <base_url>/crl              the CRL that governs the leaf
+  #   <base_url>/intermediate.crt the certificate that signed the leaf
+  # Those are baked in at signature time and cannot be edited afterward, so
+  # a wrong value here is not a startup failure -- it is a valid certificate
+  # pointing at a CRL nobody can fetch, fixable only by re-issuing every
+  # certificate signed since. A trailing slash is tolerated; a path prefix
+  # is kept ("https://pki.example.com/ca" gives ".../ca/crl").
+  #
+  # No OCSP URL is issued at all until the responder exists (Phase 5b):
+  # pointing at a responder that is not there is worse than omitting it.
+  base_url: "https://pki.example.test"
+
+  # How long a generated leaf CRL is valid for (thisUpdate to nextUpdate).
+  crl_validity_hours: 24
+
+  # Embedded SQLite database holding issued/revoked records and the CRL
+  # number counter. Required, with no in-memory fallback: a restart that
+  # erases revocations is a security regression, not a durability
+  # inconvenience -- a certificate revoked during an incident would reappear
+  # as valid in the next CRL. Back this path with a real volume, not
+  # container-local scratch space.
+  store_path: "ca.db"
+
+  # Normally absent. Raises the number a FRESH store seeds its CRL counter
+  # with; an existing counter is never touched.
+  #
+  # A rebuilt store seeds from the wall clock, which is above anything the
+  # old store issued as long as the clock has not moved backwards. If it has
+  # -- a restored host with a bad time source -- the new sequence could land
+  # below numbers verifiers already hold, and RFC 5280 5.2.3 then lets them
+  # ignore every CRL this CA issues afterward. Nothing can recover the last
+  # number automatically, because the thing that remembered it is what was
+  # lost; an operator who does know it puts it here.
+  # crl_number_floor: "1756384000000"
 
 # Vault settings are unused until Phase 6.
 vault:

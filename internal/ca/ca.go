@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"math/big"
+	"net/url"
 	"time"
 )
 
@@ -18,6 +19,76 @@ import (
 // not required to match that choice.
 const minRSAKeyBits = 2048
 
+// issuanceClockSkewAllowance backdates a leaf's NotBefore so a verifier
+// whose clock trails this host's does not reject a certificate as
+// not-yet-valid. internal/api applies the same allowance to a CRL's
+// thisUpdate, and the ceremony to the certificates and CRL it signs.
+const issuanceClockSkewAllowance = 5 * time.Minute
+
+// LeafDistribution is the pair of URLs Issue writes into every leaf
+// certificate: where the CRL that governs the leaf is published, and where
+// the certificate that signed it can be fetched.
+//
+// Both are required, and Issue refuses to sign without them. The reason is
+// the same one that makes the ceremony's own URLs required (CeremonyParams):
+// an extension is fixed at signature time. A leaf issued today without a
+// distribution point can never gain one — it can only be revoked and
+// replaced — so "we will add it later" is not a thing this CA can do, and
+// the failure would surface at a relying party that cannot check revocation
+// rather than here.
+//
+// Note the absence of an OCSP field. It is deliberate and stays until the
+// responder exists (Phase 5b): a certificate that names an OCSP responder
+// which is not there is worse than one that names none, because a verifier
+// configured to require OCSP will fail closed against a URL that was never
+// going to answer.
+type LeafDistribution struct {
+	// CRLURL is the leaf's CRL distribution point — this service's own
+	// /crl, which covers the leaves this intermediate issued. It is not the
+	// root's CRL: that one covers the intermediate and is named in the
+	// intermediate's certificate instead.
+	CRLURL string
+	// IssuerCertURL is the AIA CA-Issuers pointer: where a relying party
+	// holding only the leaf can fetch the intermediate that signed it and
+	// continue building the path upward.
+	IssuerCertURL string
+}
+
+// Validate reports whether both distribution URLs are present and fetchable
+// in principle.
+func (d LeafDistribution) Validate() error {
+	if err := ValidateDistributionURL("CRL distribution point", d.CRLURL); err != nil {
+		return err
+	}
+	return ValidateDistributionURL("AIA CA-Issuers URL", d.IssuerCertURL)
+}
+
+// ValidateDistributionURL rejects a URL that would be embedded into a
+// certificate whose extensions cannot be edited afterward. Only http and
+// https are accepted: RFC 5280 §4.2.1.13 names HTTP as the interop baseline
+// for CRL distribution points, and a scheme a relying party cannot fetch is
+// the same as no distribution point at all.
+//
+// field names the setting being checked, so the caller's own vocabulary
+// ("RootCRLURL", "ca.base_url") appears in the error rather than this
+// function's. Callers add their own package prefix.
+func ValidateDistributionURL(field, raw string) error {
+	if raw == "" {
+		return fmt.Errorf("%s is not set", field)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s is not a valid URL: %w", field, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s must be an http or https URL, got scheme %q", field, u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s has no host: %q", field, raw)
+	}
+	return nil
+}
+
 // CA issues, and will (sub-task 2.5) revoke, X.509 certificates under one
 // issuer certificate, signing through an HSM-backed crypto.Signer. It never
 // holds the issuer's private key itself (docs/phases/phase-2-ca-core.md).
@@ -25,6 +96,25 @@ type CA struct {
 	cert    *x509.Certificate
 	signer  crypto.Signer
 	certTTL time.Duration
+	dist    LeafDistribution
+}
+
+// NewCA constructs a CA from an issuer certificate and signer a caller
+// already holds.
+//
+// LoadIntermediate is what the service itself uses: it reads the certificate
+// from disk and enforces the tier constraints (CA, not self-signed,
+// pathlen:0, key matches certificate) before building anything. This is the
+// unchecked constructor beneath it, for callers that obtained a validated
+// pair some other way — chiefly RunCeremony, which has the certificate it
+// just signed in hand, and tests. It performs no validation of its own, so
+// prefer LoadIntermediate anywhere the input came from configuration.
+//
+// dist may be left zero for a CA that will only build CRLs and never issue:
+// Issue validates it at the point of use rather than here, so a CRL-only
+// caller is not forced to invent URLs it has no use for.
+func NewCA(cert *x509.Certificate, signer crypto.Signer, certTTL time.Duration, dist LeafDistribution) *CA {
+	return &CA{cert: cert, signer: signer, certTTL: certTTL, dist: dist}
 }
 
 // Certificate returns the CA's own issuer certificate.
@@ -36,7 +126,26 @@ func (c *CA) Certificate() *x509.Certificate {
 // the CA's issuer certificate. A malformed, unparseable, or badly-signed
 // CSR is rejected rather than partially processed (CLAUDE.md §3.4).
 func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
+	// Checked before the CSR, because this is a statement about this CA
+	// rather than about the request: a CA with nowhere to publish
+	// revocation for what it signs does not issue at all. The alternative —
+	// sign it and omit the extension — produces a certificate whose
+	// revocation no relying party can ever discover, and there is no later
+	// point at which that can be repaired (CLAUDE.md §3.4).
+	if err := c.dist.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDistributionPoints, err)
+	}
 	if err := validateCSR(csr); err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	// NotBefore is backdated to absorb clock skew, so the window this leaf
+	// will claim is [now-skew, now+certTTL]. Both ends are checked against
+	// the issuer before anything is signed.
+	notBefore := now.Add(-issuanceClockSkewAllowance)
+	notAfter := now.Add(c.certTTL)
+	if err := c.checkIssuerCanCover(now, notAfter); err != nil {
 		return nil, err
 	}
 
@@ -49,14 +158,11 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 		return nil, err
 	}
 
-	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      csr.Subject,
-		// A short backdate absorbs clock skew between this host and
-		// whatever will validate the certificate first.
-		NotBefore:             now.Add(-5 * time.Minute),
-		NotAfter:              now.Add(c.certTTL),
+		SerialNumber:          serial,
+		Subject:               csr.Subject,
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
 		KeyUsage:              keyUsageFor(csr.PublicKey),
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
@@ -67,6 +173,13 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 		IPAddresses:           csr.IPAddresses,
 		EmailAddresses:        csr.EmailAddresses,
 		URIs:                  csr.URIs,
+		// Where this leaf's revocation status is published, and where the
+		// certificate that signed it can be fetched. Both point at this
+		// service (internal/api serves them), so they resolve for anyone who
+		// can reach the CA at all. No OCSPServer is set — see
+		// LeafDistribution for why an absent responder gets no pointer.
+		CRLDistributionPoints: []string{c.dist.CRLURL},
+		IssuingCertificateURL: []string{c.dist.IssuerCertURL},
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, template, c.cert, csr.PublicKey, c.signer)
@@ -74,6 +187,51 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 		return nil, fmt.Errorf("ca: CreateCertificate: %w", err)
 	}
 	return x509.ParseCertificate(der)
+}
+
+// checkIssuerCanCover refuses to sign anything the issuing certificate
+// cannot actually vouch for at the moment of issuance.
+//
+// Two distinct failures, both fail-closed (CLAUDE.md §3.4):
+//
+//   - The issuer is outside its own validity window. RFC 5280 §6.1.3
+//     validates every certificate in a path against the same instant, so a
+//     leaf signed by an expired issuer is invalid the moment it exists.
+//     Handing one to a caller who then deploys it is worse than refusing:
+//     the failure surfaces at whatever tries to use it, far from the cause.
+//   - The leaf would outlive the issuer. The certificate would advertise a
+//     NotAfter the chain cannot honor, and stop working when the issuer
+//     expires regardless of what it claims.
+//
+// # Rejected rather than clamped to the issuer's NotAfter
+//
+// This is the same choice, for the same reason, that the ceremony makes
+// when an intermediate would outlive its root (CeremonyParams.validate):
+// clamping hands back a certificate whose lifetime silently differs from
+// the configured one, and the holder discovers it at renewal time — or
+// does not, and is surprised by an early expiry.
+//
+// The operational consequence is deliberate and worth stating plainly: a
+// service configured with ca.cert_ttl_hours = N stops issuing N hours
+// before its intermediate expires, rather than quietly issuing
+// ever-shorter certificates as that date approaches. The remedy is the one
+// the platform already has — re-issue the intermediate from the root
+// ceremony (CLAUDE.md §3.7) — and a loud, dated refusal is what prompts it.
+func (c *CA) checkIssuerCanCover(now, notAfter time.Time) error {
+	if now.Before(c.cert.NotBefore) {
+		return fmt.Errorf("%w: issuer %q is not valid until %s",
+			ErrIssuerNotValid, c.cert.Subject.CommonName, c.cert.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(c.cert.NotAfter) {
+		return fmt.Errorf("%w: issuer %q expired at %s",
+			ErrIssuerNotValid, c.cert.Subject.CommonName, c.cert.NotAfter.Format(time.RFC3339))
+	}
+	if notAfter.After(c.cert.NotAfter) {
+		return fmt.Errorf("%w: a leaf valid until %s would outlive issuer %q, which expires at %s — reduce ca.cert_ttl_hours or re-issue the intermediate",
+			ErrValidityExceedsIssuer, notAfter.Format(time.RFC3339),
+			c.cert.Subject.CommonName, c.cert.NotAfter.Format(time.RFC3339))
+	}
+	return nil
 }
 
 // validateCSR checks a CSR's self-signature, subject, and key type before
@@ -117,8 +275,15 @@ func keyUsageFor(pub crypto.PublicKey) x509.KeyUsage {
 	switch pub.(type) {
 	case *rsa.PublicKey:
 		return x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
+	case *ecdsa.PublicKey:
+		return x509.KeyUsageDigitalSignature
 	default:
-		// ECDSA, and anything else validateCSR has already allowed.
+		// Unreachable: validateCSR runs first and allows only the two types
+		// above. The case is spelled out anyway, and returns the narrowest
+		// usage rather than a convenient one, so that widening
+		// validateCSR's allow-list without revisiting this function grants
+		// no capability by default. TestKeyUsageFor_CoversEveryAllowedKeyType
+		// pins the two lists together.
 		return x509.KeyUsageDigitalSignature
 	}
 }
