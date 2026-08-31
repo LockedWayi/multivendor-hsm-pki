@@ -146,9 +146,6 @@ func newTestCAAt(t *testing.T, baseURL string) (*ca.CA, pk11.VendorAdapter, pk11
 		t.Fatalf("LoadIntermediate: %v", err)
 	}
 
-	root := api.RootArtifacts{
-		CertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: result.RootCertDER}),
-		CRLPEM:  pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: result.RootCRLDER}),
-	}
+	root := api.RootArtifacts{CertDER: result.RootCertDER, CRLDER: result.RootCRLDER}
 	return c, adapter, interWS, root
 }
