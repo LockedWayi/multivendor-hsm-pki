@@ -121,7 +121,9 @@ and `/root.crl`, which is where the intermediate's AIA and CDP point.
 
 Every issued leaf in turn carries its own CRL distribution point
 (`<ca.base_url>/crl`) and AIA CA-Issuers pointer
-(`<ca.base_url>/intermediate.crt`), both served by this service, and the CA
+(`<ca.base_url>/intermediate.crt`), both served by this service as DER under
+the RFC 2585 media types a relying party following those URLs expects, and
+the CA
 refuses to issue at all if it has nowhere to publish revocation — an
 extension is fixed by its signature, so a certificate issued without a
 distribution point can never gain one. No OCSP URL is written anywhere until

@@ -84,6 +84,10 @@ ca:
   # a ceremony should be run with:
   #   -root-cert-url https://<this-host>/root.crt
   #   -root-crl-url  https://<this-host>/root.crl
+  # PEM on disk -- that is what the ceremony writes and what you copy
+  # between hosts. They are served as DER (application/pkix-cert and
+  # application/pkix-crl), because that is what a client following a CDP or
+  # an AIA pointer expects per RFC 2585; the conversion happens at startup.
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
 
