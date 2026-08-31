@@ -40,6 +40,7 @@ ca:
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
   store_path: "ca.db"
+  base_url: "https://pki.example.test"
 `
 
 func TestLoad_Success(t *testing.T) {
@@ -154,6 +155,7 @@ ca:
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
   store_path: "ca.db"
+  base_url: "https://pki.example.test"
 `
 	path := writeConfig(t, body)
 
@@ -183,6 +185,7 @@ ca:
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
   store_path: "ca.db"
+  base_url: "https://pki.example.test"
 `
 	path := writeConfig(t, body)
 
@@ -208,6 +211,7 @@ ca:
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
   store_path: "ca.db"
+  base_url: "https://pki.example.test"
 `
 	path := writeConfig(t, body)
 
@@ -228,6 +232,7 @@ func TestLoad_RequiredCAFieldsRejectEmpty(t *testing.T) {
 		"root_cert_path",
 		"root_crl_path",
 		"store_path",
+		"base_url",
 	}
 	all := map[string]string{
 		"intermediate_key_label": `"ca-intermediate-key-v1"`,
@@ -235,6 +240,7 @@ func TestLoad_RequiredCAFieldsRejectEmpty(t *testing.T) {
 		"root_cert_path":         `"root.pem"`,
 		"root_crl_path":          `"root-crl.pem"`,
 		"store_path":             `"ca.db"`,
+		"base_url":               `"https://pki.example.test"`,
 	}
 
 	for _, omitted := range fields {
@@ -360,5 +366,53 @@ func TestNewVendorAdapter_UnknownAdapterFails(t *testing.T) {
 	cfg := &Config{PKCS11: PKCS11Config{Adapter: "quantum-hsm"}}
 	if _, err := cfg.NewVendorAdapter(); err == nil {
 		t.Fatal("NewVendorAdapter with an unknown adapter name succeeded, want an error")
+	}
+}
+
+// TestLoad_RejectsUnusableBaseURL pins that ca.base_url is validated as what
+// it becomes — the stem of a URL embedded in every issued certificate —
+// rather than merely being non-empty.
+//
+// The cost of accepting a bad one is asymmetric: startup succeeds, issuance
+// succeeds, and the defect surfaces only when a relying party tries to fetch
+// a CRL months later. By then the only fix is re-issuing every certificate
+// signed in the meantime, because an extension cannot be edited after the
+// signature.
+func TestLoad_RejectsUnusableBaseURL(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"unfetchable scheme", "ldap://pki.example.test"},
+		{"no scheme at all", "pki.example.test"},
+		{"no host", "https://"},
+		{"carries a query string", "https://pki.example.test/?v=1"},
+		{"carries a fragment", "https://pki.example.test/#ca"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+			body := strings.Replace(validSoftHSM2Config,
+				`base_url: "https://pki.example.test"`,
+				`base_url: "`+tc.value+`"`, 1)
+			if _, err := Load(writeConfig(t, body)); err == nil {
+				t.Fatalf("Load with ca.base_url %q succeeded, want an error", tc.value)
+			}
+		})
+	}
+}
+
+// TestLoad_AcceptsBaseURLWithPathPrefix covers the deployment that is not a
+// bare origin: a CA served under a path on a shared host. The prefix has to
+// survive, because internal/api.LeafDistributionFor appends the route paths
+// to whatever this holds.
+func TestLoad_AcceptsBaseURLWithPathPrefix(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	body := strings.Replace(validSoftHSM2Config,
+		`base_url: "https://pki.example.test"`,
+		`base_url: "https://shared.example.test/pki/"`, 1)
+
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CA.BaseURL != "https://shared.example.test/pki/" {
+		t.Fatalf("BaseURL = %q, want the configured value unchanged", cfg.CA.BaseURL)
 	}
 }

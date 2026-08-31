@@ -9,11 +9,13 @@ package config
 import (
 	"fmt"
 	"math/big"
+	"net/url"
 	"os"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
 	pkcs11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
@@ -101,6 +103,18 @@ type CAConfig struct {
 	// static artifact at the intermediate's CRL distribution point. It
 	// covers exactly one certificate: the intermediate itself.
 	RootCRLPath string `yaml:"root_crl_path"`
+	// BaseURL is the externally reachable origin of this service, and the
+	// stem of the CRL distribution point and AIA CA-Issuers URL written into
+	// every certificate it issues (internal/api.LeafDistributionFor).
+	//
+	// Required, with no default. There is nothing sensible to default it to:
+	// server.listen_addr is what the process binds, which behind a load
+	// balancer or an ingress is not what a relying party can resolve, and a
+	// wrong guess here is not a startup failure — it is a correctly-signed
+	// certificate pointing at a CRL nobody can fetch, discovered by a
+	// verifier months later. Getting it wrong is recoverable only by
+	// re-issuing every certificate signed since, so the operator states it.
+	BaseURL string `yaml:"base_url"`
 	// CRLValidityHours is how long a generated CRL is valid for
 	// (thisUpdate to nextUpdate). Optional — defaulted by Load when zero.
 	CRLValidityHours int `yaml:"crl_validity_hours"`
@@ -191,10 +205,14 @@ func Load(path string) (*Config, error) {
 		"ca.root_cert_path":         c.CA.RootCertPath,
 		"ca.root_crl_path":          c.CA.RootCRLPath,
 		"ca.store_path":             c.CA.StorePath,
+		"ca.base_url":               c.CA.BaseURL,
 	} {
 		if v == "" {
 			return nil, fmt.Errorf("config: %s is empty", field)
 		}
+	}
+	if err := validateBaseURL(c.CA.BaseURL); err != nil {
+		return nil, err
 	}
 	if c.CA.CRLNumberFloor != "" {
 		if _, ok := new(big.Int).SetString(c.CA.CRLNumberFloor, 10); !ok {
@@ -206,6 +224,32 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &c, nil
+}
+
+// validateBaseURL checks ca.base_url the way the certificate extensions it
+// will end up in demand.
+//
+// The scheme/host rules are shared with the ceremony's own distribution
+// URLs (ca.ValidateDistributionURL) — one rule, one implementation, because
+// they are the same rule: a URL that will be embedded in a certificate has
+// to be one a relying party can fetch.
+//
+// The query/fragment rejection is specific to a *base* URL. Path components
+// are appended to it, so "https://pki.example.test/?v=1" would compose into
+// "https://pki.example.test/?v=1/crl" — a URL that parses, points nowhere,
+// and would be discovered only by whoever tried to fetch the CRL.
+func validateBaseURL(raw string) error {
+	if err := ca.ValidateDistributionURL("ca.base_url", raw); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("config: ca.base_url is not a valid URL: %w", err)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("config: ca.base_url %q must not carry a query string or fragment: certificate paths are appended to it", raw)
+	}
+	return nil
 }
 
 // ParseCurve maps a config ca.curve string to a pkcs11.ECCurve.

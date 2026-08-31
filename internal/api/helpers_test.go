@@ -41,6 +41,23 @@ func requireSoftHSM2(t *testing.T) string {
 // exercise a deployment this platform rejects.
 func newTestCA(t *testing.T) (*ca.CA, pk11.VendorAdapter, pk11.Workspace, api.RootArtifacts) {
 	t.Helper()
+	return newTestCAAt(t, testBaseURL)
+}
+
+// testBaseURL stands in for a deployment's externally reachable origin in
+// the tests that never fetch what the URLs point at. The tests that do —
+// the ones proving a leaf's CDP and AIA actually resolve — pass the live
+// httptest listener's address to newTestCAAt instead, because a placeholder
+// would prove nothing about whether the paths match the routes.
+const testBaseURL = "https://pki.example.test"
+
+// newTestCAAt is newTestCA with the base URL the issued leaves will point
+// at. The distribution URLs are fixed when the CA is constructed, so a test
+// that wants them to resolve against its own httptest server has to know
+// the listener's address before NewServer is called — see
+// TestIssuedLeafDistributionPointsResolve for how that ordering is done.
+func newTestCAAt(t *testing.T, baseURL string) (*ca.CA, pk11.VendorAdapter, pk11.Workspace, api.RootArtifacts) {
+	t.Helper()
 	modulePath := requireSoftHSM2(t)
 
 	dir := t.TempDir()
@@ -119,10 +136,11 @@ func newTestCA(t *testing.T) (*ca.CA, pk11.VendorAdapter, pk11.Workspace, api.Ro
 	// exercise the real startup path rather than a shortcut around it.
 	resolvePIN := func() ([]byte, error) { return []byte(interPIN), nil }
 	c, err := ca.LoadIntermediate(ctx, adapter, interWS, pk11.SessionOptions{}, resolvePIN, ca.LoadIntermediateParams{
-		KeyLabel: interKeyLabel,
-		CertPath: interCertPath,
-		Curve:    pk11.P256,
-		CertTTL:  time.Hour,
+		KeyLabel:     interKeyLabel,
+		CertPath:     interCertPath,
+		Curve:        pk11.P256,
+		CertTTL:      time.Hour,
+		Distribution: api.LeafDistributionFor(baseURL),
 	})
 	if err != nil {
 		t.Fatalf("LoadIntermediate: %v", err)

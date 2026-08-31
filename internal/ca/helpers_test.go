@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
@@ -102,4 +103,12 @@ func withSession[T any](t *testing.T, ctx context.Context, adapter pk11.VendorAd
 	}
 	defer adapter.CloseSession(ctx, s)
 	return fn(s)
+}
+
+// testLeafDistribution is the CDP/AIA pair every test-built CA issues under.
+// Issue refuses to sign without one (ca.ErrNoDistributionPoints), which is
+// deliberate: a leaf whose revocation cannot be published is not a
+// certificate this platform is willing to produce.
+func testLeafDistribution() ca.LeafDistribution {
+	return ca.LeafDistribution{CRLURL: testLeafCRLURL, IssuerCertURL: testLeafIssuerURL}
 }

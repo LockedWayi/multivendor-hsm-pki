@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"net/url"
 	"time"
 
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
@@ -100,11 +99,11 @@ func (p *CeremonyParams) validate() error {
 	if p.RootKeyLabel == p.IntermediateKeyLabel {
 		return fmt.Errorf("ca: ceremony refuses to use one key label (%q) for both tiers", p.RootKeyLabel)
 	}
-	if err := validateDistributionURL("RootCRLURL", p.RootCRLURL); err != nil {
-		return err
+	if err := ValidateDistributionURL("RootCRLURL", p.RootCRLURL); err != nil {
+		return fmt.Errorf("ca: ceremony: %w (CeremonyParams documents why this is required)", err)
 	}
-	if err := validateDistributionURL("RootCertURL", p.RootCertURL); err != nil {
-		return err
+	if err := ValidateDistributionURL("RootCertURL", p.RootCertURL); err != nil {
+		return fmt.Errorf("ca: ceremony: %w (CeremonyParams documents why this is required)", err)
 	}
 	// An intermediate that outlives its issuer advertises a validity the
 	// chain cannot honor: RFC 5280 path validation requires every
@@ -117,28 +116,6 @@ func (p *CeremonyParams) validate() error {
 	if p.IntermediateValidity > p.RootValidity {
 		return fmt.Errorf("ca: intermediate validity (%s) exceeds root validity (%s) — the intermediate would outlive the root that signed it",
 			p.IntermediateValidity, p.RootValidity)
-	}
-	return nil
-}
-
-// validateDistributionURL rejects a URL that would be embedded into a
-// certificate this ceremony can never re-issue without the root. Only
-// http/https are accepted: RFC 5280 §4.2.1.13 names HTTP as the interop
-// baseline for CRL distribution points, and a scheme a relying party cannot
-// fetch is the same as no distribution point at all.
-func validateDistributionURL(field, raw string) error {
-	if raw == "" {
-		return fmt.Errorf("ca: ceremony requires %s to be set — see CeremonyParams for why it is not optional", field)
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("ca: %s is not a valid URL: %w", field, err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("ca: %s must be an http or https URL, got scheme %q", field, u.Scheme)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("ca: %s has no host: %q", field, raw)
 	}
 	return nil
 }

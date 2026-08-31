@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/api"
+	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 	"github.com/LockedWayi/hsm-pki-platform/internal/store"
 )
 
@@ -493,4 +494,248 @@ func TestRootArtifactEndpoints(t *testing.T) {
 			t.Fatalf("AIA %q does not end in /root.crt, the path this server serves", cert.IssuingCertificateURL[0])
 		}
 	})
+}
+
+// TestIntermediateCertEndpoint covers GET /intermediate.crt, the AIA
+// CA-Issuers target of every leaf this service issues.
+//
+// A relying party that holds only a leaf follows this URL to obtain the
+// certificate that signed it. The endpoint therefore has to serve the
+// service's *own* intermediate — not the root, and not whatever certificate
+// happens to be at hand — or path building silently ends at the wrong
+// issuer.
+func TestIntermediateCertEndpoint(t *testing.T) {
+	c, adapter, ws, rootArtifacts := newTestCA(t)
+	srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + api.IntermediateCertPath)
+	if err != nil {
+		t.Fatalf("GET %s: %v", api.IntermediateCertPath, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	block, _ := pem.Decode(body)
+	if block == nil || block.Type != "CERTIFICATE" {
+		t.Fatal("response is not a CERTIFICATE PEM block")
+	}
+	served, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parsing served intermediate: %v", err)
+	}
+	if !served.Equal(c.Certificate()) {
+		t.Fatalf("served certificate is %q, want this service's own intermediate %q",
+			served.Subject, c.Certificate().Subject)
+	}
+	// The distinction that matters: this is the issuer, not the trust
+	// anchor. A self-signed certificate here would mean the endpoint is
+	// handing out a root, which /root.crt exists for and which a relying
+	// party must obtain out of band anyway.
+	if err := served.CheckSignatureFrom(served); err == nil {
+		t.Fatal("served certificate is self-signed, so it is a root, not the intermediate")
+	}
+}
+
+// TestIntermediateCertEndpoint_MissingIssuerFailsHonestly pins the absent
+// case. NewServer takes the issuer by value and cannot reject a nil one, so
+// the handler must answer 503 rather than 200 with an empty body: a relying
+// party handed a successful, empty response has no way to tell "the issuer
+// is unavailable" from "the issuer is this zero-length certificate".
+func TestIntermediateCertEndpoint_MissingIssuerFailsHonestly(t *testing.T) {
+	srv := httptest.NewServer(api.NewServer(nil, nil, pk11.Workspace{}, store.NewMemory(), 24*time.Hour, api.RootArtifacts{}, testLogger()))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + api.IntermediateCertPath)
+	if err != nil {
+		t.Fatalf("GET %s: %v", api.IntermediateCertPath, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+// TestIssuedLeafDistributionPointsResolve is sub-task 3b.4's Done-when
+// criterion, end to end: the URLs inside a freshly issued certificate are
+// fetched, and what comes back is the CRL that governs *that* leaf and the
+// certificate that actually signed it.
+//
+// Note the ordering the test has to perform, because a deployment performs
+// the same one. A certificate's extensions are fixed by its signature, so
+// the CA must know the service's external URL before it issues anything —
+// which means the listener's address has to exist before the handler is
+// built. httptest.NewUnstartedServer gives exactly that: a bound listener
+// whose address is known, with the handler attached afterwards. In
+// production the same ordering is why ca.base_url is operator-supplied
+// configuration rather than something the process discovers about itself.
+func TestIssuedLeafDistributionPointsResolve(t *testing.T) {
+	srv := httptest.NewUnstartedServer(nil)
+	baseURL := "http://" + srv.Listener.Addr().String()
+
+	c, adapter, ws, rootArtifacts := newTestCAAt(t, baseURL)
+	srv.Config.Handler = api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger())
+	srv.Start()
+	defer srv.Close()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file",
+		bytes.NewReader(csrPEMFor(t, priv, "resolve.example.test")))
+	if err != nil {
+		t.Fatalf("POST /certificates: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want 201: %s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	block, _ := pem.Decode(body)
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parsing issued leaf: %v", err)
+	}
+
+	if len(leaf.CRLDistributionPoints) != 1 || len(leaf.IssuingCertificateURL) != 1 {
+		t.Fatalf("leaf carries CDP %v and AIA %v, want exactly one of each",
+			leaf.CRLDistributionPoints, leaf.IssuingCertificateURL)
+	}
+	cdpURL := leaf.CRLDistributionPoints[0]
+	aiaURL := leaf.IssuingCertificateURL[0]
+
+	t.Run("the AIA CA-Issuers URL returns the certificate that signed the leaf", func(t *testing.T) {
+		issuer := getCertificate(t, aiaURL)
+		if err := leaf.CheckSignatureFrom(issuer); err != nil {
+			t.Fatalf("the certificate at %s did not sign the leaf: %v", aiaURL, err)
+		}
+		// AKI/SKI is what a path builder actually matches on, so a served
+		// certificate that verifies but whose key identifier does not match
+		// would still break automated path building.
+		if !bytes.Equal(leaf.AuthorityKeyId, issuer.SubjectKeyId) {
+			t.Fatalf("leaf AKI %x does not match the served issuer's SKI %x", leaf.AuthorityKeyId, issuer.SubjectKeyId)
+		}
+	})
+
+	t.Run("the CRL distribution point returns a CRL this leaf's issuer signed", func(t *testing.T) {
+		crl := getCRL(t, cdpURL)
+		if err := crl.CheckSignatureFrom(c.Certificate()); err != nil {
+			t.Fatalf("the CRL at %s was not signed by the leaf's issuer: %v", cdpURL, err)
+		}
+	})
+
+	// The strongest form of "the CRL that governs that leaf": revoke it and
+	// confirm it appears at the URL the certificate itself names. A CDP that
+	// serves a valid but unrelated CRL would pass every check above and
+	// still leave the certificate unrevocable in practice.
+	t.Run("revoking the leaf makes it appear at its own CDP", func(t *testing.T) {
+		revokeResp, err := http.Post(srv.URL+"/certificates/"+leaf.SerialNumber.String()+"/revoke", "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST revoke: %v", err)
+		}
+		defer revokeResp.Body.Close()
+		if revokeResp.StatusCode != http.StatusNoContent {
+			t.Fatalf("revoke status = %d, want 204", revokeResp.StatusCode)
+		}
+
+		crl := getCRL(t, cdpURL)
+		for _, entry := range crl.RevokedCertificateEntries {
+			if entry.SerialNumber.Cmp(leaf.SerialNumber) == 0 {
+				return
+			}
+		}
+		t.Fatalf("serial %s is not listed in the CRL served at its own distribution point %s",
+			leaf.SerialNumber, cdpURL)
+	})
+}
+
+// getCertificate fetches a PEM certificate from url.
+func getCertificate(t *testing.T, url string) *x509.Certificate {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status = %d, want 200", url, resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	block, _ := pem.Decode(body)
+	if block == nil || block.Type != "CERTIFICATE" {
+		t.Fatalf("GET %s did not return a CERTIFICATE PEM block", url)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parsing the certificate served at %s: %v", url, err)
+	}
+	return cert
+}
+
+// getCRL fetches a DER CRL from url — the encoding GET /crl serves, which is
+// what a relying party following a distribution point expects.
+func getCRL(t *testing.T, url string) *x509.RevocationList {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s: status = %d, want 200", url, resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	crl, err := x509.ParseRevocationList(body)
+	if err != nil {
+		t.Fatalf("parsing the CRL served at %s: %v", url, err)
+	}
+	return crl
+}
+
+// TestLeafDistributionFor covers URL composition on its own, without an HSM.
+// The end-to-end proof that these paths match real routes is
+// TestIssuedLeafDistributionPointsResolve; this covers the shapes of
+// baseURL an operator may reasonably write in config.yaml.
+func TestLeafDistributionFor(t *testing.T) {
+	for _, tc := range []struct {
+		name, base, wantCRL, wantIssuer string
+	}{
+		{
+			"bare origin",
+			"https://pki.example.test",
+			"https://pki.example.test/crl",
+			"https://pki.example.test/intermediate.crt",
+		},
+		{
+			// Tolerated rather than rejected: a trailing slash is a typo an
+			// operator should not have to lose a certificate over, and the
+			// resulting URL is unambiguous either way.
+			"trailing slash",
+			"https://pki.example.test/",
+			"https://pki.example.test/crl",
+			"https://pki.example.test/intermediate.crt",
+		},
+		{
+			// A CA served under a path on a shared host: the prefix has to
+			// survive, or every URL points at the host's root.
+			"path prefix",
+			"https://shared.example.test/pki",
+			"https://shared.example.test/pki/crl",
+			"https://shared.example.test/pki/intermediate.crt",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := api.LeafDistributionFor(tc.base)
+			if got.CRLURL != tc.wantCRL {
+				t.Fatalf("CRLURL = %q, want %q", got.CRLURL, tc.wantCRL)
+			}
+			if got.IssuerCertURL != tc.wantIssuer {
+				t.Fatalf("IssuerCertURL = %q, want %q", got.IssuerCertURL, tc.wantIssuer)
+			}
+		})
+	}
 }
