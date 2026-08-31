@@ -901,7 +901,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	//
 	// Extractable: true on the EC key pair is the one deliberate exception
 	// to this platform's default (KeyPairRequest's doc comment, CLAUDE.md
-	// §3.7) — it is what makes this key backup-eligible at all.
+	// §3.1) — it is what makes this key backup-eligible at all.
 	// CKA_SENSITIVE stays forced true regardless (GenerateKeyPair never
 	// takes it as a parameter), so C_WrapKey is the only door this key can
 	// leave through — C_GetAttributeValue still refuses it, per the finding

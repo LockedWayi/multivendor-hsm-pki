@@ -37,10 +37,18 @@ of duties. The operator needs:
 - The vendor module path and adapter name (`softhsm2` or `protectserver`).
 - Every certificate parameter decided **before** the ceremony starts,
   because a ceremony is irreversible (CLAUDE.md §3.9): subject names, the
-  EC curve, validity periods, and — the one that is easiest to get wrong —
-  the root CRL and root certificate distribution URLs. Those two URLs are
-  baked into the intermediate's extensions at signature time and can never
-  be changed without bringing the offline root back out to re-sign.
+  EC curve, and — the one that is easiest to get wrong — the root CRL and
+  root certificate distribution URLs. Those two URLs are baked into the
+  intermediate's extensions at signature time and can never be changed
+  without bringing the offline root back out to re-sign. Validity periods
+  are the one exception worth flagging: `CeremonyParams` supports
+  `RootValidity`, `IntermediateValidity` and `RootCRLValidity`, but
+  `hsm-pki-keytool ceremony` does not expose them as flags today — every
+  ceremony run through the CLI gets the platform defaults (ten years,
+  five years, five years) whether that is what the operator wanted or not.
+  `CeremonyParams.validate()` still rejects an intermediate that would
+  outlive its root even at the default values, so this is a missing
+  option, not a missing safety check.
 
 `cmd/hsm-pki-keytool`'s `ceremony` subcommand validates every one of these
 before it generates the first key (`internal/ca/ceremony.go`,

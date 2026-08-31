@@ -83,7 +83,7 @@ type CeremonyParams struct {
 	// without it, C_WrapKey has nothing to export and a lost root token has
 	// no recovery but a fresh ceremony and cross-signing. It does not weaken
 	// CKA_SENSITIVE, which GenerateKeyPair still forces true unconditionally
-	// (CLAUDE.md §3.7, docs/pkcs11-vendor-notes.md "A non-sensitive private
+	// (CLAUDE.md §3.1, docs/pkcs11-vendor-notes.md "A non-sensitive private
 	// key really is readable here") — C_WrapKey is a different door than
 	// C_GetAttributeValue, and only Extractable governs it.
 	RootKeyExtractable bool
