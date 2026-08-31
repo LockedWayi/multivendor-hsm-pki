@@ -7,76 +7,85 @@ import (
 	"time"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/api"
+	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
 	"github.com/LockedWayi/hsm-pki-platform/internal/store"
 )
 
 func TestHealthz_AlwaysSucceeds(t *testing.T) {
-	c, adapter, ws, rootArtifacts := newTestCA(t)
-	records := store.NewMemory()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-	defer srv.Close()
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		c, adapter, ws, rootArtifacts := newTestCA(t, b)
+		records := store.NewMemory()
+		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
+		defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/healthz")
-	if err != nil {
-		t.Fatalf("GET /healthz: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
+		resp, err := http.Get(srv.URL + "/healthz")
+		if err != nil {
+			t.Fatalf("GET /healthz: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+	})
 }
 
 func TestHealthz_SucceedsEvenAfterAdapterClosed(t *testing.T) {
-	c, adapter, ws, rootArtifacts := newTestCA(t)
-	records := store.NewMemory()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-	defer srv.Close()
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		c, adapter, ws, rootArtifacts := newTestCA(t, b)
+		records := store.NewMemory()
+		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
+		defer srv.Close()
 
-	adapter.Close()
+		adapter.Close()
 
-	resp, err := http.Get(srv.URL + "/healthz")
-	if err != nil {
-		t.Fatalf("GET /healthz: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want %d — /healthz must not depend on the HSM", resp.StatusCode, http.StatusOK)
-	}
+		resp, err := http.Get(srv.URL + "/healthz")
+		if err != nil {
+			t.Fatalf("GET /healthz: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d — /healthz must not depend on the HSM", resp.StatusCode, http.StatusOK)
+		}
+	})
 }
 
 func TestHealthReadyz_SucceedsWhenAdapterIsUp(t *testing.T) {
-	c, adapter, ws, rootArtifacts := newTestCA(t)
-	records := store.NewMemory()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-	defer srv.Close()
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		c, adapter, ws, rootArtifacts := newTestCA(t, b)
+		records := store.NewMemory()
+		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
+		defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/readyz")
-	if err != nil {
-		t.Fatalf("GET /readyz: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
+		resp, err := http.Get(srv.URL + "/readyz")
+		if err != nil {
+			t.Fatalf("GET /readyz: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+	})
 }
 
 // TestHealthReadyz_FailsWhenAdapterClosed is sub-task 2.6's own Done-when
 // criterion, alongside TestHealthz_SucceedsEvenAfterAdapterClosed above:
 // /readyz fails when the adapter is closed while /healthz still succeeds.
 func TestHealthReadyz_FailsWhenAdapterClosed(t *testing.T) {
-	c, adapter, ws, rootArtifacts := newTestCA(t)
-	records := store.NewMemory()
-	srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-	defer srv.Close()
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		c, adapter, ws, rootArtifacts := newTestCA(t, b)
+		records := store.NewMemory()
+		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
+		defer srv.Close()
 
-	adapter.Close()
+		adapter.Close()
 
-	resp, err := http.Get(srv.URL + "/readyz")
-	if err != nil {
-		t.Fatalf("GET /readyz: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d after closing the adapter", resp.StatusCode, http.StatusServiceUnavailable)
-	}
+		resp, err := http.Get(srv.URL + "/readyz")
+		if err != nil {
+			t.Fatalf("GET /readyz: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want %d after closing the adapter", resp.StatusCode, http.StatusServiceUnavailable)
+		}
+	})
 }

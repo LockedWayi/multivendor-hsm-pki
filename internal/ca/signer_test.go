@@ -22,14 +22,17 @@ import (
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
-// newTestSigner provisions a fresh SoftHSM2 token, generates an EC P-256
-// key pair on it, and returns a ready-to-use *ca.Signer over that key.
-func newTestSigner(t *testing.T) *ca.Signer {
+// newTestSigner generates an EC P-256 key pair on the backend's primary
+// token and returns a ready-to-use *ca.Signer over it.
+//
+// The key label is run-scoped: a vendor's tokens persist between runs, so a
+// fixed label would collide on the second run (see hsmtest.Backend.RunID).
+func newTestSigner(t *testing.T, b *ceremonyBackend) *ca.Signer {
 	t.Helper()
-	adapter, ws, resolvePIN := newTestAdapter(t)
+	adapter, ws, resolvePIN := newTestAdapter(t, b)
 	ctx := context.Background()
 
-	const keyLabel = "ca-signer-key"
+	keyLabel := b.label("signer-key")
 	_, err := withSession(t, ctx, adapter, ws, resolvePIN, func(s *pk11.Session) (struct{}, error) {
 		_, err := adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
 			Curve: pk11.P256, Label: keyLabel, Sign: true, Verify: true,
@@ -48,84 +51,94 @@ func newTestSigner(t *testing.T) *ca.Signer {
 }
 
 func TestSigner_RoundTrip(t *testing.T) {
-	signer := newTestSigner(t)
+	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
+		signer := newTestSigner(t, b)
 
-	digest := sha256.Sum256([]byte("hsm-pki-platform phase 2 signer"))
-	sig, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
+		digest := sha256.Sum256([]byte("hsm-pki-platform phase 2 signer"))
+		sig, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+		if err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
 
-	pub, ok := signer.Public().(*ecdsa.PublicKey)
-	if !ok {
-		t.Fatalf("Public() = %T, want *ecdsa.PublicKey", signer.Public())
-	}
-	if !ecdsaVerifyASN1(pub, digest[:], sig) {
-		t.Fatal("crypto/ecdsa rejected the signer's own signature")
-	}
+		pub, ok := signer.Public().(*ecdsa.PublicKey)
+		if !ok {
+			t.Fatalf("Public() = %T, want *ecdsa.PublicKey", signer.Public())
+		}
+		if !ecdsaVerifyASN1(pub, digest[:], sig) {
+			t.Fatal("crypto/ecdsa rejected the signer's own signature")
+		}
+	})
 }
 
 func TestSigner_TamperedDigestFailsVerification(t *testing.T) {
-	signer := newTestSigner(t)
+	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
+		signer := newTestSigner(t, b)
 
-	digest := sha256.Sum256([]byte("hsm-pki-platform phase 2 signer"))
-	sig, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
+		digest := sha256.Sum256([]byte("hsm-pki-platform phase 2 signer"))
+		sig, err := signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+		if err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
 
-	pub := signer.Public().(*ecdsa.PublicKey)
-	tampered := digest
-	tampered[0] ^= 0xFF
-	if ecdsaVerifyASN1(pub, tampered[:], sig) {
-		t.Fatal("crypto/ecdsa accepted a signature over a tampered digest")
-	}
+		pub := signer.Public().(*ecdsa.PublicKey)
+		tampered := digest
+		tampered[0] ^= 0xFF
+		if ecdsaVerifyASN1(pub, tampered[:], sig) {
+			t.Fatal("crypto/ecdsa accepted a signature over a tampered digest")
+		}
+	})
 }
 
 func TestSigner_WrongHashRejected(t *testing.T) {
-	signer := newTestSigner(t)
+	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
+		signer := newTestSigner(t, b)
 
-	digest := sha256.Sum256([]byte("wrong hash"))
-	if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA512); err == nil {
-		t.Fatal("Sign with a mismatched hash function succeeded, want an error")
-	}
+		digest := sha256.Sum256([]byte("wrong hash"))
+		if _, err := signer.Sign(rand.Reader, digest[:], crypto.SHA512); err == nil {
+			t.Fatal("Sign with a mismatched hash function succeeded, want an error")
+		}
+	})
 }
 
 func TestSigner_WrongDigestLengthRejected(t *testing.T) {
-	signer := newTestSigner(t)
+	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
+		signer := newTestSigner(t, b)
 
-	if _, err := signer.Sign(rand.Reader, []byte{1, 2, 3}, crypto.SHA256); err == nil {
-		t.Fatal("Sign with a short digest succeeded, want an error")
-	}
+		if _, err := signer.Sign(rand.Reader, []byte{1, 2, 3}, crypto.SHA256); err == nil {
+			t.Fatal("Sign with a short digest succeeded, want an error")
+		}
+	})
 }
 
 // TestSigner_SelfSignedCertificate is sub-task 2.2's own Done-when
 // criterion: x509.CreateCertificate produces a certificate signed by an
 // HSM-resident key, and cert.CheckSignatureFrom(issuer) accepts it.
 func TestSigner_SelfSignedCertificate(t *testing.T) {
-	signer := newTestSigner(t)
+	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
+		signer := newTestSigner(t, b)
 
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "hsm-pki-platform test root"},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: "hsm-pki-platform test root"},
+			NotBefore:             time.Now().Add(-time.Minute),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+			BasicConstraintsValid: true,
+			IsCA:                  true,
+		}
 
-	der, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
-	if err != nil {
-		t.Fatalf("x509.CreateCertificate: %v", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("x509.ParseCertificate: %v", err)
-	}
-	if err := cert.CheckSignatureFrom(cert); err != nil {
-		t.Fatalf("CheckSignatureFrom(self): %v", err)
-	}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, signer.Public(), signer)
+		if err != nil {
+			t.Fatalf("x509.CreateCertificate: %v", err)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatalf("x509.ParseCertificate: %v", err)
+		}
+		if err := cert.CheckSignatureFrom(cert); err != nil {
+			t.Fatalf("CheckSignatureFrom(self): %v", err)
+		}
+	})
 }
 
 func ecdsaVerifyASN1(pub *ecdsa.PublicKey, digest, sig []byte) bool {

@@ -28,6 +28,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   maintainer's ProtectServer development tokens, that is all of them.
 
 ### Added
+- **`internal/hsmtest`**, the single registry every HSM-touching test now
+  acquires its backend from, and **`docs/test-matrix.md`**, the inventory of
+  what runs where. Before this, `internal/ca` and `internal/api` each carried
+  their own copy of "provision a SoftHSM2 token, build an adapter, find the
+  workspace", which is why 65 tests across the CA, the HTTP surface and both
+  commands ran against SoftHSM2 alone. They now run against every configured
+  backend as a subtest per vendor: a full run executes 59 vendor-parameterised
+  subtests on each of SoftHSM2 and ProtectServer, up from 12.
+  Adding nShield and Luna (Phase 7) is one registry entry and an adapter.
 - **`docs/threat-model.md`** (Phase 3b sub-task 3b.5): assets ordered by what
   their loss costs, six trust boundaries, eight attacker classes, and for
   each one what a compromise yields *and* what it still does not. The

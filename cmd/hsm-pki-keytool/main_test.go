@@ -6,90 +6,78 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
 )
 
 func requireSoftHSM2(t *testing.T) string {
 	t.Helper()
-	modulePath := os.Getenv("SOFTHSM2_MODULE")
-	if modulePath == "" {
-		modulePath = "/usr/lib/softhsm/libsofthsm2.so"
-	}
-	if _, err := os.Stat(modulePath); err != nil {
-		t.Skip("SoftHSM2 module not found — run inside the dev container (see CONTRIBUTING.md)")
-	}
-	return modulePath
+	return hsmtest.RequireSoftHSM2(t)
 }
 
-// initTwoTokens provisions two independent SoftHSM2 tokens (root,
-// intermediate) under a fresh, isolated token directory and points
-// SOFTHSM2_CONF at it for the duration of the test.
-func initTwoTokens(t *testing.T) (modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv string) {
+// initTwoTokens exposes the backend's two tokens to a CLI test: it puts the
+// PINs into environment variables, because the command takes the *name* of
+// the variable rather than a PIN value (CLAUDE.md §3.1), and hands back the
+// labels the flags need.
+//
+// It used to provision SoftHSM2 tokens inline, which is why every ceremony
+// CLI test ran against one vendor. The tokens now come from
+// internal/hsmtest, so these run wherever the environment provides a
+// backend (CLAUDE.md §2.4).
+func initTwoTokens(t *testing.T, b *hsmtest.Backend) (rootPINEnv, interPINEnv string) {
 	t.Helper()
-	modulePath = requireSoftHSM2(t)
-
-	dir := t.TempDir()
-	tokenDir := filepath.Join(dir, "tokens")
-	if err := os.MkdirAll(tokenDir, 0700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	confPath := filepath.Join(dir, "softhsm2.conf")
-	conf := "directories.tokendir = " + tokenDir + "\n" +
-		"objectstore.backend = file\nlog.level = ERROR\n"
-	if err := os.WriteFile(confPath, []byte(conf), 0600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	t.Setenv("SOFTHSM2_CONF", confPath)
-
-	rootLabel, interLabel = "keytool-root-token", "keytool-intermediate-token"
 	rootPINEnv, interPINEnv = "KEYTOOL_TEST_ROOT_PIN", "KEYTOOL_TEST_INTER_PIN"
-	t.Setenv(rootPINEnv, "111111")
-	t.Setenv(interPINEnv, "222222")
-
-	for _, tok := range []struct{ label, pin string }{
-		{rootLabel, "111111"},
-		{interLabel, "222222"},
-	} {
-		cmd := exec.Command("softhsm2-util", "--init-token", "--free",
-			"--label", tok.label, "--so-pin", "000000", "--pin", tok.pin)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("softhsm2-util --init-token (%s): %v: %s", tok.label, err, out)
-		}
-	}
-	return modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv
+	t.Setenv(rootPINEnv, b.SecondaryPIN)
+	t.Setenv(interPINEnv, b.PrimaryPIN)
+	return rootPINEnv, interPINEnv
 }
 
 // ceremonyArgs builds a complete, valid flag set, so each test can mutate
 // exactly the one thing it is about.
-func ceremonyArgs(modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv, dir string) []string {
+//
+// The key labels are run-scoped. A vendor whose tokens persist between runs
+// would otherwise hit the ceremony's own "refuses to overwrite an existing
+// key label" guard on the second run — which is the guard working, not a
+// test failure, but it makes the suite unrepeatable.
+func ceremonyArgs(t *testing.T, b *hsmtest.Backend, dir string) []string {
+	t.Helper()
+	rootPINEnv, interPINEnv := initTwoTokens(t, b)
+	// The command under test builds its own adapter over the same module,
+	// and ProtectToolkit refuses a second C_Initialize in one process. The
+	// harness's adapter has already resolved the token labels above, so it
+	// has nothing left to do — hand the module over.
+	b.Release()
 	return []string{
-		"-module", modulePath,
-		"-root-workspace", rootLabel,
+		"-adapter", b.AdapterName,
+		"-module", b.ModulePath,
+		"-root-workspace", b.Secondary.Label,
 		"-root-pin-env", rootPINEnv,
-		"-root-key-label", "ca-root-key-v1",
+		"-root-key-label", b.Label("cli-root-key-v1"),
 		"-root-cert-out", filepath.Join(dir, "root.pem"),
 		"-root-crl-out", filepath.Join(dir, "root-crl.pem"),
 		"-root-crl-url", "http://pki.example.test/root.crl",
 		"-root-cert-url", "http://pki.example.test/root.crt",
-		"-intermediate-workspace", interLabel,
+		"-intermediate-workspace", b.Primary.Label,
 		"-intermediate-pin-env", interPINEnv,
-		"-intermediate-key-label", "ca-intermediate-key-v1",
+		"-intermediate-key-label", b.Label("cli-inter-key-v1"),
 		"-intermediate-cert-out", filepath.Join(dir, "intermediate.pem"),
 	}
 }
 
 func TestRunCeremonyCmd_ProducesArtifacts(t *testing.T) {
-	modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv := initTwoTokens(t)
-	dir := t.TempDir()
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		dir := t.TempDir()
 
-	if err := runCeremonyCmd(ceremonyArgs(modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv, dir)); err != nil {
-		t.Fatalf("runCeremonyCmd: %v", err)
-	}
-
-	for _, name := range []string{"root.pem", "intermediate.pem", "root-crl.pem"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Fatalf("expected artifact %s to exist: %v", name, err)
+		if err := runCeremonyCmd(ceremonyArgs(t, b, dir)); err != nil {
+			t.Fatalf("runCeremonyCmd: %v", err)
 		}
-	}
+
+		for _, name := range []string{"root.pem", "intermediate.pem", "root-crl.pem"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+				t.Fatalf("expected artifact %s to exist: %v", name, err)
+			}
+		}
+	})
 }
 
 // TestRunCeremonyCmd_RequiresDistributionURLs pins that the ceremony cannot
@@ -98,35 +86,37 @@ func TestRunCeremonyCmd_ProducesArtifacts(t *testing.T) {
 // without bringing the offline root back out, so the decision has to happen
 // before the signature, not after.
 func TestRunCeremonyCmd_RequiresDistributionURLs(t *testing.T) {
-	modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv := initTwoTokens(t)
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 
-	for _, missing := range []string{"-root-crl-url", "-root-cert-url"} {
-		t.Run(missing, func(t *testing.T) {
-			dir := t.TempDir()
-			args := ceremonyArgs(modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv, dir)
-			for i, a := range args {
-				if a == missing {
-					args[i+1] = ""
+		for _, missing := range []string{"-root-crl-url", "-root-cert-url"} {
+			t.Run(missing, func(t *testing.T) {
+				dir := t.TempDir()
+				args := ceremonyArgs(t, b, dir)
+				for i, a := range args {
+					if a == missing {
+						args[i+1] = ""
+					}
 				}
-			}
-			if err := runCeremonyCmd(args); err == nil {
-				t.Fatalf("runCeremonyCmd without %s succeeded, want an error", missing)
-			}
-		})
-	}
+				if err := runCeremonyCmd(args); err == nil {
+					t.Fatalf("runCeremonyCmd without %s succeeded, want an error", missing)
+				}
+			})
+		}
+	})
 }
 
 func TestRunCeremonyCmd_RefusesToOverwriteExistingOutput(t *testing.T) {
-	modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv := initTwoTokens(t)
-	dir := t.TempDir()
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		dir := t.TempDir()
 
-	if err := os.WriteFile(filepath.Join(dir, "root.pem"), []byte("pre-existing"), 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+		if err := os.WriteFile(filepath.Join(dir, "root.pem"), []byte("pre-existing"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
 
-	if err := runCeremonyCmd(ceremonyArgs(modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv, dir)); err == nil {
-		t.Fatal("runCeremonyCmd with a pre-existing output file succeeded, want an error")
-	}
+		if err := runCeremonyCmd(ceremonyArgs(t, b, dir)); err == nil {
+			t.Fatal("runCeremonyCmd with a pre-existing output file succeeded, want an error")
+		}
+	})
 }
 
 // TestFindWorkspace_AmbiguousLabelFailsClosed covers the case PKCS#11
@@ -198,18 +188,19 @@ func TestRunCeremonyCmd_MissingRequiredFlag(t *testing.T) {
 }
 
 func TestRunCeremonyCmd_UnknownWorkspaceFailsClosed(t *testing.T) {
-	modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv := initTwoTokens(t)
-	dir := t.TempDir()
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		dir := t.TempDir()
 
-	args := ceremonyArgs(modulePath, rootLabel, interLabel, rootPINEnv, interPINEnv, dir)
-	for i, a := range args {
-		if a == "-root-workspace" {
-			args[i+1] = "does-not-exist"
+		args := ceremonyArgs(t, b, dir)
+		for i, a := range args {
+			if a == "-root-workspace" {
+				args[i+1] = "does-not-exist"
+			}
 		}
-	}
-	if err := runCeremonyCmd(args); err == nil {
-		t.Fatal("runCeremonyCmd against an unknown workspace label succeeded, want an error")
-	}
+		if err := runCeremonyCmd(args); err == nil {
+			t.Fatal("runCeremonyCmd against an unknown workspace label succeeded, want an error")
+		}
+	})
 }
 
 func TestRun_UnknownCommand(t *testing.T) {
