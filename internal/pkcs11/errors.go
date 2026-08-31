@@ -23,4 +23,14 @@ var (
 	// ErrUnsupportedCurve is returned by GenerateKeyPair for an ECCurve
 	// value this adapter does not implement.
 	ErrUnsupportedCurve = errors.New("pkcs11: unsupported EC curve")
+
+	// ErrUnsupportedKeySize is returned by GenerateSecretKey for a
+	// SecretKeyRequest.KeyBits value that is not a valid AES key size.
+	ErrUnsupportedKeySize = errors.New("pkcs11: unsupported AES key size")
+
+	// ErrTokenAlreadyLoggedIn is returned by LoginToken when this adapter
+	// already holds the token authenticated. It is an error rather than a
+	// no-op so that two callers cannot end up disagreeing about which of
+	// them owns the logout.
+	ErrTokenAlreadyLoggedIn = errors.New("pkcs11: token is already logged in")
 )

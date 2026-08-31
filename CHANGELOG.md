@@ -6,6 +6,98 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- **Anchor login** (`internal/pkcs11/tokenlogin.go`): `LoginToken` /
+  `LogoutToken` / `TokenLoggedIn`. The service authenticates its token once
+  at startup and stays authenticated until shutdown; sessions opened
+  afterward inherit that authentication and perform no login of their own.
+  This fixes a real defect — PKCS#11 authenticates a token for the whole
+  application, not per session, so the previous login-and-logout-around-
+  every-operation pattern broke with two requests in flight (the second
+  `C_Login` returned `CKR_USER_ALREADY_LOGGED_IN`; the first caller's
+  `C_Logout` de-authenticated the second mid-signature). Serializing the
+  calls could not fix it, because the interference happened between them.
+  Reproduced identically on SoftHSM2 2.6.1 and ProtectToolkit 7.3.3, which
+  is what established it as the spec's model rather than a vendor bug; every
+  test through Phase 2 was sequential, which is why it survived that long.
+  The anchor session is held outside the janitor's tracking so it can never
+  expire — an expiring anchor would drop authentication out from under
+  in-flight requests. Verified with 10 concurrent `POST /certificates`
+  against the maintainer's real ProtectServer token: all 201, all
+  `openssl verify` OK, all serials distinct, zero login errors.
+- `internal/pkcs11/conformance_test.go`: `LoginToken_AnchorLifecycle` and
+  `LoginToken_ConcurrentCallsSerializeToOneWinner`, pinning `LoginToken` /
+  `LogoutToken` / `TokenLoggedIn` directly at the layer that implements
+  them. Previously these were only reached indirectly through
+  `internal/ca` / `internal/api` tests, which is why `internal/pkcs11`'s
+  own coverage profile showed 0.0% on all three despite the anchor-login
+  fix above being otherwise fully verified — found during a maintainer
+  double-check of the whole phase before starting Phase 3. Raised
+  `internal/pkcs11`'s package coverage from 74.7% to 82.8% and
+  `ci/coverage.sh`'s overall figure from 73.2% to 77.0%.
+- Failure-path coverage completing Phase 2: `TestSigner_Sign_ExpiredSessionFailsClosed`
+  (a white-box test — `Signer.Sign` opens its own session per call, so an
+  already-expired budget can only be forced after a normal, successful
+  construction, not from outside the package) and
+  `TestIssueCertificate_AdapterErrorDoesNotLeakDetail` (an adapter-level
+  failure surfaces as a 500 whose body never contains internal error text).
+  `ci/coverage.sh` reports 76.0%.
+- `GET /healthz` / `GET /readyz` (`internal/api`): liveness never touches
+  the HSM; readiness probes it with an open+close session (no PIN needed)
+  and reports not-ready once the adapter is closed. Every request now logs
+  through a request-scoped `log/slog` logger with consistent field names
+  (`request_id`, `method`, `path`, `status`, `duration_ms`).
+- `POST /certificates/{serial}/revoke` and `GET /crl` (`internal/api`,
+  `(*ca.CA).BuildCRL`): revocation is idempotent (re-revoking succeeds
+  without error — a one-way state transition has no security effect from
+  being requested twice) and 404s on an unknown serial. The CRL is signed
+  through the same HSM-backed `Signer` as certificate issuance, cached
+  until its configured `nextUpdate` (`ca.crl_validity_hours`), and
+  invalidated immediately on every revocation rather than waiting for that
+  cache to expire naturally. Verified with real `openssl crl -verify`.
+- `POST /certificates` (`internal/api`): accepts a PEM or DER CSR and
+  returns a signed certificate, or a 4xx with a specific reason for a
+  malformed body, an unparseable CSR, or any rejection `internal/ca.CA.Issue`
+  itself raises (bad signature, empty subject, disallowed key type) — never
+  partially processed, and never recorded in `internal/api.Registry` on
+  rejection. A 64 KiB body limit and a 15s request timeout are enforced at
+  the HTTP transport layer (`http.MaxBytesReader`, `http.TimeoutHandler`);
+  the timeout cannot be threaded into the underlying HSM call because
+  `crypto.Signer`, the standard interface `Signer` implements, has no
+  context parameter — documented as a real, stated constraint rather than
+  papered over. Verified as a live process: `curl` against a running
+  `cmd/hsm-pki-server` with real `openssl req`-generated CSRs, not only
+  `httptest`.
+- `internal/ca.CA`, `internal/ca.Bootstrap`: CA domain logic on top of the
+  Phase 2 signer. `Bootstrap` decides between loading an existing CA and
+  creating a new one by checking two independent signals — an HSM key under
+  `ca.key_label` and a certificate file at `ca.cert_path` (new config
+  fields) — and refuses to guess when only one is present, rather than risk
+  signing under a mismatched key or duplicating a label meant to be unique.
+  `Issue` validates a CSR's signature, subject, and key type (EC
+  P-256/P-384/P-521 or RSA ≥ 2048 bits) before building a certificate;
+  serials are 128 bits of `crypto/rand`, never sequential. Verified with
+  `openssl verify` against a real issued certificate, not just Go's own
+  `crypto/x509` round trip.
+- `internal/ca.Signer`: a `crypto.Signer` backed by an HSM-resident EC key
+  pair, reached through `VendorAdapter`. Every `Sign` call opens its own
+  session and closes it again — it never holds one
+  for its lifetime (`pkcs11.Session` fails closed on idle timeout / max TTL,
+  so a service-lifetime session would eventually start failing every call
+  for reasons unrelated to the request). `pkcs11.DecodeECPoint` moved from a
+  test-only helper into the `pkcs11` package proper, fixing a long-form DER
+  length bug the test-only version had for any EC point ≥128 bytes.
+  Verified: `x509.CreateCertificate` produces a certificate over a
+  SoftHSM2-resident key, and `cert.CheckSignatureFrom` accepts it.
+- `cmd/hsm-pki-server`, `internal/config`, `internal/api`: the Phase 2 service
+  skeleton. `internal/config` loads `config.yaml`, validates the selected
+  adapter and its module path/workspace label/PIN-env-var name, and fails
+  fast on an unknown adapter or a PIN environment variable that isn't set —
+  before any HSM call is attempted. The PIN's value itself is never held on
+  the `Config` struct; it is read once, at the point of use. `main.go`
+  proves the configured adapter can actually open a session and log in
+  before serving any traffic, and shuts down gracefully (drain, then close
+  the adapter) on `SIGTERM`/`SIGINT`. Verified against both SoftHSM2 and the
+  maintainer's ProtectServer token.
 - Project scaffolding: `CLAUDE.md` engineering contract, architecture document,
   and phase specifications (Phases 1–7), centered on a multi-vendor PKCS#11 core.
 - `internal/pkcs11`: vendor-agnostic `VendorAdapter` interface (session
@@ -16,6 +108,173 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   never as a Go-heap string (see docs/phases/phase-1-pkcs11-core.md).
 - `ci/softhsm2-dev.Dockerfile`: reproducible dev/test environment so the
   SoftHSM2-backed test suite runs the same way on any machine or in CI.
+- `internal/pkcs11/protectserver.go`: `ProtectServerAdapter`, a full,
+  independently-written second implementation of `VendorAdapter` against
+  Thales ProtectToolkit-C. Every operation in the interface — session
+  lifecycle, key generation, sign/verify, encrypt/decrypt, wrap/unwrap,
+  generate random, find/get-attributes, close — is confirmed working
+  against the maintainer's own ProtectToolkit installation by the
+  conformance suite below.
+- `internal/pkcs11/conformance_test.go`: `TestConformance`, one behavioral
+  suite parameterized over a `VendorAdapter` factory, run against both
+  backends. SoftHSM2's subtests run whenever its module is present (CI);
+  ProtectServer's run only when `PROTECTSERVER_MODULE` is set and skip
+  cleanly otherwise — the suite stays green either way. Every test vector is
+  a real digest, plaintext, or key, never a degenerate stand-in — the earlier
+  false "ProtectServer cannot verify" divergence (below) came from exactly
+  that shortcut.
+- `docs/protectserver-setup.md`: manual setup for the Thales ProtectToolkit
+  backend — module paths, user-token initialization, and why this path is
+  local-only and never in CI.
+- `ci/coverage.sh` and `ci/coverage-exclude.txt`: the coverage floor,
+  computed over CI-reachable code only. `ProtectServerAdapter` now contains
+  real, non-trivial logic that CI structurally cannot execute (no
+  proprietary SDK), so a blanket `go test ./... -cover` no longer measures
+  what it used to — it conflates "untested" with "untestable here." The
+  excluded files are validated instead by the conformance suite passing
+  against real hardware, and that claim stays labelled maintainer-verified,
+  never blended into a CI-reported percentage (CLAUDE.md §2.3).
+- `docs/pkcs11-vendor-notes.md`: a living record of where PKCS#11
+  implementations differ and of the portability traps (`CK_ULONG` width,
+  `CKA_EC_POINT` encoding, raw `r||s` signatures, digest-vs-message
+  mechanisms) that are easy to write and hard to notice. Every adapter reads
+  it before being written and adds to it afterwards.
+- First cross-vendor comparison run: pointing the SoftHSM2 adapter at the
+  ProtectToolkit module showed the entire exercised surface — sessions, login,
+  key generation, signing, verification, object lookup, attributes —
+  transfers unchanged. One narrow divergence recorded: ProtectToolkit's
+  `C_Verify` rejects a signature over an all-zero digest that its own
+  `C_Sign` produced, where SoftHSM2 accepts it. Benign, since a real digest is
+  never all-zero.
+- **The signing layer, as a platform-wide principle** (documentation only in
+  this change; the build lands in Phases 4 and 5). The PKCS#11 core is now
+  stated as the platform's single signing foundation rather than only the CA's
+  key store: certificates, container images, and release artifacts are each
+  signed by their own HSM-held key over the same custody boundary. Recorded as
+  a non-negotiable rule in `CLAUDE.md` §3.6 (three purpose-separated keys —
+  `ca-root-key`, `image-signing-key`, `artifact-signing-key` — never
+  interchangeable, fail-closed on anything unsigned) and explained in
+  `docs/architecture.md` under "The signing layer: one core, three purposes",
+  with the two design decisions behind it: purpose-separated keys rather than
+  one platform key, and cosign rather than a first-party signing tool.
+  The delivery checklist follows the dependency line: `docs/phases/
+  phase-4-container-k8s.md` gains 4.8 (key provisioning through the Phase 1
+  core via `cmd/hsm-pki-keytool`), 4.9 (release-artifact signing with
+  `cosign sign-blob` over PKCS#11, cross-checked independently in Go with
+  `crypto/ecdsa`), and 4.10 (image signing by digest, verified at admission by
+  the Kyverno installed in 4.7); `docs/phases/phase-5-cicd.md` gains 5.9,
+  which turns all of it into a blocking pipeline gate.
+  Two facts established by reading cosign's own source rather than assuming
+  them, and recorded where they will be needed: PKCS#11 support sits behind
+  cosign's `pkcs11key` build tag, so the `pivkey-pkcs11key` release build is
+  required and the default binary cannot open a token at all; and cosign opens
+  the token through its own PKCS#11 binding, not through this repository's
+  `VendorAdapter` — so what the CA path and the signing path share is the token
+  and the standard, not our Go code, and the documentation says exactly that
+  instead of implying more.
+
+### Changed
+- `internal/pkcs11/base.go`: the shared PKCS#11 plumbing (`pkcs11Adapter`)
+  extracted from `SoftHSM2Adapter` and `ProtectServerAdapter` now that both
+  have been run against real hardware. Every operation the conformance
+  suite exercises turned out to need zero vendor-specific code — the one
+  real divergence found (an all-zero-digest `Verify` rejection, ProtectServer
+  only) is HSM behavior, not adapter logic, so it stays a documented fact in
+  `protectserver.go` rather than a branch. `SoftHSM2Adapter` and
+  `ProtectServerAdapter` are now each a named type embedding
+  `*pkcs11Adapter` plus a constructor. Phase 1 sub-task 1.8; completes
+  Phase 1.
+- Phase files now carry a `Sub-tasks` checklist with observable **Done when**
+  criteria, so progress mid-phase is readable from the document rather than
+  inferred from commit history. All seven phases are broken down; where a
+  choice is the maintainer's to make, it is recorded as an explicit
+  "Decide before starting" item rather than defaulted silently.
+- `CLAUDE.md` §7 gained the tracking discipline this depends on: discovered
+  work — prerequisites, workarounds, defects found in passing, work belonging
+  to a later phase — is added to the relevant checklist rather than silently
+  absorbed, and a decision the agent cannot make blocks its sub-task rather
+  than the phase.
+- ProtectServer environment prepared: Admin token PINs initialized and a
+  labelled user token created on slot 0. `docs/protectserver-setup.md` now
+  documents the sequence that actually works, including the mid-run label
+  prompt that is easy to answer with a PIN by mistake.
+- Phase 1 scope now includes a second, real-vendor adapter (ProtectServer)
+  alongside SoftHSM2, and its acceptance criteria are split into CI-verifiable
+  and maintainer-verified halves so a reader can tell which claims an automated
+  run backs.
+- `config.example.yaml` gained per-adapter blocks and now references PINs by
+  environment-variable *name* rather than carrying any value.
+- README and architecture docs state which vendor backends actually exist
+  today rather than implying all four are working.
+
+### Fixed
+- Certificate `KeyUsage` now follows the subject's key algorithm.
+  `keyEncipherment` was asserted unconditionally, which describes an RSA
+  operation an EC key cannot perform (RFC 5480 §3) — and P-256 is this CA's
+  default curve, so every ECDSA certificate it issued carried a capability
+  claim that was simply false.
+- `ca.GenerateSerial` redraws rather than returning a zero serial. RFC 5280
+  §4.1.2.2 requires a positive serial number; the probability is 2^-128, but
+  "cannot happen" and "must not be emitted" are different claims and only
+  one is enforceable.
+- `(*ca.CA).BuildCRL` rejects an inverted or empty validity window and a
+  non-positive CRL number, instead of signing a CRL that is expired the
+  moment it is issued.
+- CRL numbers are now monotonic across a service restart. The counter
+  started from zero on every start, so a restarted service reissued low
+  numbers while verifiers held a higher-numbered CRL — which they may then
+  keep, ignoring every later update and the revocations in it. With no
+  persistent storage in Phase 2 (deliberately), the wall clock supplies the
+  monotonic component. Milliseconds, not seconds: a test written for this
+  caught a same-second restart reissuing an identical number.
+- A CRL's `thisUpdate` is backdated by the same clock-skew allowance
+  `Issue` applies to `NotBefore`.
+- `newRequestID` handles a `crypto/rand` failure instead of discarding it.
+  A failed read left the buffer zeroed, giving every concurrent request the
+  id `0000000000000000` — the one outcome that defeats a correlation id
+  entirely, arriving exactly when logs matter most.
+- The logging middleware's `ResponseWriter` wrapper ignores a second
+  `WriteHeader` (so the access log cannot disagree with the wire) and
+  implements `Unwrap`, so `http.ResponseController` can still reach
+  `Flusher`/`Hijacker` beneath it rather than having them silently stripped.
+- Self-signed CA certificates now carry an `AuthorityKeyIdentifier` equal to
+  their own `SubjectKeyIdentifier`. RFC 5280 §4.2.1.1 permits omitting it,
+  but path builders look for it unconditionally.
+- `pkcs11.Login` now zeroes the caller's PIN slice on every return path, not
+  only once execution reaches `NewSecurePIN`. The guard clauses ahead of it
+  (cancelled context, expired session) previously returned with the
+  caller's PIN still readable in the Go heap — the one copy this package can
+  deterministically wipe, left unwiped (CLAUDE.md §3.1).
+- `pkcs11.CloseSession` no longer removes a session from the adapter's map
+  before the token has actually released it. A failed `C_CloseSession`
+  used to leave a session open on the token that neither the janitor nor
+  `Close` could ever reclaim, since both work from that map.
+- `pkcs11.GenerateSecretKey` validates `KeyBits` against 128/192/256
+  instead of passing `bits/8` to the token. Integer division silently
+  turned a wrong-but-plausible request (200 bits) into a non-standard
+  25-byte key that some tokens accept rather than reject; a negative value
+  was worse.
+- `pkcs11.DecodeECPoint` (introduced in sub-task 2.2) tried the ASN.1
+  OCTET-STRING-unwrap interpretation of a `CKA_EC_POINT` value before the
+  raw-point one. An uncompressed point's leading byte (`0x04`) collides
+  with ASN.1's OCTET STRING tag, so a bare, unwrapped point could be
+  misparsed roughly 1 time in 256 (whenever the point's second byte matched
+  the remaining byte count) — a public-key-reconstruction failure with no
+  vendor trigger, just unlucky key material. Caught by an intermittent
+  `TestDecodeECPoint_BareUnwrapped` failure during Phase 2 sub-task 2.6's
+  full-suite verification run, not by the function's own tests, since the
+  original tests never exercised the colliding byte value. Fixed by trying
+  the raw interpretation first; added a test that deterministically
+  reproduces the exact collision instead of depending on chance.
+- `.gitignore` did not exclude `config.yaml`, despite `config.example.yaml`
+  stating that it did — the file intended to hold real values was trackable.
+  Also added guards against committing proprietary vendor SDK binaries.
+- `(*server).nextCRLNumber`'s doc comment still said "Unix seconds" after
+  the underlying implementation had already switched to `UnixMilli()` to
+  fix the same-second-restart collision (see the CRL-monotonicity entry
+  above) — the code was correct, only the comment had gone stale. Caught
+  during a maintainer double-check of the whole phase before starting
+  Phase 3.
 
 <!--
 Tag v0.1.0 once Phase 1 (PKCS#11 core) lands. Each phase producing a user-visible

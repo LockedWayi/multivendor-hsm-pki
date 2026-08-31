@@ -2,4 +2,7 @@ module github.com/LockedWayi/hsm-pki-platform
 
 go 1.27.0
 
-require github.com/miekg/pkcs11 v1.1.2
+require (
+	github.com/miekg/pkcs11 v1.1.2
+	gopkg.in/yaml.v3 v3.0.1
+)

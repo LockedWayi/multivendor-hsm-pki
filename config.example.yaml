@@ -1,15 +1,75 @@
 # Copy to config.yaml and fill in real values. config.yaml is gitignored.
 # This example file is safe to commit — it contains no real secrets.
+#
+# Note the pattern used for PINs below: this file never holds a PIN, it holds
+# the NAME of the environment variable the PIN is read from at startup. That
+# keeps the secret out of the config file, out of the image, and out of any
+# backup of either — and it means a leaked config.yaml leaks nothing. Do not
+# "simplify" this into a literal `pin:` field (CLAUDE.md §3.1, §3.2).
 
 server:
   listen_addr: "0.0.0.0:8080"
 
-ca:
-  # ECDSA P-256 is the default curve (see docs/architecture.md).
-  curve: "P-256"
-  cert_ttl_hours: 8760
+pkcs11:
+  # Which vendor adapter to use: "softhsm2" or "protectserver".
+  # Both implement the same VendorAdapter interface — see
+  # docs/architecture.md, "The core idea: one interface, many vendors".
+  adapter: "softhsm2"
 
-# Vault settings are unused until Phase 5.
+  # Session budget enforced by the adapter. A session is rejected once either
+  # limit is exceeded, and is never silently extended (fail closed).
+  session:
+    idle_timeout: "15m"
+    max_ttl: "8h"
+
+  # SoftHSM2 — the universal baseline. No hardware, no proprietary SDK, so
+  # this is what CI runs. Install with your distribution's `softhsm2` package,
+  # or use ci/softhsm2-dev.Dockerfile.
+  softhsm2:
+    module_path: "/usr/lib/softhsm/libsofthsm2.so"
+    # Token label, as passed to `softhsm2-util --init-token --label`.
+    workspace_label: "CHANGE_ME"
+    # Environment variable holding the user PIN — not the PIN itself.
+    pin_env: "SOFTHSM2_PIN"
+
+  # Thales ProtectServer, via the ProtectToolkit-C PKCS#11 module. Requires
+  # your own ProtectToolkit entitlement; see docs/protectserver-setup.md for
+  # installation, token initialization, and how to verify the module loads.
+  # This path cannot run in public CI — the SDK is proprietary and is never
+  # vendored into this repository.
+  protectserver:
+    # The software-emulation module. A hardware ProtectServer uses
+    # libcthsm.so from the same directory instead.
+    module_path: "/opt/safenet/protecttoolkit7/ptk/lib/libctsw.so"
+    # Label you assigned when initializing the user token with `ctconf`.
+    # A freshly installed ProtectToolkit leaves slot 0 unlabelled and
+    # uninitialized, so this has no working default.
+    workspace_label: "CHANGE_ME"
+    # Environment variable holding the user PIN — not the PIN itself.
+    # docs/protectserver-setup.md uses a throwaway dev PIN for local
+    # emulator setup; never reuse it anywhere real.
+    pin_env: "PROTECTSERVER_PIN"
+
+ca:
+  # ECDSA P-256 is the default curve; P-384 is available where a larger
+  # security margin is warranted (see docs/architecture.md).
+  curve: "P-256"
+  # Validity window for certificates this CA issues (not its own — see
+  # internal/ca.DefaultRootValidity for that).
+  cert_ttl_hours: 8760
+  # CKA_LABEL the CA's own key pair is created with in the HSM, and looked
+  # up by on every later restart. Change this and the CA will bootstrap a
+  # brand new key pair under the new label, alongside the old one.
+  key_label: "hsm-pki-ca"
+  # Where the CA's self-signed certificate is read from and written to.
+  # Contains no private key material — the private key never leaves the
+  # HSM — so this file is safe to distribute to anyone verifying
+  # certificates this CA issues. Not gitignored on principle, but a real
+  # deployment's actual cert_path (outside this repo) has nothing to do
+  # with git either way.
+  cert_path: "ca-cert.pem"
+
+# Vault settings are unused until Phase 6.
 vault:
   address: "https://vault.example.local:8200"
   role: "pki-ca-service"
