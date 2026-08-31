@@ -25,6 +25,13 @@ import (
 const (
 	testRootCRLURL  = "http://pki.example.test/root.crl"
 	testRootCertURL = "http://pki.example.test/root.crt"
+
+	// The leaf-tier equivalents: where a certificate this intermediate
+	// issues tells a relying party to look. Distinct from the two above by
+	// design — the root's CRL covers the intermediate, the intermediate's
+	// covers the leaves (docs/phases/phase-3b-pki-hardening.md, 3b.4).
+	testLeafCRLURL    = "http://pki.example.test/crl"
+	testLeafIssuerURL = "http://pki.example.test/intermediate.crt"
 )
 
 func testCeremonyParams(b *ceremonyBackend) ca.CeremonyParams {
@@ -299,7 +306,7 @@ func TestRunCeremony_ConcurrentIssuanceUnderCeremonyIntermediate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSigner: %v", err)
 		}
-		intermediateCA := ca.NewCA(interCert, signer, 24*time.Hour)
+		intermediateCA := ca.NewCA(interCert, signer, 24*time.Hour, testLeafDistribution())
 
 		const workers = 16
 		var wg sync.WaitGroup
@@ -461,7 +468,7 @@ func issueTestLeaf(t *testing.T, b *ceremonyBackend, interCert *x509.Certificate
 	if err != nil {
 		t.Fatalf("NewSigner (intermediate): %v", err)
 	}
-	intermediateCA := ca.NewCA(interCert, signer, 24*time.Hour)
+	intermediateCA := ca.NewCA(interCert, signer, 24*time.Hour, testLeafDistribution())
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

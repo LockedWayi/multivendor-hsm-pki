@@ -31,6 +31,13 @@ type LoadIntermediateParams struct {
 	Curve    pk11.ECCurve
 	// CertTTL is the validity window Issue gives every leaf this CA signs.
 	CertTTL time.Duration
+	// Distribution is where the leaves this CA issues tell relying parties
+	// to look for revocation status and for the issuing certificate. Unlike
+	// the intermediate's own CDP and AIA — fixed by the root at ceremony
+	// time — these are re-derived on every issuance, so they follow the
+	// service's configured base URL (internal/config, internal/api.
+	// LeafDistributionFor) rather than being frozen years earlier.
+	Distribution LeafDistribution
 }
 
 // LoadIntermediate authenticates the token and loads an existing,
@@ -60,7 +67,17 @@ type LoadIntermediateParams struct {
 //     pairs would load cleanly and then produce signatures that verify
 //     against nothing — a failure that would surface at the relying party
 //     rather than at startup.
+//
+// params.Distribution is checked too, before anything else, because a CA
+// that cannot name a distribution point issues nothing at all (see Issue).
 func LoadIntermediate(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, resolvePIN PINResolver, params LoadIntermediateParams) (*CA, error) {
+	// Checked first, before the token is touched at all: it costs nothing,
+	// and a service that comes up only to reject every issuance with
+	// ErrNoDistributionPoints has failed in the least useful place. Startup
+	// is where an operator is watching (CLAUDE.md §3.4).
+	if err := params.Distribution.Validate(); err != nil {
+		return nil, fmt.Errorf("ca: leaf distribution: %w", err)
+	}
 	if !adapter.TokenLoggedIn() {
 		pin, err := resolvePIN()
 		if err != nil {
@@ -87,7 +104,7 @@ func LoadIntermediate(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.W
 		return nil, err
 	}
 
-	return &CA{cert: cert, signer: signer, certTTL: params.CertTTL}, nil
+	return &CA{cert: cert, signer: signer, certTTL: params.CertTTL, dist: params.Distribution}, nil
 }
 
 // checkIntermediateCert enforces the tier constraints described on

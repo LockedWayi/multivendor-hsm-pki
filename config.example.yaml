@@ -87,6 +87,23 @@ ca:
   root_cert_path: "root.pem"
   root_crl_path: "root-crl.pem"
 
+  # Externally reachable origin of THIS service -- the address a relying
+  # party can resolve, which behind an ingress or load balancer is not what
+  # server.listen_addr binds to. Required, with no default.
+  #
+  # Every certificate this service issues carries two URLs built from it:
+  #   <base_url>/crl              the CRL that governs the leaf
+  #   <base_url>/intermediate.crt the certificate that signed the leaf
+  # Those are baked in at signature time and cannot be edited afterward, so
+  # a wrong value here is not a startup failure -- it is a valid certificate
+  # pointing at a CRL nobody can fetch, fixable only by re-issuing every
+  # certificate signed since. A trailing slash is tolerated; a path prefix
+  # is kept ("https://pki.example.com/ca" gives ".../ca/crl").
+  #
+  # No OCSP URL is issued at all until the responder exists (Phase 5b):
+  # pointing at a responder that is not there is worse than omitting it.
+  base_url: "https://pki.example.test"
+
   # How long a generated leaf CRL is valid for (thisUpdate to nextUpdate).
   crl_validity_hours: 24
 

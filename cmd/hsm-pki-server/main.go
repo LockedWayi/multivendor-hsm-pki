@@ -61,23 +61,37 @@ func run(configPath string, logger *slog.Logger) error {
 		"workspace", ws.Label,
 	)
 
+	// Composed here rather than inside internal/ca: the paths belong to the
+	// HTTP surface (internal/api owns the routes), the origin belongs to the
+	// operator's configuration, and the CA only ever sees finished URLs. It
+	// is the composition root's job to join the two.
+	leafDist := api.LeafDistributionFor(cfg.CA.BaseURL)
+
 	// The service loads a ceremony-produced intermediate and never creates a
 	// CA of its own. A configuration pointing it at a self-signed (root)
 	// certificate fails here rather than starting in a degraded posture
 	// (CLAUDE.md §3.4, docs/phases/phase-3b-pki-hardening.md).
 	caInstance, err := ca.LoadIntermediate(ctx, adapter, ws, cfg.PKCS11.SessionOptions, cfg.ResolvePIN, ca.LoadIntermediateParams{
-		KeyLabel: cfg.CA.IntermediateKeyLabel,
-		CertPath: cfg.CA.IntermediateCertPath,
-		Curve:    cfg.CA.Curve(),
-		CertTTL:  time.Duration(cfg.CA.CertTTLHours) * time.Hour,
+		KeyLabel:     cfg.CA.IntermediateKeyLabel,
+		CertPath:     cfg.CA.IntermediateCertPath,
+		Curve:        cfg.CA.Curve(),
+		CertTTL:      time.Duration(cfg.CA.CertTTLHours) * time.Hour,
+		Distribution: leafDist,
 	})
 	if err != nil {
 		return err
 	}
+	// The two URLs are logged because they are the one part of an issued
+	// certificate an operator cannot fix afterward: every leaf signed by
+	// this process will carry them verbatim. Seeing them at startup is the
+	// last cheap chance to notice a wrong base URL. Both are public
+	// endpoints, so nothing here is sensitive (CLAUDE.md §3.1).
 	logger.Info("intermediate CA ready",
 		"subject", caInstance.Certificate().Subject.String(),
 		"serial", caInstance.Certificate().SerialNumber.String(),
 		"not_after", caInstance.Certificate().NotAfter,
+		"leaf_crl_url", leafDist.CRLURL,
+		"leaf_issuer_url", leafDist.IssuerCertURL,
 	)
 
 	rootArtifacts, err := loadRootArtifacts(cfg)

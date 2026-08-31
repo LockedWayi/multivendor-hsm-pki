@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +66,7 @@ func newTestCAWithRoot(t *testing.T) (*ca.CA, []byte) {
 	if err != nil {
 		t.Fatalf("NewSigner (intermediate): %v", err)
 	}
-	return ca.NewCA(interCert, signer, time.Hour), result.RootCertDER
+	return ca.NewCA(interCert, signer, time.Hour, testLeafDistribution()), result.RootCertDER
 }
 
 // signedCSR builds and signs a CSR with priv (an *ecdsa.PrivateKey,
@@ -324,5 +325,130 @@ func TestBuildCRL_RejectsInvertedValidityWindow(t *testing.T) {
 	}
 	if _, err := c.BuildCRL(nil, now, now.Add(time.Hour), nil); err == nil {
 		t.Error("BuildCRL with a nil CRL number succeeded, want an error")
+	}
+}
+
+// TestIssue_SetsDistributionPoints is sub-task 3b.4's core assertion: every
+// leaf says where its revocation status is published and where the
+// certificate that signed it can be fetched.
+//
+// The negative half matters as much as the positive one. No OCSP responder
+// URL is written, because no responder exists until Phase 5b — a verifier
+// configured to require OCSP would fail closed against a pointer that was
+// never going to answer, which is a worse outcome than having no pointer at
+// all and falling back to the CRL.
+func TestIssue_SetsDistributionPoints(t *testing.T) {
+	c := newTestCA(t)
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	csr := signedCSR(t, priv, pkix.Name{CommonName: "dist-points.example.test"})
+
+	cert, err := c.Issue(csr)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	if got := cert.CRLDistributionPoints; len(got) != 1 || got[0] != testLeafCRLURL {
+		t.Fatalf("CRLDistributionPoints = %v, want [%s]", got, testLeafCRLURL)
+	}
+	if got := cert.IssuingCertificateURL; len(got) != 1 || got[0] != testLeafIssuerURL {
+		t.Fatalf("IssuingCertificateURL = %v, want [%s]", got, testLeafIssuerURL)
+	}
+	if len(cert.OCSPServer) != 0 {
+		t.Fatalf("leaf names an OCSP responder %v, but none exists until Phase 5b", cert.OCSPServer)
+	}
+	// The leaf's CDP must be the intermediate's own CRL, never the root's:
+	// the root CRL covers the intermediate and would never list this leaf,
+	// so a relying party following it would conclude the leaf is unrevoked
+	// no matter what this CA has published.
+	if cert.CRLDistributionPoints[0] == testRootCRLURL {
+		t.Fatal("leaf CDP points at the root CRL, which covers the intermediate and never lists leaves")
+	}
+}
+
+// TestIssue_FailsClosedWithoutDistributionPoints proves the guard in Issue
+// is a guard and not a default.
+//
+// A certificate's extensions are fixed by its signature, so a leaf issued
+// without a CRL distribution point can never gain one — it can only be
+// revoked into a CRL nobody has been told to fetch. Refusing to issue is
+// therefore the only fail-closed answer available (CLAUDE.md §3.4). No HSM
+// is needed: the check runs before anything is signed, which is itself part
+// of what this asserts.
+func TestIssue_FailsClosedWithoutDistributionPoints(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	csr := signedCSR(t, priv, pkix.Name{CommonName: "no-dist.example.test"})
+
+	for _, tc := range []struct {
+		name string
+		dist ca.LeafDistribution
+	}{
+		{"both unset", ca.LeafDistribution{}},
+		{"no CRL URL", ca.LeafDistribution{IssuerCertURL: testLeafIssuerURL}},
+		{"no issuer URL", ca.LeafDistribution{CRLURL: testLeafCRLURL}},
+		{"unfetchable CRL scheme", ca.LeafDistribution{CRLURL: "ldap://pki.example.test/crl", IssuerCertURL: testLeafIssuerURL}},
+		{"CRL URL without a host", ca.LeafDistribution{CRLURL: "http:///crl", IssuerCertURL: testLeafIssuerURL}},
+		{"unfetchable issuer scheme", ca.LeafDistribution{CRLURL: testLeafCRLURL, IssuerCertURL: "file:///etc/intermediate.crt"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A nil signer is safe here and deliberate: if the guard ever
+			// stopped running first, this test would panic rather than
+			// quietly pass, which is the louder failure.
+			c := ca.NewCA(&x509.Certificate{}, nil, time.Hour, tc.dist)
+			if _, err := c.Issue(csr); !errors.Is(err, ca.ErrNoDistributionPoints) {
+				t.Fatalf("Issue error = %v, want ErrNoDistributionPoints", err)
+			}
+		})
+	}
+}
+
+// TestIssue_OpenSSLShowsDistributionPoints is sub-task 3b.4's "assert the
+// openssl x509 -text output in a test, do not eyeball it" item.
+//
+// Go's own parser already confirmed the fields round-trip
+// (TestIssue_SetsDistributionPoints); this asserts that an independent
+// implementation reads the same DER the same way. Encoding a CDP or an AIA
+// block that only crypto/x509 can interpret would be indistinguishable from
+// a correct one until a relying party using OpenSSL tried to fetch it.
+func TestIssue_OpenSSLShowsDistributionPoints(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("openssl not found on PATH")
+	}
+	c := newTestCA(t)
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	csr := signedCSR(t, priv, pkix.Name{CommonName: "openssl-dist.example.test"})
+	cert, err := c.Issue(csr)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	leafPath := filepath.Join(t.TempDir(), "leaf.pem")
+	writePEM(t, leafPath, "CERTIFICATE", cert.Raw)
+	out, err := exec.Command("openssl", "x509", "-in", leafPath, "-text", "-noout").CombinedOutput()
+	if err != nil {
+		t.Fatalf("openssl x509 -text: %v: %s", err, out)
+	}
+	text := string(out)
+
+	for _, want := range []string{
+		"X509v3 CRL Distribution Points",
+		"URI:" + testLeafCRLURL,
+		"Authority Information Access",
+		"CA Issuers - URI:" + testLeafIssuerURL,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("openssl x509 -text output does not contain %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "OCSP - URI") {
+		t.Fatalf("openssl x509 -text output names an OCSP responder, which does not exist until Phase 5b:\n%s", text)
 	}
 }

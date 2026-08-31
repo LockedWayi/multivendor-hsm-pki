@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,55 @@ const (
 	// backdate Issue applies to a certificate's NotBefore.
 	crlClockSkewAllowance = 5 * time.Minute
 )
+
+// Paths this service serves its public PKI artifacts at.
+//
+// They are exported constants rather than string literals in the mux
+// because they are not private routing detail: each one is baked into a
+// certificate as a CRL distribution point or an AIA pointer, and a
+// certificate cannot be edited after it is signed. Renaming a route here
+// without re-issuing every certificate that names it turns a live
+// distribution point into a 404, so the URLs and the routes are built from
+// one source (see LeafDistributionFor, which composes them, and
+// cmd/hsm-pki-keytool's -root-crl-url / -root-cert-url, which an operator
+// points at the last two).
+const (
+	// CRLPath serves the CRL covering the leaves this intermediate issued.
+	CRLPath = "/crl"
+	// IntermediateCertPath serves this service's own intermediate
+	// certificate: the AIA CA-Issuers target of every leaf it signs.
+	IntermediateCertPath = "/intermediate.crt"
+	// RootCertPath serves the ceremony-produced root certificate: the AIA
+	// CA-Issuers target named in the intermediate certificate.
+	RootCertPath = "/root.crt"
+	// RootCRLPath serves the ceremony-produced root CRL: the distribution
+	// point named in the intermediate certificate.
+	RootCRLPath = "/root.crl"
+)
+
+// LeafDistributionFor returns the CDP and AIA URLs a service reachable at
+// baseURL should write into every leaf it issues.
+//
+// It lives here, next to the routes, so the two cannot drift: the URL in a
+// certificate and the path in the mux are built from the same constant, and
+// a route rename that forgets the certificates is a compile-time change to
+// both at once. The composition root (cmd/hsm-pki-server) joins this to
+// ca.LoadIntermediateParams; internal/ca stays unaware of the HTTP surface
+// above it, which is why it takes complete URLs rather than a base and a
+// set of paths it would have to know.
+//
+// baseURL is the externally reachable origin of this service — what a
+// relying party can actually resolve, which is not necessarily what the
+// process binds to (server.listen_addr is commonly 0.0.0.0 behind a load
+// balancer). A trailing slash is tolerated; a path prefix is preserved, so
+// "https://pki.example.com/ca" yields "https://pki.example.com/ca/crl".
+func LeafDistributionFor(baseURL string) ca.LeafDistribution {
+	base := strings.TrimRight(baseURL, "/")
+	return ca.LeafDistribution{
+		CRLURL:        base + CRLPath,
+		IssuerCertURL: base + IntermediateCertPath,
+	}
+}
 
 // RootArtifacts are the ceremony-produced, public files the service
 // republishes so that the CDP and AIA URLs baked into the intermediate
@@ -83,19 +133,29 @@ func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspa
 		crlValidity: crlValidity,
 		root:        root,
 	}
+	// Encoded once here rather than per request: the intermediate
+	// certificate is fixed for the process's lifetime — it was signed at
+	// ceremony time and this service cannot re-issue it.
+	if issuer != nil && issuer.Certificate() != nil {
+		s.intermediatePEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Certificate().Raw})
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("POST /certificates", s.handleIssueCertificate)
 	mux.HandleFunc("POST /certificates/{serial}/revoke", s.handleRevoke)
-	mux.HandleFunc("GET /crl", s.handleCRL)
+	mux.HandleFunc("GET "+CRLPath, s.handleCRL)
+	// The issuer side of every leaf's AIA CA-Issuers pointer. A relying
+	// party holding only a leaf follows it to build the path upward; the
+	// leaf itself says where to look, and this is where it points.
+	mux.HandleFunc("GET "+IntermediateCertPath, s.handleIntermediateCert)
 	// Static, ceremony-produced artifacts. The paths are fixed and
 	// documented so an operator can point the ceremony's -root-crl-url and
 	// -root-cert-url at them before the certificates that embed those URLs
 	// are ever signed.
-	mux.HandleFunc("GET /root.crt", s.handleRootCert)
-	mux.HandleFunc("GET /root.crl", s.handleRootCRL)
+	mux.HandleFunc("GET "+RootCertPath, s.handleRootCert)
+	mux.HandleFunc("GET "+RootCRLPath, s.handleRootCRL)
 
 	return withRequestLogging(logger, http.TimeoutHandler(mux, requestTimeout, `{"error":"request timed out"}`))
 }
@@ -107,16 +167,32 @@ type server struct {
 	store       store.Store
 	crlValidity time.Duration
 	root        RootArtifacts
+	// intermediatePEM is this service's own CA certificate, pre-encoded for
+	// GET /intermediate.crt.
+	intermediatePEM []byte
 
 	crlMu            sync.Mutex
 	cachedCRL        []byte
 	cachedNextUpdate time.Time
 }
 
+// handleIntermediateCert serves this service's own intermediate certificate
+// at the AIA CA-Issuers URL every leaf it issues points at.
+//
+// This endpoint is what makes that pointer honest. A leaf carrying a
+// CA-Issuers URL that 404s is worse than a leaf carrying none: the first
+// tells a relying party the issuer is fetchable and then denies it, the
+// second tells it to look elsewhere from the start. The same reasoning is
+// why no OCSP pointer is set anywhere in this platform until the responder
+// exists (Phase 5b).
+func (s *server) handleIntermediateCert(w http.ResponseWriter, r *http.Request) {
+	s.servePEMArtifact(w, r, s.intermediatePEM, "intermediate certificate")
+}
+
 // handleRootCert serves the ceremony-produced root certificate at the AIA
 // CA-Issuers URL the intermediate points at.
 func (s *server) handleRootCert(w http.ResponseWriter, r *http.Request) {
-	s.serveRootArtifact(w, r, s.root.CertPEM, "root certificate")
+	s.servePEMArtifact(w, r, s.root.CertPEM, "root certificate")
 }
 
 // handleRootCRL serves the ceremony-produced root CRL at the distribution
@@ -128,25 +204,27 @@ func (s *server) handleRootCert(w http.ResponseWriter, r *http.Request) {
 // refreshing it means re-running the ceremony (docs/phases/
 // phase-3b-pki-hardening.md, "How the root CRL is produced").
 func (s *server) handleRootCRL(w http.ResponseWriter, r *http.Request) {
-	s.serveRootArtifact(w, r, s.root.CRLPEM, "root CRL")
+	s.servePEMArtifact(w, r, s.root.CRLPEM, "root CRL")
 }
 
-// serveRootArtifact writes one static ceremony artifact, or fails honestly
-// if it is absent.
+// servePEMArtifact writes one static PEM artifact, or fails honestly if it
+// is absent.
 //
 // The absent case matters more than it looks. cmd/hsm-pki-server validates
-// both artifacts at startup, but NewServer takes them by value and cannot
-// reject a zero-valued RootArtifacts, so an in-process caller can construct
-// a server without them. Writing an empty 200 there would be the worst
+// the root artifacts at startup and always has an intermediate certificate
+// by then, but NewServer takes both by value and cannot reject a
+// zero-valued RootArtifacts or a nil issuer, so an in-process caller can
+// construct a server without them. Writing an empty 200 there would be the
+// worst
 // outcome available: a relying party fetching the CRL distribution point
 // would receive a successful response containing a malformed CRL, and the
 // most likely way it handles that is to treat revocation as unavailable and
 // carry on. A 503 says the artifact is missing, which is the truth
 // (CLAUDE.md §3.4).
-func (s *server) serveRootArtifact(w http.ResponseWriter, r *http.Request, pemBytes []byte, what string) {
+func (s *server) servePEMArtifact(w http.ResponseWriter, r *http.Request, pemBytes []byte, what string) {
 	if len(pemBytes) == 0 {
-		loggerFromContext(r.Context()).Error("root artifact is not configured", "artifact", what)
-		s.writeError(w, http.StatusServiceUnavailable, what+" is not configured on this server")
+		loggerFromContext(r.Context()).Error("PEM artifact is not available", "artifact", what)
+		s.writeError(w, http.StatusServiceUnavailable, what+" is not available on this server")
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
@@ -433,10 +511,15 @@ func (s *server) currentCRL(ctx context.Context) ([]byte, error) {
 }
 
 // issueErrorResponse maps a ca.Issue error to an HTTP status and a message
-// safe to return to the caller. Every rejection reason ca.CA.Issue can
-// return by name maps to 400 — it is a statement about the caller's own
-// CSR, not internal server state; anything unrecognized maps to 500 with no
-// detail exposed.
+// safe to return to the caller. Every rejection reason listed below maps to
+// 400 — each is a statement about the caller's own CSR, not internal server
+// state; anything unrecognized maps to 500 with no detail exposed.
+//
+// ca.ErrNoDistributionPoints is deliberately not in the list, despite being
+// a named error Issue returns. It says this CA has nowhere to publish
+// revocation for what it signs, which is a fact about this server's
+// configuration and nothing the caller did — a 4xx would tell them to fix
+// their request, which cannot help.
 func issueErrorResponse(err error) (int, string) {
 	switch {
 	case errors.Is(err, ca.ErrInvalidCSRSignature):

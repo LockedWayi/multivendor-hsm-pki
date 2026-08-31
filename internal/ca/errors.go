@@ -38,4 +38,11 @@ var (
 	// ErrDisallowedKeyType is returned by Issue when a CSR's public key is
 	// not on the allow-list (ECDSA P-256/P-384/P-521, or RSA >= 2048 bits).
 	ErrDisallowedKeyType = errors.New("ca: CSR public key type is not allowed")
+
+	// ErrNoDistributionPoints is returned by Issue when the CA has no usable
+	// CRL distribution point or AIA CA-Issuers URL to write into the
+	// certificate. It describes this CA's own configuration, not the
+	// caller's request, so the HTTP layer maps it to a 500 rather than a
+	// 4xx (internal/api.issueErrorResponse).
+	ErrNoDistributionPoints = errors.New("ca: no leaf distribution points configured")
 )
