@@ -1,6 +1,7 @@
 package ca
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/x509"
@@ -51,8 +52,8 @@ type LoadIntermediateParams struct {
 // so a missing key or certificate here is a configuration error to report,
 // never a state to repair (CLAUDE.md §3.4).
 //
-// Four properties of the loaded certificate are checked before the service
-// is allowed to come up, each of them fail-closed:
+// The loaded certificate is checked before the service is allowed to come
+// up, every check fail-closed:
 //
 //   - It must be a CA certificate. Signing leaves with a non-CA certificate
 //     produces a chain no compliant verifier accepts.
@@ -62,6 +63,12 @@ type LoadIntermediateParams struct {
 //   - It must carry pathlen:0. This platform's hierarchy is two tiers
 //     (CLAUDE.md §3.6); an online CA permitted to certify further CAs has a
 //     blast radius the design does not accept.
+//   - It must assert keyCertSign and cRLSign. A compliant verifier enforces
+//     keyUsage independently of basicConstraints, so an intermediate
+//     missing either produces certificates or CRLs that are rejected
+//     everywhere but here.
+//   - It must be inside its own validity window. Nothing an expired issuer
+//     signs can chain.
 //   - Its public key must match the HSM key found under KeyLabel. Without
 //     this check, a certificate and a key label that refer to different key
 //     pairs would load cleanly and then produce signatures that verify
@@ -110,6 +117,15 @@ func LoadIntermediate(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.W
 // checkIntermediateCert enforces the tier constraints described on
 // LoadIntermediate.
 func checkIntermediateCert(cert *x509.Certificate, path string) error {
+	// BasicConstraints must be present and marked valid before IsCA or
+	// MaxPathLenZero mean anything: crypto/x509 leaves both at their zero
+	// values when the extension is absent. IsCA=false already rejects that
+	// case, so this is belt-and-braces — but it states the dependency
+	// rather than leaving it to be re-derived by the next reader.
+	if !cert.BasicConstraintsValid {
+		return fmt.Errorf("%w: %s carries no basicConstraints extension, so it asserts no CA status at all (RFC 5280 §4.2.1.9)",
+			ErrNotAnIntermediate, path)
+	}
 	if !cert.IsCA {
 		return fmt.Errorf("%w: %s is not a CA certificate (IsCA=false)", ErrNotAnIntermediate, path)
 	}
@@ -124,6 +140,33 @@ func checkIntermediateCert(cert *x509.Certificate, path string) error {
 	if !cert.MaxPathLenZero {
 		return fmt.Errorf("%w: %s does not carry pathlen:0, so it is permitted to certify further CAs; this platform's hierarchy is two tiers (CLAUDE.md §3.6)",
 			ErrNotAnIntermediate, path)
+	}
+	// keyUsage decides what this certificate is *allowed* to do, and a
+	// compliant verifier enforces it independently of basicConstraints
+	// (RFC 5280 §4.2.1.3). An intermediate missing keyCertSign produces
+	// leaves every such verifier rejects; missing cRLSign, the CRL this
+	// service publishes is rejected the same way — and this service signs
+	// both, so both are required rather than one being optional.
+	if cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return fmt.Errorf("%w: %s does not assert the keyCertSign key usage, so every certificate signed under it is rejected by a compliant verifier (RFC 5280 §4.2.1.3)",
+			ErrNotAnIntermediate, path)
+	}
+	if cert.KeyUsage&x509.KeyUsageCRLSign == 0 {
+		return fmt.Errorf("%w: %s does not assert the cRLSign key usage, and this service publishes the CRL covering the certificates it issues (GET /crl)",
+			ErrNotAnIntermediate, path)
+	}
+	// An expired or not-yet-valid intermediate cannot produce a usable
+	// certificate: RFC 5280 §6.1.3 validates every certificate in the path
+	// against the same instant. Refusing at startup, where an operator is
+	// watching, beats coming up and failing every issuance later
+	// (CLAUDE.md §3.4). Issue re-checks per issuance, because a service
+	// that started before the expiry is still running after it.
+	now := time.Now()
+	if now.Before(cert.NotBefore) {
+		return fmt.Errorf("%w: %s is not valid until %s", ErrIssuerNotValid, path, cert.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(cert.NotAfter) {
+		return fmt.Errorf("%w: %s expired at %s", ErrIssuerNotValid, path, cert.NotAfter.Format(time.RFC3339))
 	}
 	return nil
 }
@@ -147,14 +190,24 @@ func checkKeyMatchesCert(signer *Signer, cert *x509.Certificate, keyLabel, certP
 	return nil
 }
 
+// loadCertPEM reads the single PEM certificate at path.
+//
+// A file with a second block is rejected rather than silently reduced to
+// its first. The likely way that happens is an operator pasting a whole
+// chain into ca.intermediate_cert_path, and picking the first block would
+// make the choice by file order — which is nobody's decision (CLAUDE.md
+// §3.8, and §3.4 on not degrading to a weaker path).
 func loadCertPEM(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("ca: reading CA certificate %s: %w", path, err)
 	}
-	block, _ := pem.Decode(data)
+	block, rest := pem.Decode(data)
 	if block == nil {
 		return nil, fmt.Errorf("ca: %s does not contain a PEM block", path)
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("ca: %s contains more than one PEM block; it must hold exactly one certificate, not a chain", path)
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {

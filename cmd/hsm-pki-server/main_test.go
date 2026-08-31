@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/config"
@@ -138,5 +139,60 @@ func TestVerifyHSMConnection_WrongPINFails(t *testing.T) {
 
 	if _, err := verifyHSMConnection(context.Background(), cfg, adapter); err == nil {
 		t.Fatal("verifyHSMConnection with the wrong PIN succeeded, want an error")
+	}
+}
+
+// TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails is CLAUDE.md §3.8 on
+// the service side: a label that matches two tokens identifies neither.
+//
+// PKCS#11 specifies CKA_LABEL as a description and requires no uniqueness,
+// so taking the first match means the driver's enumeration order decides
+// which token holds the CA's key — and it may decide differently on the next
+// boot. cmd/hsm-pki-keytool already refused to choose here; the service used
+// to take the first hit, which is the defect this pins.
+func TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails(t *testing.T) {
+	modulePath := requireSoftHSM2(t)
+	const label, pin = "main-test-duplicate", "123456"
+
+	// Two tokens, one label, in a single token directory. SoftHSM2 permits
+	// it, which is the whole point: the standard does not forbid it either.
+	dir := t.TempDir()
+	tokenDir := filepath.Join(dir, "tokens")
+	if err := os.MkdirAll(tokenDir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	confPath := filepath.Join(dir, "softhsm2.conf")
+	conf := "directories.tokendir = " + tokenDir + "\nobjectstore.backend = file\nlog.level = ERROR\n"
+	if err := os.WriteFile(confPath, []byte(conf), 0600); err != nil {
+		t.Fatalf("WriteFile(softhsm2.conf): %v", err)
+	}
+	t.Setenv("SOFTHSM2_CONF", confPath)
+	for i := 0; i < 2; i++ {
+		cmd := exec.Command("softhsm2-util", "--init-token", "--free",
+			"--label", label, "--so-pin", "000000", "--pin", pin)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("softhsm2-util --init-token (%d): %v: %s", i, err, out)
+		}
+	}
+	t.Setenv("MAIN_TEST_PIN", pin)
+
+	cfg, err := config.Load(writeSoftHSM2Config(t, modulePath, label))
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	adapter, err := cfg.NewVendorAdapter()
+	if err != nil {
+		t.Fatalf("NewVendorAdapter: %v", err)
+	}
+	defer adapter.Close()
+
+	_, err = verifyHSMConnection(context.Background(), cfg, adapter)
+	if err == nil {
+		t.Fatal("verifyHSMConnection chose between two tokens sharing a label, want a refusal")
+	}
+	// The error has to be usable: an operator needs to know which tokens
+	// collided, and serial is the field that distinguishes them.
+	if !strings.Contains(err.Error(), "matches 2 tokens") {
+		t.Fatalf("error %q does not say the label was ambiguous", err)
 	}
 }

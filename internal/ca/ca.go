@@ -19,6 +19,12 @@ import (
 // not required to match that choice.
 const minRSAKeyBits = 2048
 
+// issuanceClockSkewAllowance backdates a leaf's NotBefore so a verifier
+// whose clock trails this host's does not reject a certificate as
+// not-yet-valid. internal/api applies the same allowance to a CRL's
+// thisUpdate, and the ceremony to the certificates and CRL it signs.
+const issuanceClockSkewAllowance = 5 * time.Minute
+
 // LeafDistribution is the pair of URLs Issue writes into every leaf
 // certificate: where the CRL that governs the leaf is published, and where
 // the certificate that signed it can be fetched.
@@ -133,6 +139,16 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 		return nil, err
 	}
 
+	now := time.Now()
+	// NotBefore is backdated to absorb clock skew, so the window this leaf
+	// will claim is [now-skew, now+certTTL]. Both ends are checked against
+	// the issuer before anything is signed.
+	notBefore := now.Add(-issuanceClockSkewAllowance)
+	notAfter := now.Add(c.certTTL)
+	if err := c.checkIssuerCanCover(now, notAfter); err != nil {
+		return nil, err
+	}
+
 	serial, err := GenerateSerial()
 	if err != nil {
 		return nil, err
@@ -142,14 +158,11 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 		return nil, err
 	}
 
-	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      csr.Subject,
-		// A short backdate absorbs clock skew between this host and
-		// whatever will validate the certificate first.
-		NotBefore:             now.Add(-5 * time.Minute),
-		NotAfter:              now.Add(c.certTTL),
+		SerialNumber:          serial,
+		Subject:               csr.Subject,
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
 		KeyUsage:              keyUsageFor(csr.PublicKey),
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
@@ -174,6 +187,51 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 		return nil, fmt.Errorf("ca: CreateCertificate: %w", err)
 	}
 	return x509.ParseCertificate(der)
+}
+
+// checkIssuerCanCover refuses to sign anything the issuing certificate
+// cannot actually vouch for at the moment of issuance.
+//
+// Two distinct failures, both fail-closed (CLAUDE.md §3.4):
+//
+//   - The issuer is outside its own validity window. RFC 5280 §6.1.3
+//     validates every certificate in a path against the same instant, so a
+//     leaf signed by an expired issuer is invalid the moment it exists.
+//     Handing one to a caller who then deploys it is worse than refusing:
+//     the failure surfaces at whatever tries to use it, far from the cause.
+//   - The leaf would outlive the issuer. The certificate would advertise a
+//     NotAfter the chain cannot honor, and stop working when the issuer
+//     expires regardless of what it claims.
+//
+// # Rejected rather than clamped to the issuer's NotAfter
+//
+// This is the same choice, for the same reason, that the ceremony makes
+// when an intermediate would outlive its root (CeremonyParams.validate):
+// clamping hands back a certificate whose lifetime silently differs from
+// the configured one, and the holder discovers it at renewal time — or
+// does not, and is surprised by an early expiry.
+//
+// The operational consequence is deliberate and worth stating plainly: a
+// service configured with ca.cert_ttl_hours = N stops issuing N hours
+// before its intermediate expires, rather than quietly issuing
+// ever-shorter certificates as that date approaches. The remedy is the one
+// the platform already has — re-issue the intermediate from the root
+// ceremony (CLAUDE.md §3.7) — and a loud, dated refusal is what prompts it.
+func (c *CA) checkIssuerCanCover(now, notAfter time.Time) error {
+	if now.Before(c.cert.NotBefore) {
+		return fmt.Errorf("%w: issuer %q is not valid until %s",
+			ErrIssuerNotValid, c.cert.Subject.CommonName, c.cert.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(c.cert.NotAfter) {
+		return fmt.Errorf("%w: issuer %q expired at %s",
+			ErrIssuerNotValid, c.cert.Subject.CommonName, c.cert.NotAfter.Format(time.RFC3339))
+	}
+	if notAfter.After(c.cert.NotAfter) {
+		return fmt.Errorf("%w: a leaf valid until %s would outlive issuer %q, which expires at %s — reduce ca.cert_ttl_hours or re-issue the intermediate",
+			ErrValidityExceedsIssuer, notAfter.Format(time.RFC3339),
+			c.cert.Subject.CommonName, c.cert.NotAfter.Format(time.RFC3339))
+	}
+	return nil
 }
 
 // validateCSR checks a CSR's self-signature, subject, and key type before
@@ -217,8 +275,15 @@ func keyUsageFor(pub crypto.PublicKey) x509.KeyUsage {
 	switch pub.(type) {
 	case *rsa.PublicKey:
 		return x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
+	case *ecdsa.PublicKey:
+		return x509.KeyUsageDigitalSignature
 	default:
-		// ECDSA, and anything else validateCSR has already allowed.
+		// Unreachable: validateCSR runs first and allows only the two types
+		// above. The case is spelled out anyway, and returns the narrowest
+		// usage rather than a convenient one, so that widening
+		// validateCSR's allow-list without revisiting this function grants
+		// no capability by default. TestKeyUsageFor_CoversEveryAllowedKeyType
+		// pins the two lists together.
 		return x509.KeyUsageDigitalSignature
 	}
 }
