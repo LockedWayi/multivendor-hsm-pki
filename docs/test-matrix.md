@@ -6,9 +6,9 @@ what is being proved, where it lives, and what a vendor has to supply before
 it can join the rotation.
 
 It exists because the rotation is about to grow. SoftHSM2 and ProtectServer
-run today; nShield and Luna are Phase 7. The cost of adding the fourth and
-fifth must be a registry entry and an adapter — not a survey of every test
-file — and that only stays true if the inventory is written down.
+run today; nShield and Luna are Phase 7, making four. The cost of adding the
+third and fourth must be a registry entry and an adapter — not a survey of
+every test file — and that only stays true if the inventory is written down.
 
 ---
 
@@ -129,7 +129,7 @@ because each was found the hard way:
 | Slot renumbering | Creating a slot renumbered existing ones on ProtectToolkit while serials held |
 | Concurrency | `C_GetSlotList` deadlocked under concurrent callers on ProtectToolkit despite `CKF_OS_LOCKING_OK` |
 | Digest handling | ProtectToolkit's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted |
-| Object accumulation | Tokens that persist between runs accumulate test keys, and there is no `DestroyObject` yet (Phase 4.8). Measured: the ProtectServer token store went from 968 to 2048 objects in one session after this migration. A software emulator absorbs that; hardware token memory does not — see the recommendation on Phase 4.8's `DestroyObject` item |
+| Object accumulation | Tokens that persist between runs accumulate test keys. The harness now destroys everything a run created (`hsmtest.Backend.Cleanup`), which took the residue from +215 objects per full run to +23. Historical litter from before that — roughly 3,000 objects on the maintainer's ProtectServer store — is deliberately left alone: a suite that deletes objects it did not create is a destructive operation aimed at somebody else's token, and clearing it is an operator's call |
 
 ---
 

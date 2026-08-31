@@ -534,6 +534,37 @@ func (a *pkcs11Adapter) GenerateRandom(ctx context.Context, s *Session, n int) (
 
 // ─── Find / attributes ──────────────────────────────────────────────────
 
+// DestroyObject removes obj from the token permanently. See the interface
+// for why it takes a handle and not a label.
+//
+// Needed for two things this platform has been putting off: a key lifecycle
+// that can actually retire a version rather than only adding new ones
+// (CLAUDE.md §3.7 — "retire it by destroying it on the token"), and tests
+// that clean up after themselves. The second turned urgent when every
+// token-touching test began running against every backend: on a vendor
+// whose tokens persist, the object count grows with the size of the suite,
+// and hardware token memory is finite.
+func (a *pkcs11Adapter) DestroyObject(ctx context.Context, s *Session, obj ObjectHandle) error {
+	if err := checkCtx(ctx); err != nil {
+		return err
+	}
+	if err := s.touch(); err != nil {
+		return err
+	}
+	return a.withStateLock(func() error {
+		if err := a.ctx.DestroyObject(s.handle, p11.ObjectHandle(obj)); err != nil {
+			return fmt.Errorf("C_DestroyObject: %w", err)
+		}
+		return nil
+	})
+}
+
+// findObjectsBatch is how many handles one C_FindObjects call asks for.
+// The value is a round-trip/allocation trade-off only: the loop that uses
+// it continues until the token returns nothing, so it never bounds how many
+// objects a search can return.
+const findObjectsBatch = 50
+
 func (a *pkcs11Adapter) FindObjects(ctx context.Context, s *Session, tmpl []Attribute) ([]ObjectHandle, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -549,16 +580,33 @@ func (a *pkcs11Adapter) FindObjects(ctx context.Context, s *Session, tmpl []Attr
 			return fmt.Errorf("C_FindObjectsInit: %w", err)
 		}
 		defer a.ctx.FindObjectsFinal(s.handle)
+		// Loop until a batch comes back empty, which is the PKCS#11 idiom
+		// and what miekg/pkcs11 documents: "Calling the function repeatedly
+		// may yield additional results until an empty slice is returned.
+		// The returned boolean value is deprecated and should be ignored."
+		//
+		// This used to break on that boolean, which the binding computes as
+		// ulCount > max — a condition C_FindObjects can never satisfy,
+		// because it never returns more handles than the maximum it was
+		// given. So the loop always stopped after the first batch and every
+		// search silently returned at most 50 objects.
+		//
+		// Silently is the word that matters: nothing errored, the caller
+		// got a well-formed short list, and on a token holding fewer than
+		// 50 objects — every test token this repository had until the suite
+		// went multi-backend — the truncation was invisible. It surfaced
+		// only when a cleanup routine reported destroying nothing on a
+		// token with thousands of objects on it.
 		for {
-			batch, more, err := a.ctx.FindObjects(s.handle, 50)
+			batch, _, err := a.ctx.FindObjects(s.handle, findObjectsBatch)
 			if err != nil {
 				return fmt.Errorf("C_FindObjects: %w", err)
 			}
+			if len(batch) == 0 {
+				break
+			}
 			for _, h := range batch {
 				out = append(out, ObjectHandle(h))
-			}
-			if !more {
-				break
 			}
 		}
 		return nil

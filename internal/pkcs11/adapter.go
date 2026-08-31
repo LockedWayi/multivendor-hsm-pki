@@ -65,6 +65,16 @@ type VendorAdapter interface {
 	FindObjects(ctx context.Context, s *Session, tmpl []Attribute) ([]ObjectHandle, error)
 	// GetAttributes reads the requested attributes off obj.
 	GetAttributes(ctx context.Context, s *Session, obj ObjectHandle, types []AttributeType) ([]Attribute, error)
+	// DestroyObject removes obj from the token permanently.
+	//
+	// This is the one operation in this interface that cannot be undone by
+	// calling it again, and it takes a handle rather than a label
+	// deliberately: resolving "which object did you mean" is the caller's
+	// problem, and CKA_LABEL cannot answer it — the standard places no
+	// uniqueness constraint on it (CLAUDE.md §3.8). A caller that destroys
+	// by label must refuse when the lookup matches more than one object,
+	// the way findKeyByLabel already does.
+	DestroyObject(ctx context.Context, s *Session, obj ObjectHandle) error
 
 	// Sign and Verify operate with an asymmetric key (e.g. MechECDSA).
 	Sign(ctx context.Context, s *Session, key ObjectHandle, mech Mechanism, data []byte) ([]byte, error)
