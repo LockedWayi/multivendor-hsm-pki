@@ -201,8 +201,21 @@ PY
 #
 # Anything else -- a docker failure, a changed message in a future release --
 # is unrecognised and fails closed rather than being read as a pass.
+# ensure_runner_image builds the runner if it is not already present.
+#
+# Called from both entry points, because they each need it and neither can
+# assume the other ran first: on a fresh checkout `fetch` reached its last
+# check with no image to run and failed there -- fail-closed, but the script
+# was unusable on exactly the machine CLAUDE.md §1 cares most about.
+ensure_runner_image() {
+    docker image inspect "$RUNNER_IMAGE" >/dev/null 2>&1 && return 0
+    log "building the cosign runner image"
+    docker build -q -f "$REPO_ROOT/ci/cosign.Dockerfile" -t "$RUNNER_IMAGE" "$REPO_ROOT" >/dev/null
+}
+
 assert_pkcs11_build() {
     local binary="$1" out
+    ensure_runner_image
     # Deliberately no signing-state mounts. Loading a module is not what is
     # being tested, and mounting a state directory that does not exist yet
     # makes docker create it on the host as root -- which then blocks
@@ -245,9 +258,7 @@ $(printf '  %s\n' "${missing[@]}")
 Provision the keys first:  deploy/docker/provision-signing-keys.sh
 (or point HSM_PKI_SIGNING_STATE at an existing store)."
     fi
-    docker image inspect "$RUNNER_IMAGE" >/dev/null 2>&1 || {
-        docker build -q -f "$REPO_ROOT/ci/cosign.Dockerfile" -t "$RUNNER_IMAGE" "$REPO_ROOT" >/dev/null
-    }
+    ensure_runner_image
 
     # The PIN reaches cosign as an environment variable and never as
     # pin-value= in the PKCS#11 URI: a URI is a command-line argument, so it
@@ -270,8 +281,13 @@ Provision the keys first:  deploy/docker/provision-signing-keys.sh
         "$RUNNER_IMAGE" "$@"
 }
 
-case "${1:-}" in
-    fetch) shift; fetch "$@" ;;
-    "")    die "usage: ci/cosign.sh fetch | ci/cosign.sh <cosign args>" ;;
-    *)     run "$@" ;;
-esac
+# Guarded so ci/cosign-selftest.sh can source this file and exercise the
+# individual checks. A guard nobody can trigger deliberately is a guard
+# nobody has seen work (the same reasoning as 4.8's lateral tests).
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    case "${1:-}" in
+        fetch) shift; fetch "$@" ;;
+        "")    die "usage: ci/cosign.sh fetch | ci/cosign.sh <cosign args>" ;;
+        *)     run "$@" ;;
+    esac
+fi
