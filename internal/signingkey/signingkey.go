@@ -166,7 +166,117 @@ func Provision(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session,
 	if err := key.verifyProtection(); err != nil {
 		return Key{}, err
 	}
+
+	// And finally: is this actually a new key? See findDuplicatePoint for
+	// why that is a real question and not a tautology. A duplicate is
+	// destroyed rather than returned — we made it, so removing it is ours
+	// to do, and leaving it would hand the caller a label that silently
+	// aliases another purpose's key.
+	duplicate, err := findDuplicatePoint(ctx, adapter, s, p.Label, key.Public, curve)
+	if err != nil {
+		return Key{}, err
+	}
+	if duplicate != "" {
+		destroyErr := destroyKeyPair(ctx, adapter, s, p.Label)
+		err := fmt.Errorf("%w: the key just generated under %q is the same key pair as %q already on this token",
+			ErrDuplicateKey, p.Label, duplicate)
+		if destroyErr != nil {
+			return Key{}, fmt.Errorf("%w; and removing it failed, so %q must be destroyed by hand before retrying: %v",
+				err, p.Label, destroyErr)
+		}
+		return Key{}, err
+	}
 	return key, nil
+}
+
+// ErrDuplicateKey reports that a freshly generated key pair is the same key
+// pair as one already on the token.
+var ErrDuplicateKey = errors.New("signingkey: the token generated a key it had already generated")
+
+// findDuplicatePoint returns the label of another key on the token carrying
+// the same public point as pub, or "" when the key really is new.
+//
+// # Why this is not paranoia
+//
+// It reads as a tautology — two freshly generated P-256 pairs colliding has
+// a probability nobody needs to defend against — right up until a token's
+// RNG is not what the caller assumes. Measured on ProtectToolkit-C 7.3.3 in
+// software emulation, 2026-09-04: the RNG is seeded deterministically per
+// C_Initialize, so the Nth key pair generated after each library
+// initialisation is byte-for-byte the same key pair, across processes and
+// across days. C_GenerateRandom repeats identically too, so it is the whole
+// RNG rather than key generation alone (docs/pkcs11-vendor-notes.md).
+//
+// That collides head-on with how this platform provisions: one key per
+// keytool invocation, which is one C_Initialize each, which on that backend
+// means image-signing-key-v1 and artifact-signing-key-v1 come out as *one
+// key under two labels* — the precise reuse CLAUDE.md §3.6 forbids,
+// arriving silently, with every other attribute correct.
+//
+// So the check is empirical rather than theoretical, and it belongs here
+// because this is the only moment the platform can still refuse. It is also
+// the same question inventory.Validate asks of the published document; two
+// layers, because one of them is the layer an operator meets first.
+//
+// Keys on other curves are skipped rather than treated as errors: a point
+// that does not decode on this curve is a key from some other purpose
+// entirely, and it cannot be equal to one that does.
+func findDuplicatePoint(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, ownLabel string, pub *ecdsa.PublicKey, curve pk11.ECCurve) (string, error) {
+	ellipticCurve := curve.Curve()
+	handles, err := adapter.FindObjects(ctx, s, []pk11.Attribute{
+		pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPublicKey)),
+	})
+	if err != nil {
+		return "", fmt.Errorf("signingkey: listing public keys to check %q is new: %w", ownLabel, err)
+	}
+	for _, h := range handles {
+		attrs, err := adapter.GetAttributes(ctx, s, h, []pk11.AttributeType{pk11.AttrLabel, pk11.AttrEcPoint})
+		if err != nil {
+			// Fail closed: a key this check could not read is a key it
+			// cannot clear, and "probably fine" is not an answer to "did
+			// the token just hand me somebody else's key".
+			return "", fmt.Errorf("signingkey: reading a public key while checking %q is new: %w", ownLabel, err)
+		}
+		var label string
+		var point []byte
+		for _, a := range attrs {
+			switch a.Type {
+			case pk11.AttrLabel:
+				label = string(a.Value)
+			case pk11.AttrEcPoint:
+				point = a.Value
+			}
+		}
+		if label == ownLabel || len(point) == 0 {
+			continue
+		}
+		other, err := pk11.DecodeECPoint(ellipticCurve, point)
+		if err != nil {
+			continue
+		}
+		if SameKey(pub, other) {
+			return label, nil
+		}
+	}
+	return "", nil
+}
+
+// destroyKeyPair removes both halves of the pair carrying label. Used only
+// to undo a generation this package has just decided to reject.
+func destroyKeyPair(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string) error {
+	for _, class := range []pk11.ObjectClass{pk11.ClassPublicKey, pk11.ClassPrivateKey} {
+		handle, err := pk11.FindKeyByLabel(ctx, adapter, s, class, label)
+		if errors.Is(err, pk11.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := adapter.DestroyObject(ctx, s, handle); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Load reads an existing signing key's public half and protection

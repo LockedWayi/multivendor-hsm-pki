@@ -37,15 +37,17 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hsm-pki-keytool <command> [flags]\n  commands: ceremony, provision-signing-key")
+		return errors.New("usage: hsm-pki-keytool <command> [flags]\n  commands: ceremony, provision-signing-key, generate-inventory")
 	}
 	switch args[0] {
 	case "ceremony":
 		return runCeremonyCmd(args[1:])
 	case "provision-signing-key":
 		return runProvisionSigningKeyCmd(args[1:])
+	case "generate-inventory":
+		return runGenerateInventoryCmd(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (want: ceremony, provision-signing-key)", args[0])
+		return fmt.Errorf("unknown command %q (want: ceremony, provision-signing-key, generate-inventory)", args[0])
 	}
 }
 
