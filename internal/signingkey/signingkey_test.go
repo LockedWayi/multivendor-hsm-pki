@@ -348,3 +348,80 @@ func TestValidateLabel(t *testing.T) {
 		}
 	}
 }
+
+// TestProvision_SatisfiesWhatCosignsBindingRequiresToFindThePair pins the
+// preconditions cosign actually imposes, read out of its source rather than
+// assumed (Phase 4.8).
+//
+// The chain, as of cosign v3.1.3 → ThalesIgnite/crypto11 v1.2.5:
+//
+//   - cosign passes *one* of keyID or keyLabel to crypto11's FindKeyPair
+//     (keyID wins if both are configured), and that search matches the
+//     **private** half.
+//   - crypto11's makeKeyPair then reads CKA_ID and CKA_LABEL off that
+//     private key and looks for the **public** half carrying both, falling
+//     back to CKA_ID alone.
+//   - A private key whose CKA_ID is empty is rejected outright with
+//     errNoCkaId: "this is required to locate the matching public key".
+//   - If no public half is found, no key pair is returned.
+//
+// So three things must hold on the token, and none of them is checked
+// anywhere else in this repository: the private half has a non-empty
+// CKA_ID, both halves carry the *same* CKA_ID, and both carry the same
+// CKA_LABEL. A key that violates any of them is invisible to cosign while
+// looking perfectly correct to every tool here — the signing step would fail
+// with "no key pair found" for a key that plainly exists.
+//
+// This is the mechanical half of the check. Running cosign itself needs the
+// pkcs11-enabled build, which Phase 4.9 obtains.
+func TestProvision_SatisfiesWhatCosignsBindingRequiresToFindThePair(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+		label := b.Label("image-signing-key-v4")
+
+		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: label}); err != nil {
+			t.Fatalf("Provision: %v", err)
+		}
+
+		read := func(class pk11.ObjectClass) (id, lbl []byte) {
+			t.Helper()
+			h, err := pk11.FindKeyByLabel(ctx, b.Adapter, s, class, label)
+			if err != nil {
+				t.Fatalf("FindKeyByLabel(class=%d): %v", class, err)
+			}
+			attrs, err := b.Adapter.GetAttributes(ctx, s, h, []pk11.AttributeType{pk11.AttrID, pk11.AttrLabel})
+			if err != nil {
+				t.Fatalf("GetAttributes(class=%d): %v", class, err)
+			}
+			for _, a := range attrs {
+				switch a.Type {
+				case pk11.AttrID:
+					id = a.Value
+				case pk11.AttrLabel:
+					lbl = a.Value
+				}
+			}
+			return id, lbl
+		}
+
+		privID, privLabel := read(pk11.ClassPrivateKey)
+		pubID, pubLabel := read(pk11.ClassPublicKey)
+
+		if len(privID) == 0 {
+			t.Error("the private key has an empty CKA_ID; crypto11 rejects such a key with errNoCkaId " +
+				"before it ever looks for the public half")
+		}
+		if !bytes.Equal(privID, pubID) {
+			t.Errorf("CKA_ID differs across the pair: private %x, public %x — crypto11 locates the public "+
+				"half by the private half's CKA_ID, so cosign would report no key pair found", privID, pubID)
+		}
+		if !bytes.Equal(privLabel, pubLabel) {
+			t.Errorf("CKA_LABEL differs across the pair: private %q, public %q — crypto11 matches on both "+
+				"before falling back to CKA_ID alone", privLabel, pubLabel)
+		}
+		if string(privLabel) != label {
+			t.Errorf("CKA_LABEL on the token is %q, want %q — this is the value a PKCS#11 URI's object= carries", privLabel, label)
+		}
+	})
+}

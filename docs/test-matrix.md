@@ -63,12 +63,12 @@ Three properties of the harness matter for a new vendor:
 | `internal/ca` ceremony + intermediate | 12 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, `LoadIntermediate`'s startup gates |
 | `internal/ca` issuance + signer | 15 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points |
 | `internal/api` HTTP surface | 27 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness |
-| `internal/signingkey` | 10 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
+| `internal/signingkey` | 11 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
 | `cmd/hsm-pki-keytool` | 15 | The ceremony, the supply-chain key provisioning, and the signed key-inventory generation as an operator runs them, through the CLI's own adapter — including the two-token refusal and the openssl check of an HSM-made inventory signature |
 | `cmd/hsm-pki-server` | — | Startup: workspace resolution, anchor login, ambiguous-label refusal |
 
-Counted per backend, a full run executes **80 vendor-parameterised subtests
-on each configured backend**, plus the conformance suite — 81 top-level
+Counted per backend, a full run executes **81 vendor-parameterised subtests
+on each configured backend**, plus the conformance suite — 82 top-level
 `Test.../<backend>` subtests in all. Re-measured 2026-09-04 after Phase
 4.8's keytool subcommands landed (67 + 1 before that group, then 73 + 1
 after the provisioning command), rather than maintained by hand:
@@ -80,7 +80,7 @@ go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
 The anchor matters. `--- PASS:` lines carry a timing suffix, so an
 end-anchored pattern against them matches nothing and reports zero; and an
 unanchored pattern counts nested subtests too, which is a different number
-(124) measuring a different thing.
+(125) measuring a different thing.
 
 ## 4. What deliberately does not multiply
 
@@ -88,6 +88,9 @@ These touch no token, so running them per vendor would cost time and prove
 nothing:
 
 - `internal/config` — YAML parsing and validation
+- `internal/keyaudit` — reads the repository's own configuration files and
+  compares them against the published inventory; it is a check on the
+  repository, not on a token
 - `internal/inventory` — the key inventory is a *document*. The key that
   signs it lives on an HSM, but the format, its validation rules and its
   signature verification are pure logic, and the openssl cross-check there
