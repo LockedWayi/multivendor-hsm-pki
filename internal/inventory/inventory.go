@@ -22,8 +22,18 @@
 // any process that holds them. That is the invariant behind TUF's offline
 // root role, Sigstore's own trust root, and a classic offline X.509 root:
 // the anchor is offline and separate. This repository's answer is
-// `inventory-signing-key-v1` on the offline token (Phase 4.8), whose public
-// half is distributed out of band, the same way TUF bootstraps `root.json`.
+// `inventory-signing-key-v1` on an offline token of its own (Phase 4.8),
+// whose public half is distributed out of band, the same way TUF bootstraps
+// `root.json`.
+//
+// Its own token rather than the CA root's, for two reasons that pull the
+// same way. The root's token is opened for a ceremony and nothing else, so
+// putting the inventory key there would make every supply-chain rotation a
+// root-token access — which in a real organisation means witnesses and a
+// procedure, and a control that expensive is a control that gets skipped.
+// And keeping them apart means `signingkey.CheckNoCAHierarchyKey` stays
+// absolute: no signing key of any purpose shares a token with a CA key,
+// with no exception carved out for this one.
 //
 // The signature covers the inventory file's exact bytes, so verifying it
 // needs no knowledge of this package:
