@@ -43,6 +43,20 @@ var labelPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*-v[0-9]+$`)
 // pkcs11.FindKeyByLabel exists to refuse, created deliberately.
 var ErrLabelTaken = errors.New("signingkey: label already in use on this token")
 
+// ValidateLabel reports whether label is a versioned signing-key label.
+//
+// Exported so a caller can refuse a typo before it opens a session, without
+// restating the pattern: Provision applies exactly this check as its first
+// step, so the CLI and the library cannot disagree about what a valid label
+// is. Duplicating the rule in cmd/hsm-pki-keytool would create a second
+// place for §3.7's versioning to drift out of.
+func ValidateLabel(label string) error {
+	if !labelPattern.MatchString(label) {
+		return fmt.Errorf("signingkey: label %q is not a versioned label (want e.g. image-signing-key-v1)", label)
+	}
+	return nil
+}
+
 // Params describes one signing key to provision.
 type Params struct {
 	// Label is the versioned CKA_LABEL, e.g. "image-signing-key-v1".
@@ -102,8 +116,8 @@ func (k Key) PEM() ([]byte, error) {
 // weaker version of the key we asked for; it is a different key with a
 // different threat model, and the build must stop rather than sign with it.
 func Provision(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, p Params) (Key, error) {
-	if !labelPattern.MatchString(p.Label) {
-		return Key{}, fmt.Errorf("signingkey: label %q is not a versioned label (want e.g. image-signing-key-v1)", p.Label)
+	if err := ValidateLabel(p.Label); err != nil {
+		return Key{}, err
 	}
 	// No defaulting branch: pkcs11.ECCurve's zero value is already P256,
 	// which is the platform default.
@@ -250,4 +264,73 @@ func SameKey(a, b *ecdsa.PublicKey) bool {
 		return false
 	}
 	return a.Curve == b.Curve && a.X.Cmp(b.X) == 0 && a.Y.Cmp(b.Y) == 0
+}
+
+// caKeyLabelPattern matches the labels this repository gives the CA
+// hierarchy's key pairs — `ca-root-key-v1`, `ca-intermediate-key-v2`, and
+// so on under the versioned scheme of CLAUDE.md §3.7.
+//
+// It is deliberately suffix-anchored rather than whole-string-anchored: a
+// deployment (or this repository's own test harness) may carry a prefix on
+// every label it creates, and a guard that only recognises the bare form
+// would stop recognising the thing it exists to find the moment anyone
+// namespaced their labels. Matching more than strictly necessary is the
+// safe direction for a refusal.
+var caKeyLabelPattern = regexp.MustCompile(`(^|-)ca-(root|intermediate)-key-v[0-9]+$`)
+
+// ErrCAHierarchyKeyPresent reports that the token being provisioned already
+// holds one of the CA hierarchy's private keys.
+var ErrCAHierarchyKeyPresent = errors.New("signingkey: token already holds a CA hierarchy private key")
+
+// CheckNoCAHierarchyKey fails closed when the token behind s carries a
+// private key under a CA-hierarchy label, and is the provisioning-time
+// enforcement of Phase 4.8's third-token decision.
+//
+// That decision is the one thing about these keys that a later reader
+// cannot recover from the objects themselves: the supply-chain keys live on
+// their own token because PKCS#11 authenticates a *token*, not a key, so a
+// process holding a session on the CA's online token can find and use every
+// key on it (docs/threat-model.md §6.1). Provisioning an image key onto
+// that token would leave every object individually correct — right label,
+// right attributes, distinct CKA_ID — while silently voiding the separation
+// claim the platform makes. The cheap moment to catch that is the one
+// moment it is still reversible, before the label is taken.
+//
+// Two limits, stated rather than glossed. This searches by label, and a
+// label is not an identity (CLAUDE.md §3.8) — a CA key provisioned under
+// some other name is not found here. And it only looks at the token it is
+// pointed at. So this is a guard against the co-location an operator can
+// reach by accident with this repository's own naming, not a proof of
+// separation; the proof is that the CA hierarchy's keys are on tokens whose
+// serials differ, which the ceremony measures, and that the service's
+// configuration has no field able to name this one.
+//
+// Only private keys are examined. A stray CA public key on this token
+// discloses nothing and confers no ability to sign; what makes co-location
+// dangerous is a private key reachable from a session, which is what this
+// looks for.
+func CheckNoCAHierarchyKey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session) error {
+	handles, err := adapter.FindObjects(ctx, s, []pk11.Attribute{
+		pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPrivateKey)),
+	})
+	if err != nil {
+		return fmt.Errorf("signingkey: listing private keys on the target token: %w", err)
+	}
+	for _, h := range handles {
+		attrs, err := adapter.GetAttributes(ctx, s, h, []pk11.AttributeType{pk11.AttrLabel})
+		if err != nil {
+			// Fail closed: a key whose label cannot be read is a key this
+			// check cannot clear, and proceeding would mean provisioning
+			// onto a token whose contents are partly unknown.
+			return fmt.Errorf("signingkey: reading the label of a private key on the target token: %w", err)
+		}
+		for _, a := range attrs {
+			if a.Type == pk11.AttrLabel && caKeyLabelPattern.Match(a.Value) {
+				return fmt.Errorf("%w: %q. Supply-chain signing keys live on their own token "+
+					"(Phase 4.8, docs/threat-model.md §6.1) — provision them on a token the CA does not authenticate",
+					ErrCAHierarchyKeyPresent, a.Value)
+			}
+		}
+	}
+	return nil
 }
