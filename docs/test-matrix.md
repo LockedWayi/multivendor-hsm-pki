@@ -64,14 +64,14 @@ Three properties of the harness matter for a new vendor:
 | `internal/ca` issuance + signer | 15 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points |
 | `internal/api` HTTP surface | 27 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness |
 | `internal/signingkey` | 10 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
-| `cmd/hsm-pki-keytool` | 8 | The ceremony and the supply-chain key provisioning as an operator runs them, through the CLI's own adapter |
+| `cmd/hsm-pki-keytool` | 15 | The ceremony, the supply-chain key provisioning, and the signed key-inventory generation as an operator runs them, through the CLI's own adapter — including the two-token refusal and the openssl check of an HSM-made inventory signature |
 | `cmd/hsm-pki-server` | — | Startup: workspace resolution, anchor login, ambiguous-label refusal |
 
-Counted per backend, a full run executes **73 vendor-parameterised subtests
-on each configured backend**, plus the conformance suite — 74 top-level
+Counted per backend, a full run executes **80 vendor-parameterised subtests
+on each configured backend**, plus the conformance suite — 81 top-level
 `Test.../<backend>` subtests in all. Re-measured 2026-09-04 after Phase
-4.8's keytool subcommand landed (it was 67 + 1 before), rather than
-maintained by hand:
+4.8's keytool subcommands landed (67 + 1 before that group, then 73 + 1
+after the provisioning command), rather than maintained by hand:
 
 ```sh
 go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
@@ -80,7 +80,7 @@ go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
 The anchor matters. `--- PASS:` lines carry a timing suffix, so an
 end-anchored pattern against them matches nothing and reports zero; and an
 unanchored pattern counts nested subtests too, which is a different number
-(117) measuring a different thing.
+(124) measuring a different thing.
 
 ## 4. What deliberately does not multiply
 
@@ -88,6 +88,10 @@ These touch no token, so running them per vendor would cost time and prove
 nothing:
 
 - `internal/config` — YAML parsing and validation
+- `internal/inventory` — the key inventory is a *document*. The key that
+  signs it lives on an HSM, but the format, its validation rules and its
+  signature verification are pure logic, and the openssl cross-check there
+  needs no token
 - `internal/store` — SQLite records, revocation, CRL counter
 - `cmd/hsm-pki-server`'s health-check probe (`healthcheck_test.go`) — HTTP
   against a local test server and listen-address rewriting; it never opens a
@@ -151,6 +155,7 @@ because each was found the hard way:
 | Concurrency | `C_GetSlotList` deadlocked under concurrent callers on ProtectToolkit despite `CKF_OS_LOCKING_OK` |
 | Digest handling | ProtectToolkit's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted |
 | Protection attributes on generation | Ask the token, not the template: generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Both current backends honour them on generation — but ProtectToolkit ignores `CKA_EXTRACTABLE=false` on *unwrap*, so the two paths must be checked separately |
+| RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times — the RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included — so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend *before* trusting it with a key ([`lessons.md`](lessons.md) §8) |
 | Object accumulation | Tokens that persist between runs accumulate test keys. The harness now destroys everything a run created (`hsmtest.Backend.Cleanup`), which took the residue from +215 objects per full run to +23. Historical litter from before that — roughly 3,000 objects on the maintainer's ProtectServer store — is deliberately left alone: a suite that deletes objects it did not create is a destructive operation aimed at somebody else's token, and clearing it is an operator's call |
 
 ---

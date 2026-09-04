@@ -185,3 +185,58 @@ func TestRun_RoutesTheProvisionSubcommand(t *testing.T) {
 		t.Fatalf("provision-signing-key is not routed by run: %v", err)
 	}
 }
+
+// TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey is the operator's
+// real sequence: provision the image key, then provision the artifact key,
+// each its own invocation and therefore its own C_Initialize.
+//
+// It exists because that sequence produced *one key under two labels* on a
+// real backend. ProtectToolkit-C 7.3.3 in software emulation seeds its RNG
+// per C_Initialize, so the first key pair generated after each library
+// initialisation is byte-for-byte identical (measured 2026-09-04,
+// docs/pkcs11-vendor-notes.md). Every attribute of the result was correct —
+// distinct labels, distinct CKA_ID, sensitive, non-extractable — and the
+// platform's purpose separation was gone.
+//
+// So this asserts the property rather than an outcome: two runs either
+// produce two different keys, or the second run refuses. What it must never
+// do is quietly hand back a duplicate, which is what it did before
+// signingkey.Provision started checking.
+func TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		dir := t.TempDir()
+		first := provisionArgs(t, b, dir, b.Label("image-signing-key-v1"))
+		if err := runProvisionSigningKeyCmd(first); err != nil {
+			t.Fatalf("first invocation: %v", err)
+		}
+		imagePEM, err := os.ReadFile(filepath.Join(dir, "signing.pub"))
+		if err != nil {
+			t.Fatalf("reading the first public key: %v", err)
+		}
+
+		secondDir := t.TempDir()
+		second := replaceFlag(provisionArgs(t, b, secondDir, b.Label("artifact-signing-key-v1")),
+			"-public-key-out", filepath.Join(secondDir, "signing.pub"))
+
+		switch err := runProvisionSigningKeyCmd(second); {
+		case err == nil:
+			artifactPEM, readErr := os.ReadFile(filepath.Join(secondDir, "signing.pub"))
+			if readErr != nil {
+				t.Fatalf("reading the second public key: %v", readErr)
+			}
+			if string(imagePEM) == string(artifactPEM) {
+				t.Fatal("two invocations produced one key pair under two labels: " +
+					"a compromise of the image key would also sign releases (CLAUDE.md §3.6)")
+			}
+		case errors.Is(err, signingkey.ErrDuplicateKey):
+			// The token repeated itself and the platform refused. The
+			// rejected key must also be gone: leaving it would take a label
+			// that can now never be provisioned.
+			if _, statErr := os.Stat(filepath.Join(secondDir, "signing.pub")); !os.IsNotExist(statErr) {
+				t.Error("a public key file was written for a rejected duplicate")
+			}
+		default:
+			t.Fatalf("second invocation: %v", err)
+		}
+	})
+}
