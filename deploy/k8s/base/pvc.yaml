@@ -1,0 +1,23 @@
+# The CA's issued/revoked records and its CRL number counter.
+#
+# This is not a convenience volume. Container-local scratch means every pod
+# restart rebuilds the store, which reseeds the CRL counter and loses every
+# revocation -- a certificate revoked during an incident would reappear as
+# valid in the next CRL. That is the exact regression Phase 3b.3 removed,
+# and deploying onto ephemeral storage would reintroduce it from the
+# outside (docs/phases/phase-3b-pki-hardening.md, sub-task 3b.3).
+#
+# ReadWriteOnce is not a limitation to work around: the store is
+# single-writer, and so is the deployment (see deployment.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hsm-pki-store
+  labels:
+    app.kubernetes.io/name: hsm-pki
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

@@ -1,0 +1,218 @@
+# Cluster-wide pod hardening, enforced by Kyverno (Phase 4.7).
+#
+# # Why this exists when Pod Security Admission already enforces `restricted`
+#
+# Because PSA enforces it *where it is labelled*. `hsm-pki-dev` carries
+# `pod-security.kubernetes.io/enforce: restricted`, so pods there are
+# constrained; a namespace created tomorrow without that label is
+# constrained by nothing, and nothing about creating a namespace prompts
+# anyone to add it. PSA is opt-in per namespace by construction. This policy
+# is the opposite default: every namespace except the ones deliberately
+# excluded below.
+#
+# The two mechanisms are also different *kinds* of control, which is why one
+# is not a redundant copy of the other:
+#
+#   PSA       a fixed, versioned profile the Kubernetes project defines. It
+#             cannot be extended, and it says nothing about resource limits,
+#             image references, or anything else outside the pod security
+#             standard.
+#   Kyverno   an admission webhook running expressions this repository
+#             writes. It can express what `restricted` cannot, and it is
+#             what Phase 4.10 extends to "an image nobody signed cannot run".
+#
+# A defence that exists once is a defence with a single point of failure:
+# PSA is disabled by a flag on the API server, Kyverno by deleting a webhook.
+# Neither action is subtle, and needing both raises the cost of either.
+#
+# # Which API this repository targets, and why
+#
+# Kyverno 1.19.0 serves two policy APIs, and both are v1 — measured against
+# the running cluster, not read from a blog:
+#
+#   kyverno.io/v1            ClusterPolicy (validate, mutate, generate,
+#                            verifyImages), not marked deprecated
+#   policies.kyverno.io/v1   ValidatingPolicy, ImageValidatingPolicy,
+#                            MutatingPolicy, GeneratingPolicy, DeletingPolicy
+#
+# This repository targets **policies.kyverno.io/v1**. The rules here are CEL,
+# the same expression language as Kubernetes' own ValidatingAdmissionPolicy,
+# so the expressions below say what they mean to a reader who has never used
+# Kyverno and would largely transfer to a cluster that does not run it. And
+# Phase 4.10 needs image verification, which that group gives a kind of its
+# own (`ImageValidatingPolicy`) rather than a mode of a general policy.
+#
+# ClusterPolicy was the alternative and it is not a bad one: far more prior
+# art, and it is not deprecated. It lost because choosing it would mean
+# writing this twice -- once now and once when the newer kinds become the
+# path Kyverno documents first.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: require-pod-hardening
+spec:
+  # Fail, not Ignore. If the webhook cannot be reached, a pod that has not
+  # been checked must not be admitted (CLAUDE.md §3.4). The cost is real and
+  # is stated rather than hidden: if Kyverno is down, pod creation stops.
+  failurePolicy: Fail
+  validationActions:
+    - Deny
+  matchConstraints:
+    resourceRules:
+      # `pods/ephemeralcontainers` is not decoration. Ephemeral containers
+      # are not added by updating the pod -- they go to a subresource of
+      # their own, which is what `kubectl debug` uses. A policy matching only
+      # `pods` never sees that request.
+      #
+      # Measured before this line existed: a privileged, root ephemeral
+      # container was attached to a *running* pod in a namespace this policy
+      # covers, and admission said nothing. Every rule below was in force and
+      # none of them ran, because the request was never matched. That is a
+      # one-command bypass of the whole policy on any pod already scheduled.
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+    namespaceSelector:
+      matchExpressions:
+        # The control plane and Kyverno itself are excluded, and this is not
+        # a loophole being carved for convenience: k3s's own components run
+        # with host networking and privileged mounts because that is what a
+        # kubelet, a CNI and a service proxy do. A cluster-wide policy that
+        # cannot start its own cluster is a policy that gets deleted, and a
+        # deleted policy protects nothing. The exclusions are by exact name,
+        # not by a prefix that a namespace could be named into.
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - kube-public
+            - kube-node-lease
+            - kyverno
+  variables:
+    # Named once so each rule below reads as the property it checks rather
+    # than as a traversal. initContainers and ephemeralContainers are
+    # included deliberately: a privileged init container has the same access
+    # as a privileged container, and "we only checked the main containers"
+    # is how this class of policy is usually wrong.
+    - name: allContainers
+      expression: >-
+        object.spec.containers +
+        (has(object.spec.initContainers) ? object.spec.initContainers : []) +
+        (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
+    # Everything except ephemeral containers, for the one rule that cannot
+    # apply to them: Kubernetes **forbids** setting `resources` on an
+    # ephemeral container, so requiring a memory limit there demands a field
+    # the API server rejects.
+    #
+    # Measured, and it was not theoretical: a fully compliant ephemeral
+    # container -- non-root, read-only rootfs, all capabilities dropped --
+    # was refused for having no memory limit, which it is not allowed to
+    # have. The effect was that `kubectl debug` could not be used at all in
+    # any namespace this policy covers, for no security reason. That is the
+    # shape a policy gets switched off over rather than fixed, and the
+    # comment two rules below warning about exactly that was written before
+    # this rule had the bug.
+    - name: resourceContainers
+      expression: >-
+        object.spec.containers +
+        (has(object.spec.initContainers) ? object.spec.initContainers : [])
+  validations:
+    # Written per field as "absent, or explicitly false" rather than as
+    # "all three absent, or all three false". The second form reads a field
+    # it has not established is there, which works only because the API
+    # server applies defaults before admission -- true today, and not a
+    # property this rule should depend on. CEL raises a runtime error on an
+    # absent field, and an erroring rule is decided by failurePolicy rather
+    # than by what it says.
+    - expression: >-
+        (!has(object.spec.hostNetwork) || object.spec.hostNetwork == false)
+        && (!has(object.spec.hostPID) || object.spec.hostPID == false)
+        && (!has(object.spec.hostIPC) || object.spec.hostIPC == false)
+      message: >-
+        host namespaces are not available: hostNetwork, hostPID and hostIPC
+        each dissolve the boundary between the pod and the node.
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) && has(c.securityContext.privileged) ? !c.securityContext.privileged : true)
+      message: "a privileged container is a root shell on the node; no workload here needs one."
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) && has(c.securityContext.allowPrivilegeEscalation)
+          && c.securityContext.allowPrivilegeEscalation == false)
+      message: >-
+        every container must set securityContext.allowPrivilegeEscalation:
+        false. Unset is not false -- the default is true.
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) && has(c.securityContext.readOnlyRootFilesystem)
+          && c.securityContext.readOnlyRootFilesystem == true)
+      message: >-
+        every container must set securityContext.readOnlyRootFilesystem:
+        true. Anything written at runtime belongs on an explicit volume,
+        where somebody has decided it should persist.
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) && has(c.securityContext.capabilities)
+          && has(c.securityContext.capabilities.drop)
+          && c.securityContext.capabilities.drop.exists(d, d == 'ALL'))
+      message: >-
+        every container must drop ALL capabilities and add back only what it
+        proves it needs. This platform's own service adds none.
+    # The *effective* value per container, not "the pod says so OR every
+    # container says so". Those are different rules and the second one is
+    # wrong, because a container's securityContext overrides the pod's.
+    #
+    # Measured before this was fixed: a pod with runAsNonRoot: true and one
+    # container setting runAsNonRoot: false was **admitted** -- the pod-level
+    # clause was true, the `or` short-circuited, and the container that
+    # overrode it was never looked at. A rule stated as an `or` over two
+    # levels of an inheritance hierarchy will always have this shape.
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) && has(c.securityContext.runAsNonRoot)
+            ? c.securityContext.runAsNonRoot
+            : (has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot)
+               && object.spec.securityContext.runAsNonRoot))
+      message: >-
+        every container must end up with runAsNonRoot true -- set on the
+        container, or inherited from the pod and not overridden there.
+    # Same inheritance, same measured bypass: a pod with
+    # seccompProfile.type RuntimeDefault and one container setting
+    # Unconfined was admitted.
+    - expression: >-
+        variables.allContainers.all(c,
+          has(c.securityContext) && has(c.securityContext.seccompProfile)
+            ? c.securityContext.seccompProfile.type in ['RuntimeDefault', 'Localhost']
+            : (has(object.spec.securityContext) && has(object.spec.securityContext.seccompProfile)
+               && object.spec.securityContext.seccompProfile.type in ['RuntimeDefault', 'Localhost']))
+      message: >-
+        every container must end up with a seccomp profile of RuntimeDefault
+        or Localhost. Unset means Unconfined, which is every syscall the
+        kernel offers, and a container may not override the pod's profile
+        with it.
+    # runAsNonRoot above is about the *declaration*; this is about the one
+    # value that contradicts it. Measured: a container with runAsUser 0
+    # under a pod declaring runAsNonRoot true is admitted, and then the
+    # kubelet refuses to start it with CreateContainerConfigError. Nothing
+    # runs as root, so this is not a bypass -- but the answer arrives from
+    # the wrong component, at the wrong time, in a message about container
+    # configuration rather than about policy. And the kubelet's check exists
+    # only because the pod declared runAsNonRoot; remove that and it goes
+    # away too.
+    - expression: >-
+        (!has(object.spec.securityContext) || !has(object.spec.securityContext.runAsUser)
+         || object.spec.securityContext.runAsUser != 0)
+        && variables.allContainers.all(c,
+             !has(c.securityContext) || !has(c.securityContext.runAsUser)
+             || c.securityContext.runAsUser != 0)
+      message: >-
+        runAsUser 0 is root by another name, on the pod or on any container.
+    - expression: >-
+        variables.resourceContainers.all(c, has(c.resources) && has(c.resources.limits)
+          && 'memory' in c.resources.limits)
+      message: >-
+        every container must set a memory limit. This is the rule Pod
+        Security Admission cannot express at all: `restricted` says nothing
+        about resources, so a pod that satisfies it completely can still take
+        a node down by consuming all of its memory.

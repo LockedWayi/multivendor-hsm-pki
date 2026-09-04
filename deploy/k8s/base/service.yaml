@@ -1,0 +1,18 @@
+# One port, the one the service actually serves. Everything a relying party
+# needs -- the CRL, the issuing certificate, the root artifacts -- is on it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hsm-pki
+  labels:
+    app.kubernetes.io/name: hsm-pki
+    app.kubernetes.io/component: ca
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: hsm-pki
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

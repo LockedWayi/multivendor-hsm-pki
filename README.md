@@ -2,8 +2,8 @@
 
 A vendor-agnostic **PKCS#11 abstraction layer** over three HSM families (nShield,
 Luna, ProtectServer), with a **Certificate Authority** built on top, deployed to
-Kubernetes through a **security-gated CI/CD pipeline**, and — at the capstone —
-with its root of trust anchored to a real HSM via **Vault auto-unseal**.
+Kubernetes (a security-gated **CI/CD pipeline** lands in Phase 5), and — at the
+capstone — with its root of trust anchored to a real HSM via **Vault auto-unseal**.
 
 Built as a public reference for how a cryptography/PKI engineer abstracts multiple
 HSM vendors cleanly and roots software key management in hardware trust, end to
@@ -47,9 +47,32 @@ Phase specs live in [`docs/phases/`](docs/phases/).
 ## Runs without hardware
 
 The baseline path develops and tests against **SoftHSM2**, so the full suite —
-including the capstone auto-unseal mechanism — runs in CI with no HSM and no
-proprietary SDK. Clone it, run `go test ./...` in the provided dev container,
-and everything CI checks runs on your machine too.
+the capstone auto-unseal mechanism included, once it lands — runs in CI with no
+HSM and no proprietary SDK (`.github/workflows/ci.yml`: the race-detector
+suite, the coverage floor, and a full-history secret scan, all on every PR).
+Clone it, run `go test ./...` in the provided dev container, and everything CI
+checks runs on your machine too.
+
+The whole platform runs the same way, not just its tests:
+
+```sh
+deploy/docker/run-local.sh
+```
+
+That initializes two SoftHSM2 tokens, runs the real offline root ceremony
+against them, moves the root's token out of the store the service can reach,
+and starts the containerized CA read-only and non-root. Then:
+
+```sh
+curl -s localhost:8080/readyz
+curl -s localhost:8080/root.crl | openssl crl -inform DER -noout -text
+curl -X POST --data-binary @your.csr localhost:8080/certificates
+```
+
+No PKCS#11 module ships inside the service image — every module is mounted at
+run time, so the image contains no key store and the same image runs against
+SoftHSM2 and a vendor HSM with only configuration changing. That decision and
+what it costs are in [`deploy/docker/README.md`](deploy/docker/README.md).
 
 A second adapter targets **Thales ProtectServer** through the ProtectToolkit
 PKCS#11 module. It is optional, and it is the part you cannot reproduce without
@@ -70,21 +93,35 @@ verification.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - ECDSA P-256 default curve.
 - Fail-closed on every ambiguous security decision; all enforcement server-side.
-- Signing is purpose-separated at the key level: the CA hierarchy's keys
-  (offline root, online intermediate — Phase 3b), `image-signing-key`, and
-  `artifact-signing-key` are distinct HSM-held keys behind the same PKCS#11
-  core, never interchangeable — a compromised image key cannot issue a
-  certificate, and a compromised CA key cannot sign a release. Keys carry
-  versioned labels and a published, signed inventory so rotation is a
-  lifecycle event, not a breaking change. See `docs/architecture.md`,
-  "The signing layer."
+- Signing is purpose-separated at the key level, and on separate *tokens*:
+  the CA hierarchy's keys (offline root, online intermediate — Phase 3b),
+  `image-signing-key` and `artifact-signing-key` on a supply-chain token of
+  their own, and `inventory-signing-key` offline again. They are distinct
+  HSM-held keys behind the same PKCS#11 core, never interchangeable — a
+  compromised image key cannot issue a certificate, and a compromised CA key
+  cannot sign a release. Separate tokens rather than separate labels because
+  PKCS#11 authenticates a *token*, not a key.
+- Keys carry versioned labels and a **published, signed inventory** —
+  [`docs/keys/`](docs/keys/) — so rotation is a lifecycle event rather than
+  a breaking change: a new version arrives `active`, the previous one goes
+  `verify-only` for a stated window, and only then is it destroyed on the
+  token. Verifiers read the inventory, never a hard-coded key. Anyone can
+  check it with nothing but `openssl`:
+
+  ```sh
+  openssl dgst -sha256 -verify docs/keys/inventory-signing-key-v1.pub \
+      -signature docs/keys/key-inventory.json.sig docs/keys/key-inventory.json
+  ```
+
+  See `docs/architecture.md`, "The signing layer."
 
 ## Status
 
-Phase 1 (PKCS#11 core), Phase 2 (CA core), and Phase 3 (infrastructure as
-code) complete. **Phase 3b (PKI hardening) is in progress**: the two-tier
-hierarchy and durable revocation state are built; certificate profile
-extensions and two design documents remain.
+Phase 1 (PKCS#11 core), Phase 2 (CA core), Phase 3 (infrastructure as
+code) and Phase 3b (PKI hardening) complete. **Phase 4 (containerization
+and Kubernetes) is in progress**: the image, its Kubernetes deployment, the
+scanning gate and the purpose-separated signing keys are built; the
+admission-policy and image-signing halves remain.
 
 Phase 1: the interface, session lifecycle, PIN custody, and both the
 SoftHSM2 and ProtectServer adapters are implemented, tested, and share one
@@ -142,6 +179,53 @@ server down, brings it back over the same file, and re-fetches the CRL.
 
 Phase 3b is now complete — code and documents both.
 
+Phase 4 (in progress): a multi-stage build producing a **53.8 MB
+`distroless/cc` image** with no shell, no package manager and no PKCS#11
+module of any kind — every module, SoftHSM2 included, is a read-only mount,
+so the CI backend and the vendor backend are delivered by the same code and
+differ only in configuration. It runs `--read-only --user 65532 --cap-drop
+ALL`, and on K3s (via k3d) as a single replica with `Recreate`, a
+`restricted` Pod Security Admission namespace, probes wired to
+`/healthz`/`/readyz`, and the CA store on a `PersistentVolume` — verified by
+issuing a certificate through the Service and by destroying and rebuilding
+the cluster to confirm a revocation survives it. `trivy` reports zero
+HIGH/CRITICAL across 11 OS packages and the gate is proven to fail on a
+deliberately outdated image.
+
+Phase 4 also builds the **signing layer**: `image-signing-key-v1` and
+`artifact-signing-key-v1` on a supply-chain token of their own, and
+`inventory-signing-key-v1` on an offline token that holds none of the keys
+it vouches for — four tokens in total, because PKCS#11 authenticates a
+*token*, not a key. What is published is not a bare PEM but a **signed key
+inventory** ([`docs/keys/`](docs/keys/)) that any verifier can check with
+nothing but `openssl`, and a mechanical audit (`internal/keyaudit`) fails
+the test suite if any configuration file names a CA key and a signing key
+together. Provisioning it needs no hardware:
+[`deploy/docker/provision-signing-keys.sh`](deploy/docker/provision-signing-keys.sh).
+
+The release binary is signed over the HSM with that artifact key, through
+cosign, with **no transparency log**: the signing config declares no log
+service, because Rekor exists to bound the lifetime of an ephemeral
+certificate and this platform signs with a long-lived published key, so an
+entry would put a record of every internal release in a public log without
+changing the trust decision. Verification does not need cosign, an HSM, or
+a PIN — `ci/verify-artifact` re-derives the answer from `crypto/ecdsa` and
+`crypto/sha256`, and refuses a bundle whose digest is not the digest of the
+bytes in front of it:
+
+```sh
+go run ./ci/verify-artifact -key docs/keys/artifact-signing-key-v1.pub \
+    -bundle hsm-pki-server.bundle hsm-pki-server
+```
+
+That second verifier is not belt and braces. A signature checked only by the
+tool that produced it proves the tool agrees with itself — the closed loop
+that shipped a CRL here that Go could read and OpenSSL could not
+([`docs/lessons.md`](docs/lessons.md) §2).
+
+Still open in Phase 4, and stated rather than implied: the Kyverno
+admission policy, and container-image signing with admission verification.
+
 The security reasoning behind all of this — what each key is worth, what an
 attacker gets by compromising the service process and what they still do not
 get, and the seven things this platform deliberately does not defend
@@ -154,7 +238,8 @@ Per-sub-task detail is tracked in
 [`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md),
 [`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md),
 [`docs/phases/phase-3-infrastructure.md`](docs/phases/phase-3-infrastructure.md),
-and [`docs/phases/phase-3b-pki-hardening.md`](docs/phases/phase-3b-pki-hardening.md).
+[`docs/phases/phase-3b-pki-hardening.md`](docs/phases/phase-3b-pki-hardening.md),
+and [`docs/phases/phase-4-container-k8s.md`](docs/phases/phase-4-container-k8s.md).
 
 ## License
 

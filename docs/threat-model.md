@@ -284,9 +284,30 @@ the blast-radius separation §3.6 describes is only half real: it holds
 against mistakes and not against the attacker it names.
 
 This is the same reasoning that put the root on its own token in Phase 3b,
-applied one tier down. **Recorded as a decision Phase 4.8 must make before
-provisioning those keys**, with the options and their costs, rather than
-settled here.
+applied one tier down. **Resolved 2026-09-04: the supply-chain keys are
+provisioned on a third, separate token**, so A3 — compromise of the CA
+daemon — yields the intermediate and nothing else. The rejected options and
+their costs are recorded in `docs/phases/phase-4-container-k8s.md` 4.8; the
+architecture diagram was corrected with the decision rather than after it.
+
+**A fourth token followed, 2026-09-04, for the same reason one tier further
+up.** The key inventory (`CLAUDE.md` §3.7) is the document that tells every
+verifier which keys to trust, so whoever can sign it can authorise their own
+signatures. Signing it with a key on the supply-chain token would make the
+list vouch for a token that vouches for itself; signing it with the CA
+intermediate would put it back inside A3. So `inventory-signing-key-v1` sits
+on an offline token of its own, holding none of the keys it names — the
+invariant TUF's offline root role and any offline X.509 root are built on.
+Its own token rather than the CA root's, because the root's token is opened
+for a ceremony and nothing else: anchoring the inventory there would turn
+every supply-chain rotation into a root-token access, and a control that
+expensive is one that gets skipped.
+
+What this does *not* buy: A4 (host root) still reaches every token whose PIN
+is on the same host, which is why a CI-controlled token remains the stronger
+end state and is reachable from here as a deployment change. The inventory
+token is the one furthest from that problem, because it is only mounted when
+a rotation is actually being published.
 
 ### 6.2 The revocation channel's availability is a security property
 

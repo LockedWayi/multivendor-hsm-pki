@@ -1,0 +1,26 @@
+{
+  "schema": "hsm-pki-platform/key-inventory/v1",
+  "version": 1,
+  "generated_at": "2026-09-04T11:32:50Z",
+  "valid_until": "2027-09-04T11:32:50Z",
+  "keys": [
+    {
+      "label": "artifact-signing-key-v1",
+      "purpose": "artifact",
+      "curve": "P-256",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErGAqkBVZE2dBxV02WZJgWSVA+2Zl\nc1fmOq24oFtsvFS/ZmaKtThIoTRcIrUtrOCyE8XYowXc5WFmf7NnuxQeHg==\n-----END PUBLIC KEY-----\n",
+      "valid_from": "2026-09-04T11:32:50Z",
+      "retired_at": null,
+      "status": "active"
+    },
+    {
+      "label": "image-signing-key-v1",
+      "purpose": "image",
+      "curve": "P-256",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkmjukhlpeXvvHLUNYTBpZXpRCDDj\nlTWyfUgKhJFDHN9hmCrzm0/DXaRxrpa/ZajDNlSEmokDLsAt33PfZV/8Ig==\n-----END PUBLIC KEY-----\n",
+      "valid_from": "2026-09-04T11:32:50Z",
+      "retired_at": null,
+      "status": "active"
+    }
+  ]
+}

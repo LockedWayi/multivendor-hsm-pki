@@ -68,6 +68,9 @@ type conformanceBackend struct {
 	userPIN  []byte
 	wrongPIN []byte
 	runID    string
+	// reopen builds a second connection to the same module, for the case
+	// where cleanup cannot use the first one. See registerCleanup.
+	reopen func() (pk11.VendorAdapter, error)
 }
 
 func (b *conformanceBackend) label(suffix string) string {
@@ -157,6 +160,7 @@ func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
 		userPIN:  []byte(softhsm2UserPIN),
 		wrongPIN: []byte(softhsm2WrongPIN),
 		runID:    runID,
+		reopen:   func() (pk11.VendorAdapter, error) { return pk11.NewSoftHSM2Adapter(modulePath) },
 	}
 	b.registerCleanup(t)
 	return b
@@ -178,41 +182,62 @@ func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
 // operation aimed at somebody else's token.
 func (b *conformanceBackend) registerCleanup(t *testing.T) {
 	t.Helper()
+	// This suite closes the adapter on purpose — AdapterClose_RejectsFurtherUse
+	// is one of the behaviours it pins — and cleanup then cannot use it. That
+	// went unnoticed for a long time because the failure is a log line: cleanup
+	// reported "adapter is closed" and returned, and the run's key pairs stayed
+	// on the token. It was found only when a duplicate-key check turned
+	// leftover keys into a hard failure on a backend whose RNG repeats
+	// (docs/lessons.md §8). So this reopens rather than giving up.
 	t.Cleanup(func() {
 		ctx := context.Background()
+		adapter := b.adapter
 		// Log out first: PKCS#11 authenticates a token application-wide, so
 		// a session opened while another token is authenticated cannot see
 		// this one's private objects, and cleanup would silently remove
 		// only the public half of every key pair.
-		_ = b.adapter.LogoutToken(ctx)
-		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
-			t.Logf("conformance cleanup: login: %v", err)
-			return
+		_ = adapter.LogoutToken(ctx)
+		if err := adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+			// Close the first connection before opening a second: a PKCS#11
+			// library permits one C_Initialize per process, and
+			// ProtectToolkit rejects a second outright.
+			adapter.Close()
+			fresh, reopenErr := b.reopen()
+			if reopenErr != nil {
+				t.Logf("conformance cleanup: login failed (%v) and reopening the module failed too: %v", err, reopenErr)
+				return
+			}
+			defer fresh.Close()
+			adapter = fresh
+			if err := adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+				t.Logf("conformance cleanup: login through a fresh connection: %v", err)
+				return
+			}
 		}
-		defer func() { _ = b.adapter.LogoutToken(ctx) }()
+		defer func() { _ = adapter.LogoutToken(ctx) }()
 
-		s, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
+		s, err := adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
 		if err != nil {
 			t.Logf("conformance cleanup: open session: %v", err)
 			return
 		}
-		defer b.adapter.CloseSession(ctx, s)
+		defer adapter.CloseSession(ctx, s)
 
-		objs, err := b.adapter.FindObjects(ctx, s, nil)
+		objs, err := adapter.FindObjects(ctx, s, nil)
 		if err != nil {
 			t.Logf("conformance cleanup: find objects: %v", err)
 			return
 		}
 		prefix := "conf-" + b.runID + "-"
 		for _, o := range objs {
-			attrs, err := b.adapter.GetAttributes(ctx, s, o, []pk11.AttributeType{pk11.AttrLabel})
+			attrs, err := adapter.GetAttributes(ctx, s, o, []pk11.AttributeType{pk11.AttrLabel})
 			if err != nil || len(attrs) == 0 {
 				continue
 			}
 			if !strings.HasPrefix(string(attrs[0].Value), prefix) {
 				continue
 			}
-			if err := b.adapter.DestroyObject(ctx, s, o); err != nil {
+			if err := adapter.DestroyObject(ctx, s, o); err != nil {
 				t.Logf("conformance cleanup: destroy %s: %v", attrs[0].Value, err)
 			}
 		}
@@ -257,6 +282,7 @@ func setupProtectServerBackend(t *testing.T) *conformanceBackend {
 		userPIN:  []byte(pin),
 		wrongPIN: []byte(protectServerWrongPIN),
 		runID:    fmt.Sprintf("%d", time.Now().UnixNano()),
+		reopen:   func() (pk11.VendorAdapter, error) { return pk11.NewProtectServerAdapter(modulePath) },
 	}
 	b.registerCleanup(t)
 	return b

@@ -111,26 +111,55 @@ func (b *Backend) labelPrefix() string { return "t-" + b.RunID + "-" }
 func (b *Backend) Cleanup(t *testing.T) {
 	t.Helper()
 
-	adapter := b.Adapter
-	if b.released() {
-		// A test that handed the module to a CLI released the adapter. The
-		// objects it created are still on the token, so take a fresh
-		// connection rather than skipping cleanup — this is the path that
-		// matters most on hardware, where the litter is permanent.
-		fresh, err := newAdapterByName(b.AdapterName, b.ModulePath)
-		if err != nil {
-			t.Logf("hsmtest: reopening %s for cleanup: %v", b.Name, err)
+	// Try the harness's own adapter first, and fall back to a fresh
+	// connection when that does not work.
+	//
+	// The fallback used to be conditional on b.released(), i.e. on a test
+	// having *announced* that it handed the module over. That is not the
+	// only way the adapter stops working: internal/api has two tests that
+	// deliberately close it, to prove /healthz answers and /readyz does not
+	// when the HSM is gone. Neither goes through Release, so cleanup ran
+	// against a closed adapter, failed with "adapter is closed", logged it
+	// non-fatally, and left its keys on the token — every run, silently.
+	//
+	// It stayed invisible until the duplicate-key check turned leftover
+	// keys into a hard failure on a backend whose RNG repeats
+	// (docs/lessons.md §8). A cleanup that reports failure into a log
+	// nobody reads is a cleanup that does not happen, so this now retries
+	// rather than trusting a flag to tell it whether it can.
+	if !b.released() {
+		if err := b.destroyAllRunObjects(b.Adapter); err == nil {
 			return
+		} else {
+			t.Logf("hsmtest: %s cleanup through the harness adapter failed (%v); retrying with a fresh connection", b.Name, err)
+			// Close it before reopening: a PKCS#11 library permits one
+			// C_Initialize per process, and ProtectToolkit rejects a
+			// second outright.
+			b.Release()
 		}
-		defer fresh.Close()
-		adapter = fresh
 	}
 
+	fresh, err := newAdapterByName(b.AdapterName, b.ModulePath)
+	if err != nil {
+		t.Logf("hsmtest: reopening %s for cleanup: %v", b.Name, err)
+		return
+	}
+	defer fresh.Close()
+	if err := b.destroyAllRunObjects(fresh); err != nil {
+		t.Logf("hsmtest: cleaning up %s objects: %v", b.Name, err)
+	}
+}
+
+// destroyAllRunObjects removes this run's objects from both tokens through
+// the given adapter, stopping at the first token that fails so the caller
+// can decide whether to retry with a different connection.
+func (b *Backend) destroyAllRunObjects(adapter pk11.VendorAdapter) error {
 	for _, ws := range []pk11.Workspace{b.Primary, b.Secondary} {
 		if err := b.destroyRunObjects(adapter, ws); err != nil {
-			t.Logf("hsmtest: cleaning up %s objects on token %q: %v", b.Name, ws.Label, err)
+			return fmt.Errorf("token %q: %w", ws.Label, err)
 		}
 	}
+	return nil
 }
 
 func newAdapterByName(name, modulePath string) (pk11.VendorAdapter, error) {

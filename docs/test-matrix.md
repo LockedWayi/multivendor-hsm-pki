@@ -63,11 +63,24 @@ Three properties of the harness matter for a new vendor:
 | `internal/ca` ceremony + intermediate | 12 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, `LoadIntermediate`'s startup gates |
 | `internal/ca` issuance + signer | 15 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points |
 | `internal/api` HTTP surface | 27 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness |
-| `cmd/hsm-pki-keytool` | 4 | The ceremony as an operator runs it, through the CLI's own adapter |
+| `internal/signingkey` | 16 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
+| `cmd/hsm-pki-keytool` | 16 | The ceremony, the supply-chain key provisioning, and the signed key-inventory generation as an operator runs them, through the CLI's own adapter — including the two-token refusal and the openssl check of an HSM-made inventory signature |
 | `cmd/hsm-pki-server` | — | Startup: workspace resolution, anchor login, ambiguous-label refusal |
 
-Counted per backend, a full run executes **59 vendor-parameterised subtests
-on each configured backend**, plus the conformance suite.
+Counted per backend, a full run executes **87 vendor-parameterised subtests
+on each configured backend**, plus the conformance suite — 88 top-level
+`Test.../<backend>` subtests in all. Re-measured 2026-09-04 after Phase
+4.8's keytool subcommands landed (67 + 1 before that group, then 73 + 1
+after the provisioning command), rather than maintained by hand:
+
+```sh
+go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
+```
+
+The anchor matters. `--- PASS:` lines carry a timing suffix, so an
+end-anchored pattern against them matches nothing and reports zero; and an
+unanchored pattern counts nested subtests too, which is a different number
+(131) measuring a different thing.
 
 ## 4. What deliberately does not multiply
 
@@ -75,7 +88,17 @@ These touch no token, so running them per vendor would cost time and prove
 nothing:
 
 - `internal/config` — YAML parsing and validation
+- `internal/keyaudit` — reads the repository's own configuration files and
+  compares them against the published inventory; it is a check on the
+  repository, not on a token
+- `internal/inventory` — the key inventory is a *document*. The key that
+  signs it lives on an HSM, but the format, its validation rules and its
+  signature verification are pure logic, and the openssl cross-check there
+  needs no token
 - `internal/store` — SQLite records, revocation, CRL counter
+- `cmd/hsm-pki-server`'s health-check probe (`healthcheck_test.go`) — HTTP
+  against a local test server and listen-address rewriting; it never opens a
+  token, and `/healthz` is deliberately the endpoint that does not
 - `internal/ca` white-box certificate checks (`intermediate_internal_test.go`)
   — properties of a certificate, built in software
 - URL composition, error mapping, PEM/DER handling in `internal/api`
@@ -117,6 +140,23 @@ Then: one entry in `hsmtest`'s `registry`, and every test in §3 runs against
 it. Nothing else should need to change. If something does, that is a defect
 in the harness and belongs here as a finding.
 
+**Finding (2026-09-04, independent audit): it is currently two entries,
+not one.** `internal/pkcs11`'s own `TestConformance` predates the harness
+and keeps a backend list of its own, so a new vendor today edits
+`hsmtest`'s `registry` *and* that list. No import cycle forces this —
+`conformance_test.go` is an external test package (`package pkcs11_test`)
+and could import `hsmtest` — but folding it in would rework the
+conformance-specific setup (the wrong-PIN cases, the reopen hook, its
+single-token layout) for modest gain, so the duplication is accepted and
+recorded here rather than hidden. Until the two are unified, the "one
+entry" promise above reads as "one entry per registry, of which there are
+two."
+
+`internal/signingkey` joined §3 in Phase 4.8 without touching the harness,
+which is the property this section claims: a new suite reaches every
+backend by calling `hsmtest.ForEach`, and a new backend reaches every suite
+by adding a registry entry. Neither edits the other.
+
 ### Expected divergences to look for
 
 The two backends run so far disagreed in ways worth checking on any new one,
@@ -129,17 +169,36 @@ because each was found the hard way:
 | Slot renumbering | Creating a slot renumbered existing ones on ProtectToolkit while serials held |
 | Concurrency | `C_GetSlotList` deadlocked under concurrent callers on ProtectToolkit despite `CKF_OS_LOCKING_OK` |
 | Digest handling | ProtectToolkit's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted |
-| Object accumulation | Tokens that persist between runs accumulate test keys. The harness now destroys everything a run created (`hsmtest.Backend.Cleanup`), which took the residue from +215 objects per full run to +23. Historical litter from before that — roughly 3,000 objects on the maintainer's ProtectServer store — is deliberately left alone: a suite that deletes objects it did not create is a destructive operation aimed at somebody else's token, and clearing it is an operator's call |
+| Protection attributes on generation | Ask the token, not the template: generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Both current backends honour them on generation — but ProtectToolkit ignores `CKA_EXTRACTABLE=false` on *unwrap*, so the two paths must be checked separately |
+| RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times — the RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included — so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend *before* trusting it with a key ([`lessons.md`](lessons.md) §8) |
+| Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups — `hsmtest.Backend.Cleanup` and the conformance suite's — destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. Before that retry existed they failed into a log line every run and left everything behind ([`lessons.md`](lessons.md) §9); with it, a full two-backend run now leaves **zero** objects, measured. Litter from before is still not the suite's to delete — `ci/token-cleanup` is the operator's tool for that, dry by default |
 
 ---
 
 ## 6. Running it
+
+Clearing what earlier runs left, when a persistent vendor token needs it —
+an operator action, never something a test does:
+
+```sh
+go run ./ci/token-cleanup -adapter protectserver -module <path> \
+    -workspace <label> -pin-env <VAR>            # dry run: lists, destroys nothing
+go run ./ci/token-cleanup ... -confirm           # actually removes them
+```
 
 SoftHSM2 alone, which is what CI does:
 
 ```sh
 docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev go test -race ./...
 ```
+
+Inside the container, not on the host — including for `ci/coverage.sh`. A
+host with no SoftHSM2 skips every token-touching test, exactly as §2.4's
+skip policy intends, and the suite is still green; what changes is that the
+coverage those tests would have produced is gone. Measured 2026-09-04:
+**34.2% on the host against 79.1% in the container**, from the same commit.
+The coverage gate then goes red for a reason that has nothing to do with the
+code it is measuring.
 
 Every configured backend — note `-p 1`, which is required rather than
 advisable when a vendor's token store is shared between package test

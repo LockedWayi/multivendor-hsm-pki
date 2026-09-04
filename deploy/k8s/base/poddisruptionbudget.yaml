@@ -1,0 +1,33 @@
+# A PodDisruptionBudget governs *voluntary* disruption -- a node drain, a
+# cluster upgrade -- and nothing else. It cannot protect the correctness
+# property this service cares about (never two pods); that is the
+# Deployment's Recreate strategy, and no PDB value affects it.
+#
+# What is left for a PDB to decide here is whether a drain may take the CA
+# down without anyone saying so. minAvailable: 1 against a single replica
+# means it may not: the eviction is refused and the drain blocks, so taking
+# the only CA offline becomes a deliberate act rather than a side effect of
+# routine node maintenance. That matters because CRL availability is a
+# security property, not just an uptime one -- a relying party that cannot
+# fetch a CRL generally proceeds as though nothing were revoked
+# (docs/threat-model.md §6.2).
+#
+# The cost is real and an operator must know it: `kubectl drain` on this
+# node will hang. Draining deliberately means scaling to zero first, or
+# `--disable-eviction`, which is the point -- the outage is chosen rather
+# than discovered afterwards.
+#
+# The alternative, maxUnavailable: 1, was rejected: it makes every drain a
+# silent CA outage, and on a single-replica workload that is the same as
+# having no PDB while looking as though there is one.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: hsm-pki
+  labels:
+    app.kubernetes.io/name: hsm-pki
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hsm-pki

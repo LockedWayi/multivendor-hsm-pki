@@ -36,7 +36,12 @@ func TestHealthz_SucceedsEvenAfterAdapterClosed(t *testing.T) {
 		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 		defer srv.Close()
 
-		adapter.Close()
+		// Released rather than closed directly: Release both closes the
+		// adapter and tells the harness it is gone, so cleanup reopens a
+		// fresh connection instead of failing against a dead one. Closing it
+		// behind the harness's back left this run's keys on the token every
+		// time, reported only into a log line nobody read.
+		b.Release()
 
 		resp, err := http.Get(srv.URL + "/healthz")
 		if err != nil {
@@ -77,7 +82,12 @@ func TestHealthReadyz_FailsWhenAdapterClosed(t *testing.T) {
 		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 		defer srv.Close()
 
-		adapter.Close()
+		// Released rather than closed directly: Release both closes the
+		// adapter and tells the harness it is gone, so cleanup reopens a
+		// fresh connection instead of failing against a dead one. Closing it
+		// behind the harness's back left this run's keys on the token every
+		// time, reported only into a log line nobody read.
+		b.Release()
 
 		resp, err := http.Get(srv.URL + "/readyz")
 		if err != nil {

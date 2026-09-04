@@ -1,0 +1,32 @@
+# Admission rejection evidence
+#
+# Captured 2026-09-04 on K3s v1.35.5+k3s1 via k3d.
+# Mechanism: built-in Pod Security Admission at 'restricted' (namespace
+# hsm-pki-dev). Sub-task 4.7 adds a Kyverno policy alongside this and
+# captures its rejection separately -- the two are different mechanisms
+# and proving one says nothing about the other.
+#
+# Command:
+#   kubectl -n hsm-pki-dev apply -f deploy/k8s/policy/testdata/insecure-pod.yaml
+#
+# Result: rejected, and 'kubectl get pod insecure-pod' reports NotFound --
+# nothing was created, so this is a refusal rather than a warning.
+
+Error from server (Forbidden): error when creating 
+"deploy/k8s/policy/testdata/insecure-pod.yaml": pods "insecure-pod" is 
+forbidden: violates PodSecurity "restricted:latest": host namespaces 
+(hostNetwork=true, hostPID=true), privileged (container "insecure" must not 
+set securityContext.privileged=true), allowPrivilegeEscalation != false 
+(container "insecure" must set 
+securityContext.allowPrivilegeEscalation=false), unrestricted capabilities 
+(container "insecure" must set securityContext.capabilities.drop=["ALL"]; 
+container "insecure" must not include "NET_ADMIN", "SYS_ADMIN" in 
+securityContext.capabilities.add), restricted volume types (volume 
+"host-root" uses restricted volume type "hostPath"), runAsNonRoot != true 
+(pod or container "insecure" must set securityContext.runAsNonRoot=true), 
+runAsUser=0 (container "insecure" must not set runAsUser=0), seccompProfile 
+(pod or container "insecure" must set securityContext.seccompProfile.type to 
+"RuntimeDefault" or "Localhost")
+
+$ kubectl -n hsm-pki-dev get pod insecure-pod
+Error from server (NotFound): pods "insecure-pod" not found
