@@ -1,0 +1,37 @@
+# A deliberately insecure pod, kept in the repository as a test input.
+#
+# A guardrail that has never rejected anything is a guardrail nobody has
+# tested. This manifest violates every rule the platform's own pods obey --
+# privileged, root, writable root filesystem, all capabilities, host
+# namespaces, a hostPath mount of the node's root filesystem -- so applying
+# it to the hardened namespace must fail.
+#
+# It is never meant to run. If it is ever admitted, that is the finding.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: insecure-pod
+  labels:
+    app.kubernetes.io/name: admission-negative-test
+spec:
+  hostNetwork: true
+  hostPID: true
+  containers:
+    - name: insecure
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+      securityContext:
+        privileged: true
+        runAsUser: 0
+        allowPrivilegeEscalation: true
+        readOnlyRootFilesystem: false
+        capabilities:
+          add: ["SYS_ADMIN", "NET_ADMIN"]
+      volumeMounts:
+        - name: host-root
+          mountPath: /host
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /
+        type: Directory

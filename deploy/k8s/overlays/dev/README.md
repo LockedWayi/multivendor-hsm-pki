@@ -83,6 +83,38 @@ cluster-scoped and only an administrator can create one; the workload
 receives a claim to something already chosen for it. Same bytes on the node,
 authority in the right place.
 
+## On k3d, where "the node" is a container
+
+This overlay was developed and verified against K3s running under **k3d**,
+so the cluster leaves nothing behind on the host — no systemd unit, no
+containerd, no iptables rules — and `k3d cluster delete` removes it
+entirely. The only difference that matters is that the node is a Docker
+container, so the node prerequisite above is staged inside it and the image
+has to be imported rather than pulled.
+
+```sh
+k3d cluster create hsm-pki --agents 0 --no-lb --k3s-arg "--disable=traefik@server:0"
+
+N=k3d-hsm-pki-server-0
+docker exec $N mkdir -p /opt/hsm-pki/pkcs11 /opt/hsm-pki/tokens
+docker cp .local/dev/pkcs11/libsofthsm2.so $N:/opt/hsm-pki/pkcs11/
+
+# The token directories are 0700 root-owned, so they are streamed through a
+# container that can read them rather than copied by the CLI, which cannot.
+docker run --rm -v "$PWD/.local/dev/tokens":/t alpine:3 tar -C /t -cf - . \
+    | docker exec -i $N tar -C /opt/hsm-pki/tokens -xf -
+docker exec $N sh -c 'chown -R 65532:65532 /opt/hsm-pki/tokens; chmod 0770 /opt/hsm-pki/tokens'
+
+# There is no registry yet (4.10 stands one up), so the locally built image
+# is loaded into the node directly.
+k3d image import hsm-pki-server:local -c hsm-pki
+```
+
+Copy only the **intermediate's** token directory. `run-local.sh` has already
+moved the root's out of `.local/dev/tokens`, so copying that directory
+wholesale is correct — but check, because the whole two-tier guarantee is
+that the running service cannot reach the root.
+
 ## Applying
 
 ```sh
@@ -90,6 +122,25 @@ kubectl apply -k deploy/k8s/overlays/dev
 kubectl -n hsm-pki-dev rollout status deploy/hsm-pki
 kubectl -n hsm-pki-dev get endpoints hsm-pki
 ```
+
+Then, since there is no ingress in this overlay:
+
+```sh
+kubectl -n hsm-pki-dev port-forward svc/hsm-pki 18080:8080 &
+curl -s localhost:18080/readyz
+curl -s -X POST --data-binary @your.csr localhost:18080/certificates
+curl -s localhost:18080/crl | openssl crl -inform DER -noout -text
+```
+
+## Proving the guardrail rejects
+
+```sh
+kubectl -n hsm-pki-dev apply -f deploy/k8s/policy/testdata/insecure-pod.yaml
+```
+
+must fail. The captured refusal is in
+`deploy/k8s/policy/testdata/insecure-pod.rejected.txt`. A guardrail that has
+never rejected anything has not been tested.
 
 ## Reading a failure
 
