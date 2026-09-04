@@ -1,11 +1,18 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LockedWayi/hsm-pki-platform/internal/inventory"
 )
 
 // A rendering against the repository's own inventory proves the generator
@@ -14,14 +21,58 @@ import (
 // published inventory has only ever had one image key. That property is what
 // makes rotation possible at all, so it is tested against a synthetic
 // document rather than left until the first rotation discovers it.
+//
+// Every synthetic inventory is signed with a fresh test anchor, because the
+// generator refuses an unverified document -- that refusal is itself under
+// test below, so the happy-path helpers must clear it honestly rather than
+// bypass it.
+
+// signInventoryFile signs data with a fresh test anchor and writes the
+// detached signature and the anchor's public half where the generator's
+// defaults resolve them: <path>.sig, and inventory-signing-key-v1.pub in
+// the same directory. inventory.SignWith exists exactly for tests like
+// this one (its doc comment says so); production signing goes through the
+// offline token and never holds a private key in a Go process.
+func signInventoryFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating a test anchor: %v", err)
+	}
+	sig, err := inventory.SignWith(data, priv)
+	if err != nil {
+		t.Fatalf("signing the test inventory: %v", err)
+	}
+	if err := os.WriteFile(path+".sig", sig, 0o600); err != nil {
+		t.Fatalf("writing the signature: %v", err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("marshalling the anchor: %v", err)
+	}
+	anchorPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	anchorPath := filepath.Join(filepath.Dir(path), "inventory-signing-key-v1.pub")
+	if err := os.WriteFile(anchorPath, anchorPEM, 0o600); err != nil {
+		t.Fatalf("writing the anchor: %v", err)
+	}
+}
 
 func writeInventory(t *testing.T, keys []map[string]any) string {
 	t.Helper()
+	// valid_until is far-future on purpose: a plausible-looking date would
+	// make every test here start failing the day it passed, for a reason
+	// unrelated to any change. The expiry refusal has its own test with
+	// fixed past dates, which are stable forever.
+	return writeInventoryDoc(t, 7, "2026-09-04T00:00:00Z", "2126-01-01T00:00:00Z", keys)
+}
+
+func writeInventoryDoc(t *testing.T, version int, generatedAt, validUntil string, keys []map[string]any) string {
+	t.Helper()
 	doc := map[string]any{
 		"schema":       "hsm-pki-platform/key-inventory/v1",
-		"version":      7,
-		"generated_at": "2026-09-04T00:00:00Z",
-		"valid_until":  "2027-09-04T00:00:00Z",
+		"version":      version,
+		"generated_at": generatedAt,
+		"valid_until":  validUntil,
 		"keys":         keys,
 	}
 	path := filepath.Join(t.TempDir(), "inventory.json")
@@ -29,9 +80,11 @@ func writeInventory(t *testing.T, keys []map[string]any) string {
 	if err != nil {
 		t.Fatalf("marshalling: %v", err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("writing: %v", err)
 	}
+	signInventoryFile(t, path, data)
 	return path
 }
 
@@ -200,5 +253,140 @@ func TestRun_CoversEveryContainerList(t *testing.T) {
 	}
 	if !strings.Contains(out, "pods/ephemeralcontainers") {
 		t.Error("the policy does not match the ephemeralcontainers subresource")
+	}
+}
+
+// The three refusals below are the consumer-side half of the inventory's
+// trust story, added after an independent audit (2026-09-04) demonstrated a
+// tampered inventory rendering straight into an admission policy: the
+// generator read the document and never the signature beside it.
+
+func TestRun_RefusesATamperedInventory(t *testing.T) {
+	// The audit's exact reproduction: the document is edited after signing,
+	// so the committed signature is stale. The edit here is a version bump
+	// -- any byte would do, since verification covers the exact bytes and
+	// runs before parsing.
+	inv := writeInventory(t, []map[string]any{
+		imageKey("image-signing-key-v1", "active", publishedPEM(t, "image-signing-key-v1.pub")),
+	})
+	data, err := os.ReadFile(inv)
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	tampered := strings.Replace(string(data), `"version": 7`, `"version": 8`, 1)
+	if tampered == string(data) {
+		t.Fatal("the tamper did not change the document; the test is broken")
+	}
+	if err := os.WriteFile(inv, []byte(tampered), 0o600); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+	_, err = render(t, "-inventory", inv)
+	if err == nil {
+		t.Fatal("rendered a policy from a document whose signature no longer verifies")
+	}
+	if !strings.Contains(err.Error(), "signature does not verify") {
+		t.Fatalf("wrong reason: %v", err)
+	}
+}
+
+func TestRun_RefusesAMissingSignature(t *testing.T) {
+	// Absence must fail exactly like invalidity: "nothing to check against"
+	// and "checked and wrong" both mean the document is unverified.
+	inv := writeInventory(t, []map[string]any{
+		imageKey("image-signing-key-v1", "active", publishedPEM(t, "image-signing-key-v1.pub")),
+	})
+	if err := os.Remove(inv + ".sig"); err != nil {
+		t.Fatalf("removing the signature: %v", err)
+	}
+	_, err := render(t, "-inventory", inv)
+	if err == nil {
+		t.Fatal("rendered a policy from a document with no signature at all")
+	}
+	if !strings.Contains(err.Error(), "reading the inventory's signature") {
+		t.Fatalf("wrong reason: %v", err)
+	}
+}
+
+func TestRun_RefusesAnExpiredInventory(t *testing.T) {
+	// The signature on this document is VALID -- the helper signs whatever
+	// it writes -- so what this proves is that expiry is checked after, and
+	// independently of, the signature: a correctly signed stale list is
+	// still a stale list (the freeze attack valid_until exists for).
+	inv := writeInventoryDoc(t, 7, "2025-01-01T00:00:00Z", "2026-01-01T00:00:00Z", []map[string]any{
+		imageKey("image-signing-key-v1", "active", publishedPEM(t, "image-signing-key-v1.pub")),
+	})
+	_, err := render(t, "-inventory", inv)
+	if err == nil {
+		t.Fatal("rendered a policy from an expired inventory")
+	}
+	if !strings.Contains(err.Error(), "expired at") {
+		t.Fatalf("wrong reason: %v", err)
+	}
+}
+
+func TestRun_RefusesAVersionRollback(t *testing.T) {
+	keys := []map[string]any{
+		imageKey("image-signing-key-v1", "active", publishedPEM(t, "image-signing-key-v1.pub")),
+	}
+	out := filepath.Join(t.TempDir(), "image-signature.yaml")
+
+	newer := writeInventoryDoc(t, 7, "2026-09-04T00:00:00Z", "2126-01-01T00:00:00Z", keys)
+	if _, err := render(t, "-inventory", newer, "-out", out); err != nil {
+		t.Fatalf("rendering version 7: %v", err)
+	}
+
+	// An older, correctly signed inventory must not replace it: rolling the
+	// rendering back is how a retired key comes back to life.
+	older := writeInventoryDoc(t, 3, "2026-09-04T00:00:00Z", "2126-01-01T00:00:00Z", keys)
+	_, err := render(t, "-inventory", older, "-out", out)
+	if err == nil {
+		t.Fatal("replaced a version-7 rendering with a version-3 inventory")
+	}
+	if !strings.Contains(err.Error(), "refusing the rollback") {
+		t.Fatalf("wrong reason: %v", err)
+	}
+
+	// Equal version must stay allowed: the dev bring-up re-renders from an
+	// unchanged inventory on every run, and a floor that refuses "same"
+	// would turn every second deploy into a manual file deletion.
+	if _, err := render(t, "-inventory", newer, "-out", out); err != nil {
+		t.Fatalf("re-rendering the same version was refused: %v", err)
+	}
+}
+
+func TestRun_RefusesToReplaceAFileItCannotDate(t *testing.T) {
+	// A file at -out with no version header is not a rendering this
+	// generator wrote. Overwriting it -- or exempting it from the rollback
+	// floor -- would be a decision made by a missing header.
+	out := filepath.Join(t.TempDir(), "image-signature.yaml")
+	if err := os.WriteFile(out, []byte("apiVersion: v1 # hand-written\n"), 0o600); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+	inv := writeInventory(t, []map[string]any{
+		imageKey("image-signing-key-v1", "active", publishedPEM(t, "image-signing-key-v1.pub")),
+	})
+	_, err := render(t, "-inventory", inv, "-out", out)
+	if err == nil {
+		t.Fatal("overwrote a file with no version header")
+	}
+	if !strings.Contains(err.Error(), "no \"Rendered from") {
+		t.Fatalf("wrong reason: %v", err)
+	}
+}
+
+func TestRun_RecordsTheVerificationInTheRenderedHeader(t *testing.T) {
+	// The rendered file is committed and reviewed; a reader of the diff
+	// should see what the document was checked against without re-deriving
+	// it.
+	inv := writeInventory(t, []map[string]any{
+		imageKey("image-signing-key-v1", "active", publishedPEM(t, "image-signing-key-v1.pub")),
+	})
+	out, err := render(t, "-inventory", inv)
+	if err != nil {
+		t.Fatalf("rendering: %v", err)
+	}
+	if !strings.Contains(out, "signature was verified against") ||
+		!strings.Contains(out, "inventory-signing-key-v1.pub") {
+		t.Error("the rendered header does not say what the inventory was verified against")
 	}
 }

@@ -30,6 +30,31 @@
 // resolved to, which answers a question about this instant rather than
 // about the thing that will run.
 //
+// # The document is verified before it is believed
+//
+// The inventory is signed precisely so that editing the file is not enough
+// to change what a verifier trusts — and this generator is a verifier: its
+// output IS what the cluster trusts. An earlier version read the document
+// and never the signature beside it, so a tampered inventory rendered
+// straight into an admission policy carrying the tamperer's key; the only
+// signature check lived in the test suite, which made the deploy path's
+// safety a convention ("the tests ran first") rather than a property of
+// the tool. Found by an independent audit, 2026-09-04.
+//
+// So three refusals now sit in front of the template, each fail-closed
+// (CLAUDE.md §3.4):
+//
+//   - the detached signature must verify against the anchor
+//     (inventory-signing-key-v1.pub beside the inventory by default;
+//     -anchor and -signature override the paths, never the requirement);
+//   - valid_until must not have passed — a withheld update must not keep
+//     yesterday's list, and yesterday's keys, alive forever;
+//   - when -out names an existing rendering, the inventory's version must
+//     not be lower than the one that rendering was produced from (read
+//     from its own header). Stdout mode has no replacement target, so it
+//     has no floor to enforce — the committed-policy path is the one this
+//     protects.
+//
 // Usage:
 //
 //	go run ./ci/generate-image-policy -out deploy/k8s/policy/image-signature.yaml
@@ -42,7 +67,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/inventory"
 )
@@ -69,9 +97,15 @@ type attestor struct {
 type policyData struct {
 	Source       string
 	InventoryVer int
-	Attestors    []attestor
-	ExcludedNS   []string
-	Insecure     bool
+	// Anchor and ValidUntil record, in the rendered file's own header, what
+	// the document was checked against and how long it claimed to be good
+	// for — so a reader of the committed policy can see the verification
+	// happened without re-deriving it.
+	Anchor     string
+	ValidUntil string
+	Attestors  []attestor
+	ExcludedNS []string
+	Insecure   bool
 }
 
 func run(args []string, out io.Writer) error {
@@ -88,6 +122,10 @@ func run(args []string, out io.Writer) error {
 	// for every environment.
 	insecure := fs.Bool("allow-insecure-registry", false,
 		"let the policy fetch signatures over plaintext HTTP (development registries only)")
+	sigPath := fs.String("signature", "",
+		"detached signature over the inventory's exact bytes; defaults to <inventory>.sig")
+	anchorPath := fs.String("anchor", "",
+		"public half of the inventory signing key; defaults to inventory-signing-key-v1.pub beside the inventory")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -96,9 +134,82 @@ func run(args []string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("reading the inventory: %w", err)
 	}
+
+	// The signature is checked before the document is even parsed. Order
+	// matters less for security here than for the error a reader gets: a
+	// tampered file usually still parses, so parse-first reports nothing,
+	// while verify-first names the actual problem — these bytes are not the
+	// bytes the offline key signed.
+	//
+	// The defaults resolve beside the inventory rather than against the
+	// working directory, so the documented invocation works from anywhere
+	// and the committed layout (docs/keys/ holds all three files) needs no
+	// flags at all.
+	resolvedSig := *sigPath
+	if resolvedSig == "" {
+		resolvedSig = *invPath + ".sig"
+	}
+	resolvedAnchor := *anchorPath
+	if resolvedAnchor == "" {
+		resolvedAnchor = filepath.Join(filepath.Dir(*invPath), "inventory-signing-key-v1.pub")
+	}
+	sig, err := os.ReadFile(filepath.Clean(resolvedSig))
+	if err != nil {
+		return fmt.Errorf("reading the inventory's signature: %w — an inventory without its "+
+			"signature is a list of trusted keys anyone could have written; pass -signature "+
+			"if it lives somewhere other than beside the inventory", err)
+	}
+	anchorPEM, err := os.ReadFile(filepath.Clean(resolvedAnchor))
+	if err != nil {
+		return fmt.Errorf("reading the inventory signing anchor: %w — pass -anchor if it "+
+			"lives somewhere other than beside the inventory", err)
+	}
+	anchor, err := inventory.Entry{Label: filepath.Base(resolvedAnchor), PublicKeyPEM: string(anchorPEM)}.PublicKey()
+	if err != nil {
+		return fmt.Errorf("parsing the anchor %s: %w", resolvedAnchor, err)
+	}
+	if err := inventory.Verify(raw, sig, anchor); err != nil {
+		return fmt.Errorf("the inventory's signature does not verify against %s: %w — "+
+			"a policy rendered from an unverified inventory would let whoever edited the "+
+			"file choose which keys the cluster trusts, which is the exact attack the "+
+			"signature exists to refuse (CLAUDE.md §3.4, §3.7)", resolvedAnchor, err)
+	}
+
 	inv, err := inventory.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("parsing the inventory: %w", err)
+	}
+
+	// Freshness: an expired document is refused, not warned about. Without
+	// this, an attacker who can only *withhold* inventory updates keeps
+	// yesterday's list — and any key it has since retired — trusted forever
+	// (the freeze attack valid_until exists for; internal/inventory's
+	// package comment names it and correctly says it cannot enforce it
+	// alone — this is the consumer-side half).
+	if now := time.Now(); now.After(inv.ValidUntil) {
+		return fmt.Errorf("the inventory expired at %s (now %s): a stale list of trusted keys "+
+			"is refused rather than rendered — regenerate and re-sign it with "+
+			"hsm-pki-keytool generate-inventory", inv.ValidUntil.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
+
+	// Rollback: when this run replaces an existing rendering, the incoming
+	// inventory may not be older than the one that rendering came from — an
+	// old document can resurrect a retired key. The floor is read from the
+	// -out file's own header, which this generator has always written.
+	// Stdout mode replaces nothing, so it has no floor to enforce; the
+	// committed-policy path is the durable artifact this protects.
+	if *outPath != "" {
+		prev, err := previousRenderedVersion(*outPath)
+		if err != nil {
+			return err
+		}
+		if prev > 0 && inv.Version < prev {
+			return fmt.Errorf("the inventory is version %d but %s was rendered from version %d: "+
+				"refusing the rollback — an older list can resurrect a retired key. If replacing "+
+				"the rendering with an older inventory is genuinely intended, move the existing "+
+				"file aside first, so the decision is somebody's rather than this tool's "+
+				"(CLAUDE.md §3.4)", inv.Version, *outPath, prev)
+		}
 	}
 
 	verifiable := inv.Verifiable(inventory.PurposeImage)
@@ -146,6 +257,8 @@ func run(args []string, out io.Writer) error {
 		policyData: policyData{
 			Source:       *invPath,
 			InventoryVer: inv.Version,
+			Anchor:       filepath.ToSlash(resolvedAnchor),
+			ValidUntil:   inv.ValidUntil.Format(time.RFC3339),
 			Attestors:    attestors,
 			ExcludedNS:   []string{"kube-system", "kube-public", "kube-node-lease", "kyverno"},
 			Insecure:     *insecure,
@@ -171,6 +284,42 @@ func run(args []string, out io.Writer) error {
 		fmt.Fprintf(out, "  %-28s %s\n", a.Label, a.Status)
 	}
 	return nil
+}
+
+// renderedVersionPattern matches the header line every rendering carries
+// ("Rendered from <path> (version N) by"), which is where the rollback
+// check's floor comes from.
+var renderedVersionPattern = regexp.MustCompile(`Rendered from .+ \(version ([0-9]+)\)`)
+
+// previousRenderedVersion reads the inventory version out of the rendering
+// being replaced. It returns 0 when nothing exists at path yet — there is
+// no floor to enforce against a file that is not there.
+//
+// A file that exists but carries no version header is refused rather than
+// treated as version 0: it means -out points at something this generator
+// did not write, and quietly overwriting it — or quietly exempting it from
+// the rollback check — would each be a decision made by a missing header
+// rather than by a person (CLAUDE.md §3.4, §3.8's "a lookup that cannot
+// identify its subject fails closed" applied to a file).
+func previousRenderedVersion(path string) (int, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("reading the rendering being replaced at %s: %w", path, err)
+	}
+	m := renderedVersionPattern.FindSubmatch(data)
+	if m == nil {
+		return 0, fmt.Errorf("%s exists but carries no \"Rendered from ... (version N)\" header, "+
+			"so it is not a rendering this generator wrote and there is no version to check a "+
+			"rollback against — move it aside if overwriting it is intended", path)
+	}
+	v, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		return 0, fmt.Errorf("parsing the version in %s's header: %w", path, err)
+	}
+	return v, nil
 }
 
 // celIdentifier reduces a key label to something CEL can use as a name.

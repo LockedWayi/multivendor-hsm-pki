@@ -7,6 +7,13 @@
 # in here by hand is exactly the hard-coded verifier CLAUDE.md 3.7 forbids,
 # and it would make the next rotation a breaking change to the cluster.
 #
+# The inventory's signature was verified against
+#   docs/keys/inventory-signing-key-v1.pub
+# before this was rendered, and the document was inside its stated validity
+# window (valid_until 2027-09-04T11:32:50Z). A rendering the generator refuses
+# to produce -- bad signature, expired document, version rollback -- never
+# reaches this file.
+#
 # Trusted image keys in this rendering:
 #   image-signing-key-v1        active
 #
