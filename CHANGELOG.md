@@ -20,6 +20,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   ceremony, moves the root's token out of the store the service can reach,
   and starts the service read-only and non-root.
 
+- **`ci/scan-image.sh`**: vulnerability gate and SBOM generation for the
+  service image, with a pinned scanner. Exits non-zero on any HIGH or
+  CRITICAL, and is verified to do so against a deliberately outdated image
+  rather than only against a clean one. Baseline for the service image:
+  zero HIGH/CRITICAL, 11 OS packages, 25 SBOM components.
+- **Kubernetes manifests** (`deploy/k8s`): base plus a K3s/SoftHSM2 dev
+  overlay, running on a real cluster. Single replica with a `Recreate`
+  strategy — a correctness constraint, not a capacity choice, since the CRL
+  is cached per process. No RBAC at all, because the service never calls the
+  Kubernetes API. A deliberately insecure pod is refused by Pod Security
+  Admission, with the refusal captured in the repository.
+
 ### Changed
 - **No PKCS#11 module ships in any image.** Every module, SoftHSM2 included,
   is mounted at run time, so the backend CI exercises and the backend
