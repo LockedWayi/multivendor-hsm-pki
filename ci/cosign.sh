@@ -186,14 +186,18 @@ different version. Investigate before changing the pin."
         base64 -d < "$work/asset.sig.b64" > "$work/sig.der"
         echo "    detached signature, checked against the pinned release key"
     else
-    # The bundle's messageSignature is a raw ECDSA-SHA256 signature over the
-    # artifact, which is what `openssl dgst -verify` checks -- so this needs
-    # no Sigstore tooling and no network trust beyond the pinned key. The
-    # bundle's publicKey.hint is checked too: it is the base64 SHA-256 of the
-    # release key's DER SubjectPublicKeyInfo, so a bundle signed by some
-    # other key is rejected as naming the wrong key rather than as a
-    # signature mismatch, which is a clearer failure.
-    python3 - "$work/bundle.json" "$work/sig.der" "$RELEASE_KEY" <<'PY'
+        # The bundle's messageSignature is a raw ECDSA-SHA256 signature over
+        # the artifact, which is what `openssl dgst -verify` checks -- so
+        # this needs no Sigstore tooling and no network trust beyond the
+        # pinned key. The bundle's publicKey.hint is checked too: it is the
+        # base64 SHA-256 of the release key's DER SubjectPublicKeyInfo, so a
+        # bundle signed by some other key is rejected as naming the wrong
+        # key rather than as a signature mismatch, which is a clearer
+        # failure.
+        #
+        # The Python below sits at column 0 and has to: this is a quoted
+        # heredoc, so its body and its PY terminator are taken literally.
+        python3 - "$work/bundle.json" "$work/sig.der" "$RELEASE_KEY" <<'PY'
 import base64, hashlib, json, sys
 bundle_path, sig_path, key_path = sys.argv[1:4]
 bundle = json.load(open(bundle_path))
