@@ -13,8 +13,10 @@
 #
 # Note what this does NOT show: the other seven rules. This manifest breaks
 # every rule at once and admission reports the first, which is why
-# deploy/k8s/policy/policy-selftest.py exists -- ten near-miss pods, each
-# breaking exactly one rule.
+# deploy/k8s/policy/policy-selftest.py exists -- fourteen cases: eleven
+# near-miss pods each breaking exactly one rule, and three that must be
+# ADMITTED (the compliant baseline, and the two rules whose second `or`
+# branch is only reached when the first is not taken).
 
 $ kubectl apply -n kyverno-policy-selftest -f deploy/k8s/policy/testdata/insecure-pod.yaml
 Error from server: error when creating "deploy/k8s/policy/testdata/insecure-pod.yaml": admission webhook "vpol.validate.kyverno.svc-fail" denied the request: Policy require-pod-hardening failed: host namespaces are not available: hostNetwork, hostPID and hostIPC each dissolve the boundary between the pod and the node.
