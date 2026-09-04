@@ -2,8 +2,8 @@
 
 A vendor-agnostic **PKCS#11 abstraction layer** over three HSM families (nShield,
 Luna, ProtectServer), with a **Certificate Authority** built on top, deployed to
-Kubernetes through a **security-gated CI/CD pipeline**, and — at the capstone —
-with its root of trust anchored to a real HSM via **Vault auto-unseal**.
+Kubernetes (a security-gated **CI/CD pipeline** lands in Phase 5), and — at the
+capstone — with its root of trust anchored to a real HSM via **Vault auto-unseal**.
 
 Built as a public reference for how a cryptography/PKI engineer abstracts multiple
 HSM vendors cleanly and roots software key management in hardware trust, end to
@@ -47,9 +47,11 @@ Phase specs live in [`docs/phases/`](docs/phases/).
 ## Runs without hardware
 
 The baseline path develops and tests against **SoftHSM2**, so the full suite —
-including the capstone auto-unseal mechanism — runs in CI with no HSM and no
-proprietary SDK. Clone it, run `go test ./...` in the provided dev container,
-and everything CI checks runs on your machine too.
+the capstone auto-unseal mechanism included, once it lands — runs in CI with no
+HSM and no proprietary SDK (`.github/workflows/ci.yml`: the race-detector
+suite, the coverage floor, and a full-history secret scan, all on every PR).
+Clone it, run `go test ./...` in the provided dev container, and everything CI
+checks runs on your machine too.
 
 The whole platform runs the same way, not just its tests:
 
