@@ -140,6 +140,18 @@ Then: one entry in `hsmtest`'s `registry`, and every test in §3 runs against
 it. Nothing else should need to change. If something does, that is a defect
 in the harness and belongs here as a finding.
 
+**Finding (2026-09-04, independent audit): it is currently two entries,
+not one.** `internal/pkcs11`'s own `TestConformance` predates the harness
+and keeps a backend list of its own, so a new vendor today edits
+`hsmtest`'s `registry` *and* that list. No import cycle forces this —
+`conformance_test.go` is an external test package (`package pkcs11_test`)
+and could import `hsmtest` — but folding it in would rework the
+conformance-specific setup (the wrong-PIN cases, the reopen hook, its
+single-token layout) for modest gain, so the duplication is accepted and
+recorded here rather than hidden. Until the two are unified, the "one
+entry" promise above reads as "one entry per registry, of which there are
+two."
+
 `internal/signingkey` joined §3 in Phase 4.8 without touching the harness,
 which is the property this section claims: a new suite reaches every
 backend by calling `hsmtest.ForEach`, and a new backend reaches every suite
