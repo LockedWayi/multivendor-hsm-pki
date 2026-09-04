@@ -63,13 +63,14 @@ Three properties of the harness matter for a new vendor:
 | `internal/ca` ceremony + intermediate | 12 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, `LoadIntermediate`'s startup gates |
 | `internal/ca` issuance + signer | 15 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points |
 | `internal/api` HTTP surface | 27 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness |
-| `internal/signingkey` | 8 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey` |
-| `cmd/hsm-pki-keytool` | 4 | The ceremony as an operator runs it, through the CLI's own adapter |
+| `internal/signingkey` | 10 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
+| `cmd/hsm-pki-keytool` | 8 | The ceremony and the supply-chain key provisioning as an operator runs them, through the CLI's own adapter |
 | `cmd/hsm-pki-server` | — | Startup: workspace resolution, anchor login, ambiguous-label refusal |
 
-Counted per backend, a full run executes **67 vendor-parameterised subtests
-on each configured backend**, plus the conformance suite — 68 top-level
-`Test.../<backend>` subtests in all. Measured 2026-09-04 rather than
+Counted per backend, a full run executes **73 vendor-parameterised subtests
+on each configured backend**, plus the conformance suite — 74 top-level
+`Test.../<backend>` subtests in all. Re-measured 2026-09-04 after Phase
+4.8's keytool subcommand landed (it was 67 + 1 before), rather than
 maintained by hand:
 
 ```sh
@@ -79,7 +80,7 @@ go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
 The anchor matters. `--- PASS:` lines carry a timing suffix, so an
 end-anchored pattern against them matches nothing and reports zero; and an
 unanchored pattern counts nested subtests too, which is a different number
-(111) measuring a different thing.
+(117) measuring a different thing.
 
 ## 4. What deliberately does not multiply
 

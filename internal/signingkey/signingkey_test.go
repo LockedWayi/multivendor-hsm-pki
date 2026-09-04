@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
@@ -246,6 +247,60 @@ func TestKeyPEM_IsReadableByAVerifierWithNoHSM(t *testing.T) {
 	})
 }
 
+// TestCheckNoCAHierarchyKey_PassesOnATokenWithoutCAKeys pins the case that
+// must not become a false refusal: the guard is run before every
+// provisioning, so a token carrying only supply-chain keys has to clear it.
+func TestCheckNoCAHierarchyKey_PassesOnATokenWithoutCAKeys(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+
+		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{
+			Label: b.Label("image-signing-key-v3"),
+		}); err != nil {
+			t.Fatalf("Provision: %v", err)
+		}
+
+		if err := signingkey.CheckNoCAHierarchyKey(ctx, b.Adapter, s); err != nil {
+			t.Fatalf("CheckNoCAHierarchyKey on a supply-chain token = %v, want nil", err)
+		}
+	})
+}
+
+// TestCheckNoCAHierarchyKey_RefusesATokenHoldingACAKey is Phase 4.8's
+// third-token decision as an assertion. Every object involved is
+// individually correct — the CA key is a well-formed CA key, the signing
+// key would be a well-formed signing key — and the defect is only that they
+// share a token, which is exactly the kind of thing no per-object check can
+// see (docs/threat-model.md §6.1).
+func TestCheckNoCAHierarchyKey_RefusesATokenHoldingACAKey(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+
+		// A real key pair rather than a stub object: the guard reads labels
+		// off private keys the token actually holds, so a test that faked
+		// one would be testing something else.
+		caLabel := b.Label("ca-intermediate-key-v1")
+		if _, err := b.Adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
+			Curve: pk11.P256, Label: caLabel, Sign: true, Verify: true,
+		}); err != nil {
+			t.Fatalf("GenerateKeyPair(%s): %v", caLabel, err)
+		}
+
+		err := signingkey.CheckNoCAHierarchyKey(ctx, b.Adapter, s)
+		if !errors.Is(err, signingkey.ErrCAHierarchyKeyPresent) {
+			t.Fatalf("CheckNoCAHierarchyKey on the CA's token = %v, want ErrCAHierarchyKeyPresent", err)
+		}
+		// The operator has to be told which object caused the refusal;
+		// "wrong token" with no name in it is not actionable on a token
+		// holding hundreds of keys.
+		if !strings.Contains(err.Error(), caLabel) {
+			t.Errorf("refusal does not name the offending key: %v", err)
+		}
+	})
+}
+
 // --- pure logic below: no token, so these do not multiply per backend ---
 
 func TestSameKey(t *testing.T) {
@@ -265,5 +320,31 @@ func TestSameKey(t *testing.T) {
 	}
 	if signingkey.SameKey(nil, &a.PublicKey) || signingkey.SameKey(&a.PublicKey, nil) {
 		t.Error("SameKey treated nil as equal to a key")
+	}
+}
+
+func TestValidateLabel(t *testing.T) {
+	// Versioning is what makes rotation a lifecycle step rather than a
+	// breaking rename (CLAUDE.md §3.7), so an unversioned label is refused
+	// rather than defaulted to -v1: a tool that silently picks a version
+	// for you is a tool that will pick the same one twice.
+	valid := []string{"image-signing-key-v1", "artifact-signing-key-v12", "audit-signing-key-v1"}
+	for _, label := range valid {
+		if err := signingkey.ValidateLabel(label); err != nil {
+			t.Errorf("ValidateLabel(%q) = %v, want nil", label, err)
+		}
+	}
+	invalid := []string{
+		"",                      // nothing at all
+		"image-signing-key",     // the case the rule exists for
+		"image-signing-key-v",   // a version marker with no version
+		"Image-Signing-Key-v1",  // labels are lower case, so two spellings cannot both address one key
+		"image signing key v1",  // a space would have to be quoted in every PKCS#11 URI that carries it
+		"image-signing-key-v1x", // trailing junk after the version
+	}
+	for _, label := range invalid {
+		if err := signingkey.ValidateLabel(label); err == nil {
+			t.Errorf("ValidateLabel(%q) = nil, want an error", label)
+		}
 	}
 }
