@@ -1,0 +1,3 @@
+hsm-pki-platform artifact signature test vector.
+Signed by artifact-signing-key-v1 on a SoftHSM2 supply-chain token,
+through cosign v3.1.3 with a signing config carrying no transparency log.

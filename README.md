@@ -201,9 +201,28 @@ the test suite if any configuration file names a CA key and a signing key
 together. Provisioning it needs no hardware:
 [`deploy/docker/provision-signing-keys.sh`](deploy/docker/provision-signing-keys.sh).
 
+The release binary is signed over the HSM with that artifact key, through
+cosign, with **no transparency log**: the signing config declares no log
+service, because Rekor exists to bound the lifetime of an ephemeral
+certificate and this platform signs with a long-lived published key, so an
+entry would put a record of every internal release in a public log without
+changing the trust decision. Verification does not need cosign, an HSM, or
+a PIN — `ci/verify-artifact` re-derives the answer from `crypto/ecdsa` and
+`crypto/sha256`, and refuses a bundle whose digest is not the digest of the
+bytes in front of it:
+
+```sh
+go run ./ci/verify-artifact -key docs/keys/artifact-signing-key-v1.pub \
+    -bundle hsm-pki-server.bundle hsm-pki-server
+```
+
+That second verifier is not belt and braces. A signature checked only by the
+tool that produced it proves the tool agrees with itself — the closed loop
+that shipped a CRL here that Go could read and OpenSSL could not
+([`docs/lessons.md`](docs/lessons.md) §2).
+
 Still open in Phase 4, and stated rather than implied: the Kyverno
-admission policy, release-artifact signing, and container-image signing
-with admission verification.
+admission policy, and container-image signing with admission verification.
 
 The security reasoning behind all of this — what each key is worth, what an
 attacker gets by compromising the service process and what they still do not
