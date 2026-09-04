@@ -79,7 +79,16 @@ fetch() {
     mkdir -p "$BIN_DIR"
     local work
     work="$(mktemp -d)"
-    trap 'rm -rf "$work"' RETURN
+    # EXIT, not RETURN: a RETURN trap does not fire when die() exits the
+    # script, which is every failure path here -- measured, and it left the
+    # rejected 140 MB download behind each time. A verification that fails
+    # must not leave its subject lying around.
+    #
+    # Double quotes so the path is expanded now rather than at exit: `work`
+    # is function-local, so a trap deferring the expansion runs after it is
+    # out of scope and dies on `set -u` -- which also skips the removal it
+    # was there to do. Measured, not reasoned about.
+    trap "rm -rf '$work'" EXIT
 
     log "downloading $COSIGN_ASSET $COSIGN_VERSION"
     curl -sSL --fail -o "$work/cosign" "$RELEASE_URL/$COSIGN_ASSET"
@@ -161,28 +170,81 @@ PY
         echo "    unconfirmed is that the signature is publicly logged." >&2
     fi
 
+    log "confirming this build actually has PKCS#11 support"
+    # curl writes 0644, and a non-executable binary bind-mounted into the
+    # runner fails with "permission denied" at container init. Found by the
+    # positive probe below on its first run: the previous version of that
+    # check swallowed this and reported PKCS#11 support anyway.
+    chmod +x "$work/cosign"
+    assert_pkcs11_build "$work/cosign"
+
+    # Installed only after every check has passed, so a binary that fails one
+    # never reaches the path the rest of this repository invokes.
     install -m 0755 "$work/cosign" "$COSIGN_BIN"
 
-    log "confirming this build actually has PKCS#11 support"
-    # Not a formality. The default build answers pkcs11 subcommands with
-    # "This cosign was not built with pkcs11-tool support!" and exits **0**,
-    # so a caller checking only the exit status would read a refusal as a
-    # success. Measured on v3.1.3; the pinned digest already rules it out,
-    # but a fail-open shape gets a check rather than a comment.
-    local probe
-    probe="$(run pkcs11-tool list-tokens 2>&1 || true)"
-    case "$probe" in
-        *"not built with pkcs11-tool support"*)
-            die "the installed binary has no PKCS#11 support" ;;
-    esac
-    echo "    pkcs11-tool is present"
-
     log "ready: $COSIGN_BIN ($COSIGN_VERSION, $COSIGN_ASSET)"
+}
+
+# assert_pkcs11_build confirms that the binary at $1 was built with the
+# pkcs11key tag, by asking it to do something only that build can attempt.
+#
+# The first version of this checked for the *absence* of the stub build's
+# refusal string and reported success otherwise -- which passed on a machine
+# with no PKCS#11 module at all, printing a claim it had not measured. That
+# is the same fail-open shape the check exists to defend against, so it now
+# asserts a positive signal instead: the two builds are distinguishable by
+# what they say when there is no module to load.
+#
+#   stub build  "This cosign was not built with pkcs11-tool support!", exit 0
+#   real build  "failed to load PKCS11 module", exit 1  (or a token listing,
+#               when a module happens to be present)
+#
+# Anything else -- a docker failure, a changed message in a future release --
+# is unrecognised and fails closed rather than being read as a pass.
+assert_pkcs11_build() {
+    local binary="$1" out
+    # Deliberately no signing-state mounts. Loading a module is not what is
+    # being tested, and mounting a state directory that does not exist yet
+    # makes docker create it on the host as root -- which then blocks
+    # deploy/docker/provision-signing-keys.sh with "signing state already
+    # exists" over directories this script invented.
+    out="$(docker run --rm \
+        -v "$binary":/usr/local/bin/cosign:ro \
+        -e COSIGN_PKCS11_MODULE_PATH=/nonexistent/no-such-module.so \
+        "$RUNNER_IMAGE" pkcs11-tool list-tokens 2>&1 || true)"
+    case "$out" in
+        *"not built with pkcs11-tool support"*)
+            die "this binary is the stub build: it has no PKCS#11 support.
+The default cosign-linux-amd64 answers pkcs11 subcommands this way and
+exits 0, so the asset name is part of the pin, not a convenience." ;;
+        *"failed to load PKCS11 module"*|*"Listing tokens of PKCS11 module"*)
+            echo "    pkcs11-tool tried to load a module, so the tag is present" ;;
+        *)
+            die "could not confirm PKCS#11 support. cosign said:
+$out" ;;
+    esac
 }
 
 run() {
     [ -x "$COSIGN_BIN" ] || die "no cosign at $COSIGN_BIN. Run: ci/cosign.sh fetch"
     verify_pinned_digest
+
+    # Checked here rather than left to docker, which would create each
+    # missing path on the host as a root-owned directory. That is not just
+    # untidy: provision-signing-keys.sh refuses to run when its state
+    # directory exists, so an invented one blocks key provisioning with
+    # "signing state already exists" and advises --reset over state that was
+    # never provisioned. Fail closed, and say what to run.
+    local missing=()
+    [ -d "$STATE/pkcs11" ] || missing+=("$STATE/pkcs11")
+    [ -d "$STATE/tokens" ] || missing+=("$STATE/tokens")
+    [ -d "$STATE/etc" ]    || missing+=("$STATE/etc")
+    if [ ${#missing[@]} -gt 0 ]; then
+        die "no signing state to work with. Missing:
+$(printf '  %s\n' "${missing[@]}")
+Provision the keys first:  deploy/docker/provision-signing-keys.sh
+(or point HSM_PKI_SIGNING_STATE at an existing store)."
+    fi
     docker image inspect "$RUNNER_IMAGE" >/dev/null 2>&1 || {
         docker build -q -f "$REPO_ROOT/ci/cosign.Dockerfile" -t "$RUNNER_IMAGE" "$REPO_ROOT" >/dev/null
     }
