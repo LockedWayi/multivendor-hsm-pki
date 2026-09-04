@@ -40,8 +40,10 @@ Three further things, each learned by getting it wrong first:
     container has the same access as a privileged container, and a policy
     that walks only `spec.containers` is the usual way this is wrong.
 
-Everything runs as a server-side dry run, so nothing is scheduled and the
-cluster is left as it was found.
+All but one case runs as a server-side dry run, so nothing is scheduled.
+The exception is the ephemeral-container case: `pods/ephemeralcontainers`
+is a subresource of a pod that exists, so that one creates a compliant pod,
+tries to attach a privileged container to it, and deletes it again.
 """
 
 import copy
@@ -136,6 +138,30 @@ def case_seccomp_on_the_container(p):
     p["spec"]["containers"][0]["securityContext"]["seccompProfile"] = {"type": "RuntimeDefault"}
 
 
+def case_container_overrides_runasnonroot(p):
+    """The pod looks hardened; the container quietly undoes it.
+
+    This is the bypass the first version of the policy had. A container's
+    securityContext overrides the pod's, so a rule written as "the pod says
+    so OR every container says so" is satisfied by the pod-level clause and
+    never looks at the container that overrode it.
+    """
+    p["spec"]["containers"][0]["securityContext"]["runAsNonRoot"] = False
+
+
+def case_container_overrides_seccomp(p):
+    """As above, with Unconfined -- every syscall the kernel offers."""
+    p["spec"]["containers"][0]["securityContext"]["seccompProfile"] = {"type": "Unconfined"}
+
+
+def case_container_runs_as_uid_zero(p):
+    p["spec"]["containers"][0]["securityContext"]["runAsUser"] = 0
+
+
+def case_pod_runs_as_uid_zero(p):
+    p["spec"]["securityContext"]["runAsUser"] = 0
+
+
 def case_privileged_init_container(p):
     p["spec"]["initContainers"] = [
         {
@@ -168,6 +194,13 @@ CASES = [
     ("no seccomp profile", case_seccomp_unset, "seccomp"),
     ("no memory limit", case_no_memory_limit, "memory limit"),
     ("a privileged INIT container", case_privileged_init_container, "privileged container"),
+    # The pod-versus-container override. Each of these was ADMITTED by the
+    # first version of this policy: the pod-level clause of an `or` was
+    # true, so the container that overrode it was never examined.
+    ("a container overriding the pod's runAsNonRoot", case_container_overrides_runasnonroot, "runAsNonRoot"),
+    ("a container overriding the pod's seccomp with Unconfined", case_container_overrides_seccomp, "seccomp"),
+    ("a container running as UID 0", case_container_runs_as_uid_zero, "runAsUser 0"),
+    ("the pod running as UID 0", case_pod_runs_as_uid_zero, "runAsUser 0"),
     # Two rules say "on the pod OR on every container", and the second arm
     # of an `or` is never reached while the first is satisfied. Both cases
     # must be ADMITTED: a rule that rejected them would be rejecting a pod
@@ -212,6 +245,91 @@ def apply_dry_run(pod):
     return result.returncode == 0, (result.stderr or result.stdout).strip().replace("\n", " ")
 
 
+COMPLIANT_POD = {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {"name": "ephemeral-target", "namespace": NAMESPACE},
+    "spec": {
+        "securityContext": {"runAsNonRoot": True, "seccompProfile": {"type": "RuntimeDefault"}},
+        "containers": [
+            {
+                "name": "c",
+                "image": "busybox:1.36",
+                "command": ["sh", "-c", "sleep 600"],
+                "securityContext": {
+                    "allowPrivilegeEscalation": False,
+                    "readOnlyRootFilesystem": True,
+                    "runAsUser": 65532,
+                    "capabilities": {"drop": ["ALL"]},
+                },
+                "resources": {"limits": {"memory": "64Mi"}},
+            }
+        ],
+    },
+}
+
+
+def check_ephemeral_container_subresource():
+    """Attach a privileged ephemeral container to a *running* pod.
+
+    The one case that cannot be a dry run. Ephemeral containers are not
+    added by updating a pod -- they go to `pods/ephemeralcontainers`, a
+    subresource that exists only on a pod that exists. A policy matching
+    only `pods` never sees the request, which is what `kubectl debug` uses.
+
+    Measured before the policy matched the subresource: this succeeded. A
+    privileged, root container was attached to a running pod in a namespace
+    the policy covers, with every rule in force and none of them run.
+    """
+    subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=json.dumps(COMPLIANT_POD), capture_output=True, text=True, check=True,
+    )
+    try:
+        subprocess.run(
+            ["kubectl", "wait", "--for=condition=Ready",
+             f"pod/{COMPLIANT_POD['metadata']['name']}", "-n", NAMESPACE, "--timeout=120s"],
+            capture_output=True, text=True, check=True,
+        )
+        live = json.loads(subprocess.run(
+            ["kubectl", "get", "pod", COMPLIANT_POD["metadata"]["name"], "-n", NAMESPACE, "-o", "json"],
+            capture_output=True, text=True, check=True,
+        ).stdout)
+        live["spec"]["ephemeralContainers"] = [
+            {
+                "name": "debugger",
+                "image": "busybox:1.36",
+                "command": ["sh", "-c", "sleep 300"],
+                "targetContainerName": "c",
+                "terminationMessagePolicy": "File",
+                "imagePullPolicy": "IfNotPresent",
+                "securityContext": {
+                    "privileged": True,
+                    "runAsUser": 0,
+                    "allowPrivilegeEscalation": True,
+                },
+            }
+        ]
+        result = subprocess.run(
+            ["kubectl", "replace", "--raw",
+             f"/api/v1/namespaces/{NAMESPACE}/pods/{COMPLIANT_POD['metadata']['name']}/ephemeralcontainers",
+             "-f", "-"],
+            input=json.dumps(live), capture_output=True, text=True,
+        )
+        message = (result.stderr or result.stdout).strip().replace("\n", " ")
+        if result.returncode == 0:
+            return False, "ATTACHED — the subresource is not matched by the policy"
+        if "privileged container" in message:
+            return True, "refused, naming its own rule"
+        return False, f"refused for the wrong reason: {message[:110]}"
+    finally:
+        subprocess.run(
+            ["kubectl", "delete", "pod", COMPLIANT_POD["metadata"]["name"],
+             "-n", NAMESPACE, "--wait=false", "--ignore-not-found"],
+            capture_output=True, text=True,
+        )
+
+
 def main():
     ensure_namespace()
     failures = 0
@@ -237,7 +355,13 @@ def main():
         print(f"  {'ok  ' if ok else 'FAIL'}  {name:46s} {detail}")
         failures += 0 if ok else 1
 
-    print(f"\n{len(CASES) - failures} passed, {failures} failed")
+    ok, detail = check_ephemeral_container_subresource()
+    print(f"  {'ok  ' if ok else 'FAIL'}  "
+          f"{'a privileged EPHEMERAL container via kubectl debug':46s} {detail}")
+    failures += 0 if ok else 1
+
+    total = len(CASES) + 1
+    print(f"\n{total - failures} passed, {failures} failed")
     return 1 if failures else 0
 
 

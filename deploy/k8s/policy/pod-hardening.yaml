@@ -59,10 +59,20 @@ spec:
     - Deny
   matchConstraints:
     resourceRules:
+      # `pods/ephemeralcontainers` is not decoration. Ephemeral containers
+      # are not added by updating the pod -- they go to a subresource of
+      # their own, which is what `kubectl debug` uses. A policy matching only
+      # `pods` never sees that request.
+      #
+      # Measured before this line existed: a privileged, root ephemeral
+      # container was attached to a *running* pod in a namespace this policy
+      # covers, and admission said nothing. Every rule below was in force and
+      # none of them ran, because the request was never matched. That is a
+      # one-command bypass of the whole policy on any pod already scheduled.
       - apiGroups: [""]
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE"]
-        resources: ["pods"]
+        resources: ["pods", "pods/ephemeralcontainers"]
     namespaceSelector:
       matchExpressions:
         # The control plane and Kyverno itself are excluded, and this is not
@@ -91,9 +101,17 @@ spec:
         (has(object.spec.initContainers) ? object.spec.initContainers : []) +
         (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
   validations:
+    # Written per field as "absent, or explicitly false" rather than as
+    # "all three absent, or all three false". The second form reads a field
+    # it has not established is there, which works only because the API
+    # server applies defaults before admission -- true today, and not a
+    # property this rule should depend on. CEL raises a runtime error on an
+    # absent field, and an erroring rule is decided by failurePolicy rather
+    # than by what it says.
     - expression: >-
-        !has(object.spec.hostNetwork) && !has(object.spec.hostPID) && !has(object.spec.hostIPC)
-        || (!object.spec.hostNetwork && !object.spec.hostPID && !object.spec.hostIPC)
+        (!has(object.spec.hostNetwork) || object.spec.hostNetwork == false)
+        && (!has(object.spec.hostPID) || object.spec.hostPID == false)
+        && (!has(object.spec.hostIPC) || object.spec.hostIPC == false)
       message: >-
         host namespaces are not available: hostNetwork, hostPID and hostIPC
         each dissolve the boundary between the pod and the node.
@@ -124,23 +142,55 @@ spec:
       message: >-
         every container must drop ALL capabilities and add back only what it
         proves it needs. This platform's own service adds none.
+    # The *effective* value per container, not "the pod says so OR every
+    # container says so". Those are different rules and the second one is
+    # wrong, because a container's securityContext overrides the pod's.
+    #
+    # Measured before this was fixed: a pod with runAsNonRoot: true and one
+    # container setting runAsNonRoot: false was **admitted** -- the pod-level
+    # clause was true, the `or` short-circuited, and the container that
+    # overrode it was never looked at. A rule stated as an `or` over two
+    # levels of an inheritance hierarchy will always have this shape.
     - expression: >-
-        (has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot)
-         && object.spec.securityContext.runAsNonRoot)
-        || variables.allContainers.all(c,
-             has(c.securityContext) && has(c.securityContext.runAsNonRoot)
-             && c.securityContext.runAsNonRoot)
+        variables.allContainers.all(c,
+          has(c.securityContext) && has(c.securityContext.runAsNonRoot)
+            ? c.securityContext.runAsNonRoot
+            : (has(object.spec.securityContext) && has(object.spec.securityContext.runAsNonRoot)
+               && object.spec.securityContext.runAsNonRoot))
       message: >-
-        runAsNonRoot must be true, on the pod or on every container.
+        every container must end up with runAsNonRoot true -- set on the
+        container, or inherited from the pod and not overridden there.
+    # Same inheritance, same measured bypass: a pod with
+    # seccompProfile.type RuntimeDefault and one container setting
+    # Unconfined was admitted.
     - expression: >-
-        (has(object.spec.securityContext) && has(object.spec.securityContext.seccompProfile)
-         && object.spec.securityContext.seccompProfile.type in ['RuntimeDefault', 'Localhost'])
-        || variables.allContainers.all(c,
-             has(c.securityContext) && has(c.securityContext.seccompProfile)
-             && c.securityContext.seccompProfile.type in ['RuntimeDefault', 'Localhost'])
+        variables.allContainers.all(c,
+          has(c.securityContext) && has(c.securityContext.seccompProfile)
+            ? c.securityContext.seccompProfile.type in ['RuntimeDefault', 'Localhost']
+            : (has(object.spec.securityContext) && has(object.spec.securityContext.seccompProfile)
+               && object.spec.securityContext.seccompProfile.type in ['RuntimeDefault', 'Localhost']))
       message: >-
-        a seccomp profile must be set to RuntimeDefault or Localhost. Unset
-        means Unconfined, which is every syscall the kernel offers.
+        every container must end up with a seccomp profile of RuntimeDefault
+        or Localhost. Unset means Unconfined, which is every syscall the
+        kernel offers, and a container may not override the pod's profile
+        with it.
+    # runAsNonRoot above is about the *declaration*; this is about the one
+    # value that contradicts it. Measured: a container with runAsUser 0
+    # under a pod declaring runAsNonRoot true is admitted, and then the
+    # kubelet refuses to start it with CreateContainerConfigError. Nothing
+    # runs as root, so this is not a bypass -- but the answer arrives from
+    # the wrong component, at the wrong time, in a message about container
+    # configuration rather than about policy. And the kubelet's check exists
+    # only because the pod declared runAsNonRoot; remove that and it goes
+    # away too.
+    - expression: >-
+        (!has(object.spec.securityContext) || !has(object.spec.securityContext.runAsUser)
+         || object.spec.securityContext.runAsUser != 0)
+        && variables.allContainers.all(c,
+             !has(c.securityContext) || !has(c.securityContext.runAsUser)
+             || c.securityContext.runAsUser != 0)
+      message: >-
+        runAsUser 0 is root by another name, on the pod or on any container.
     - expression: >-
         variables.allContainers.all(c, has(c.resources) && has(c.resources.limits)
           && 'memory' in c.resources.limits)
