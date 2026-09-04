@@ -1,0 +1,231 @@
+# The CA service.
+#
+# Read the replica count and the strategy together, because they are one
+# decision and it is a correctness constraint rather than a capacity choice.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hsm-pki
+  labels:
+    app.kubernetes.io/name: hsm-pki
+    app.kubernetes.io/component: ca
+spec:
+  # SINGLE INSTANCE, DELIBERATELY. Raising this number is a correctness bug,
+  # not a scaling decision, and it fails silently in both of its modes:
+  #
+  #  1. The store is single-writer. The connection pool is capped at one
+  #     inside a process, which says nothing about two processes opening the
+  #     same database file.
+  #  2. The generated CRL is cached per process. A revocation handled by pod
+  #     A invalidates A's cache; pod B keeps serving its cached CRL until
+  #     nextUpdate -- up to ca.crl_validity_hours, 24 by default. A relying
+  #     party that happens to reach B is told a revoked certificate is fine,
+  #     and nothing in the response says the answer is stale.
+  #
+  # The second is the dangerous one: it produces a wrong security answer, not
+  # an error. Lifting this needs shared state AND cross-instance cache
+  # invalidation -- an external database plus a shared cache or none at all.
+  # That is a design change, not a manifest change.
+  replicas: 1
+
+  # Recreate, not RollingUpdate. A rolling update runs the old and new pods
+  # at once by design, which is precisely the state the replica count above
+  # exists to prevent -- so the default strategy would reintroduce the defect
+  # during every deployment, briefly and invisibly.
+  #
+  # The cost is honest and stated: an update has a downtime window. The
+  # phase file originally asked for a strategy that "never drops to zero
+  # ready replicas", which is unachievable together with "never runs two" on
+  # a single-writer store. Of the two, never-two is the one that protects
+  # correctness; never-zero only protects availability, and the CA being
+  # briefly unreachable is a fetch that retries, not a wrong answer.
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hsm-pki
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hsm-pki
+        app.kubernetes.io/component: ca
+    spec:
+      serviceAccountName: hsm-pki
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # fsGroup is what makes the store volume writable by the service
+        # without anyone running chown: the kubelet applies this group to
+        # the volume's contents. It is the Kubernetes answer to the chown
+        # that deploy/docker/run-local.sh has to do by hand.
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: hsm-pki-server
+          # Overlays set the image. It is a tag here and must become a
+          # digest once a registry exists: a tag is a mutable pointer, so
+          # deploying one means deploying whatever it points at today, and a
+          # signature over a tag attests to nothing durable (CLAUDE.md §3.8,
+          # sub-task 4.10).
+          image: hsm-pki-server:local
+          imagePullPolicy: IfNotPresent
+
+          args: ["-config", "/etc/hsm-pki/config.yaml"]
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          env:
+            # PHASE 6 PLACEHOLDER, and labelled as one deliberately. A
+            # Kubernetes Secret is base64-encoded, not encrypted: it is
+            # readable by anyone who can read Secrets in this namespace, and
+            # it sits in etcd. This is not the final custody solution -- that
+            # is Vault (Phase 6), which is why the config file names the
+            # variable rather than holding the value, so the source can
+            # change without the service changing.
+            - name: HSM_PKI_INTERMEDIATE_PIN
+              valueFrom:
+                secretKeyRef:
+                  name: hsm-pki-pin
+                  key: intermediate-pin
+            - name: SOFTHSM2_CONF
+              value: /etc/hsm-pki/softhsm2.conf
+
+          # Startup, liveness and readiness answer three different questions,
+          # and conflating any two of them breaks something specific.
+          #
+          # startupProbe buys time for the HSM connection. Measured against
+          # SoftHSM2 the service reaches "listening" in milliseconds, but the
+          # budget here is sized for the slow case this platform is actually
+          # aimed at -- a network HSM whose client library opens a connection
+          # and logs in. 30 x 2s = 60s before anything is declared failed.
+          #
+          # While a startupProbe is running, the liveness probe is suppressed,
+          # which is the property that matters: without it, a slow but healthy
+          # HSM login would be killed by liveness and retried forever.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+
+          # Liveness is /healthz, which by design touches nothing but the
+          # process. It must never be /readyz: readiness opens an HSM
+          # session, and a liveness failure restarts the container -- so
+          # wiring the HSM into liveness turns a transient token failure into
+          # a restart loop against a dependency restarting cannot fix
+          # (internal/api/health.go).
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Readiness is /readyz, which does open a session. An HSM that has
+          # gone away should take this pod out of the Service's endpoints --
+          # stop sending it traffic -- without killing it.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Measured, not guessed: 4.2 MiB resident at idle and 6.3 MiB after
+          # thirty issuances and a CRL generation, with CPU indistinguishable
+          # from zero (thirty issuances completed in 0.59s wall clock).
+          #
+          # The requests are far above that on purpose. What was measured is
+          # the SoftHSM2 path; a vendor client library -- ProtectToolkit's
+          # netclient, and the nShield and Luna libraries in Phase 7 -- brings
+          # its own buffers and threads into this process, and the request is
+          # what the scheduler reserves. The limit is generous for the same
+          # reason plus one more: a memory limit that a future backend
+          # quietly exceeds is an OOMKill, which presents as a crash loop with
+          # no application-level error at all.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              # No CPU limit. Signing is bursty and short; a CPU limit does
+              # not fail loudly, it throttles, which surfaces as unexplained
+              # request latency. The request above is what protects the
+              # neighbours.
+              memory: 256Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            # Config and the public ceremony artifacts: config.yaml,
+            # softhsm2.conf, the intermediate certificate, the root
+            # certificate and the root CRL. No key material, no PIN.
+            - name: config
+              mountPath: /etc/hsm-pki
+              readOnly: true
+
+            # The CA store. Mounted as a DIRECTORY, never as a subPath onto
+            # ca.db itself: SQLite in WAL mode writes ca.db, ca.db-wal and
+            # ca.db-shm, so a single-file mount gives the process nowhere to
+            # put the write-ahead log and fails at the first transaction
+            # rather than at startup.
+            - name: store
+              mountPath: /var/lib/hsm-pki
+
+            # The PKCS#11 module. No module ships in the image -- of any
+            # kind, vendor or SoftHSM2 -- so every backend arrives here, and
+            # an overlay decides which one (deploy/docker/README.md).
+            - name: pkcs11-module
+              mountPath: /pkcs11
+              readOnly: true
+
+            # SoftHSM2's token store, which is writable state rather than
+            # code. A vendor overlay replaces this with whatever that
+            # vendor's module needs, or drops it entirely for a network HSM.
+            - name: token-store
+              mountPath: /var/lib/softhsm/tokens
+
+      volumes:
+        - name: config
+          configMap:
+            name: hsm-pki-config
+        - name: store
+          persistentVolumeClaim:
+            claimName: hsm-pki-store
+        # Both of the following name claims the BASE DOES NOT DEFINE. An
+        # overlay must supply them, because where a module comes from is
+        # exactly what differs between a SoftHSM2 development cluster and a
+        # vendor deployment.
+        #
+        # Deliberately claims rather than an emptyDir placeholder, and the
+        # first draft got this wrong in an instructive way. A strategic-merge
+        # patch merges by key; it does not replace. An overlay patching an
+        # `emptyDir` volume to a `persistentVolumeClaim` therefore produced a
+        # volume carrying *both* sources -- rejected by the API server, and
+        # not caught by schema validation, since every source field is
+        # individually optional. An unsatisfied claim fails better anyway:
+        # the pod stays Pending with an unbound PVC named in its events,
+        # rather than starting against an empty directory.
+        - name: pkcs11-module
+          persistentVolumeClaim:
+            claimName: hsm-pki-pkcs11-module
+            readOnly: true
+        - name: token-store
+          persistentVolumeClaim:
+            claimName: hsm-pki-token-store

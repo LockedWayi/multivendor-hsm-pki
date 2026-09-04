@@ -1,0 +1,104 @@
+# How the PKCS#11 module reaches a pod in a `restricted` namespace.
+#
+# THE TENSION. No module ships in the image, so it must come from the node.
+# The obvious way is a hostPath volume in the pod spec -- and Pod Security
+# Admission at `restricted` forbids exactly that, which sub-task 4.5
+# requires. Two apparent options, both bad: drop the namespace to
+# `baseline` and lose the guardrail, or bake the module back into the image
+# and lose the delivery decision.
+#
+# THE RESOLUTION. `restricted` forbids the *pod* from naming a hostPath. It
+# does not forbid a pod from using a PersistentVolumeClaim whose
+# PersistentVolume happens to be node-local. That is not a loophole, it is
+# the distinction the rule is drawing: a hostPath in a pod spec lets whoever
+# can create a pod mount any path on the node, so the authority to choose
+# a host path sits with the workload author. A PersistentVolume is a
+# cluster-scoped object only an administrator can create, and the workload
+# gets a claim to something already chosen for it. Same bytes on the node,
+# authority in the right place.
+#
+# NODE PREREQUISITE, and it fails quietly if skipped. On the node this pod
+# schedules to:
+#
+#   sudo mkdir -p /opt/hsm-pki/pkcs11 /opt/hsm-pki/tokens
+#   # The REAL object, not Debian's /usr/lib/softhsm/libsofthsm2.so, which is
+#   # a symlink -- mounting a symlink reproduces a dangling link inside the
+#   # container and fails exactly like an absent module.
+#   sudo cp /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so /opt/hsm-pki/pkcs11/
+#   # The token store is writable state; fsGroup 65532 makes it group-writable
+#   # to the service, so the group has to be able to reach it.
+#   sudo chown -R 65532:65532 /opt/hsm-pki/tokens
+#   sudo chmod 0770 /opt/hsm-pki/tokens
+#
+# A missing module here is not a crash with a clear cause unless you know to
+# look: the pod starts, exits with "failed to load module", and restarts.
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hsm-pki-dev-pkcs11-module
+  labels:
+    app.kubernetes.io/name: hsm-pki
+    hsm-pki.local/volume: pkcs11-module
+spec:
+  capacity:
+    # Meaningless for a node-local directory -- nothing enforces it -- but
+    # the field is required, so it is set to something obviously nominal.
+    storage: 64Mi
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  # An empty-but-named class no provisioner serves, so K3s's default
+  # local-path provisioner does not try to fulfil the claim itself.
+  storageClassName: hsm-pki-node-local
+  hostPath:
+    path: /opt/hsm-pki/pkcs11
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hsm-pki-pkcs11-module
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: hsm-pki-node-local
+  resources:
+    requests:
+      storage: 64Mi
+  selector:
+    matchLabels:
+      hsm-pki.local/volume: pkcs11-module
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hsm-pki-dev-token-store
+  labels:
+    app.kubernetes.io/name: hsm-pki
+    hsm-pki.local/volume: token-store
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: hsm-pki-node-local
+  hostPath:
+    path: /opt/hsm-pki/tokens
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hsm-pki-token-store
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: hsm-pki-node-local
+  resources:
+    requests:
+      storage: 1Gi
+  selector:
+    matchLabels:
+      hsm-pki.local/volume: token-store

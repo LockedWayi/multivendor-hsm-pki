@@ -1,0 +1,25 @@
+# Local K3s development overlay: SoftHSM2, node-local volumes, the locally
+# built image.
+#
+# What an operator must create before this applies cleanly -- neither can be
+# checked in, and both are documented in README.md beside this file:
+#   1. the `hsm-pki-pin` Secret (a PIN never enters this repository)
+#   2. the `hsm-pki-config` ConfigMap (the ceremony's output, produced by
+#      running the ceremony, plus config.yaml and softhsm2.conf)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: hsm-pki-dev
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - module-mount.yaml
+
+images:
+  # A tag, and only because this image is built locally and never pushed.
+  # Sub-task 4.10 replaces this with a digest once a registry exists: a tag
+  # is a mutable pointer, and a signature over one attests to nothing
+  # durable (CLAUDE.md §3.8).
+  - name: hsm-pki-server
+    newTag: local
