@@ -63,11 +63,23 @@ Three properties of the harness matter for a new vendor:
 | `internal/ca` ceremony + intermediate | 12 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, `LoadIntermediate`'s startup gates |
 | `internal/ca` issuance + signer | 15 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points |
 | `internal/api` HTTP surface | 27 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness |
+| `internal/signingkey` | 8 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey` |
 | `cmd/hsm-pki-keytool` | 4 | The ceremony as an operator runs it, through the CLI's own adapter |
 | `cmd/hsm-pki-server` | — | Startup: workspace resolution, anchor login, ambiguous-label refusal |
 
-Counted per backend, a full run executes **59 vendor-parameterised subtests
-on each configured backend**, plus the conformance suite.
+Counted per backend, a full run executes **67 vendor-parameterised subtests
+on each configured backend**, plus the conformance suite — 68 top-level
+`Test.../<backend>` subtests in all. Measured 2026-09-04 rather than
+maintained by hand:
+
+```sh
+go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
+```
+
+The anchor matters. `--- PASS:` lines carry a timing suffix, so an
+end-anchored pattern against them matches nothing and reports zero; and an
+unanchored pattern counts nested subtests too, which is a different number
+(111) measuring a different thing.
 
 ## 4. What deliberately does not multiply
 
@@ -120,6 +132,11 @@ Then: one entry in `hsmtest`'s `registry`, and every test in §3 runs against
 it. Nothing else should need to change. If something does, that is a defect
 in the harness and belongs here as a finding.
 
+`internal/signingkey` joined §3 in Phase 4.8 without touching the harness,
+which is the property this section claims: a new suite reaches every
+backend by calling `hsmtest.ForEach`, and a new backend reaches every suite
+by adding a registry entry. Neither edits the other.
+
 ### Expected divergences to look for
 
 The two backends run so far disagreed in ways worth checking on any new one,
@@ -132,6 +149,7 @@ because each was found the hard way:
 | Slot renumbering | Creating a slot renumbered existing ones on ProtectToolkit while serials held |
 | Concurrency | `C_GetSlotList` deadlocked under concurrent callers on ProtectToolkit despite `CKF_OS_LOCKING_OK` |
 | Digest handling | ProtectToolkit's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted |
+| Protection attributes on generation | Ask the token, not the template: generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Both current backends honour them on generation — but ProtectToolkit ignores `CKA_EXTRACTABLE=false` on *unwrap*, so the two paths must be checked separately |
 | Object accumulation | Tokens that persist between runs accumulate test keys. The harness now destroys everything a run created (`hsmtest.Backend.Cleanup`), which took the residue from +215 objects per full run to +23. Historical litter from before that — roughly 3,000 objects on the maintainer's ProtectServer store — is deliberately left alone: a suite that deletes objects it did not create is a destructive operation aimed at somebody else's token, and clearing it is an operator's call |
 
 ---
