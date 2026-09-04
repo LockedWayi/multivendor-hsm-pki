@@ -229,14 +229,106 @@ func TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey(t *testing.T) {
 					"a compromise of the image key would also sign releases (CLAUDE.md §3.6)")
 			}
 		case errors.Is(err, signingkey.ErrDuplicateKey):
-			// The token repeated itself and the platform refused. The
-			// rejected key must also be gone: leaving it would take a label
-			// that can now never be provisioned.
+			// The token repeated itself and the platform refused. Two
+			// things must then be true, and the second is the one worth
+			// testing: no public key was published for a key the platform
+			// rejected, and the rejected key is *gone from the token*.
+			// Leaving it would take a label that could then never be
+			// provisioned — a failed run that permanently burns a version
+			// number is a worse outcome than the collision it refused.
 			if _, statErr := os.Stat(filepath.Join(secondDir, "signing.pub")); !os.IsNotExist(statErr) {
 				t.Error("a public key file was written for a rejected duplicate")
 			}
+			assertLabelIsFree(t, b, b.Label("artifact-signing-key-v1"))
 		default:
 			t.Fatalf("second invocation: %v", err)
+		}
+	})
+}
+
+// assertLabelIsFree reopens the module and confirms neither half of a key
+// pair survives under label. Used after a refusal, to prove the rollback
+// actually removed what it destroyed rather than reporting that it had.
+func assertLabelIsFree(t *testing.T, b *hsmtest.Backend, label string) {
+	t.Helper()
+	ctx := context.Background()
+	adapter, err := newVendorAdapter(b.AdapterName, b.ModulePath)
+	if err != nil {
+		t.Fatalf("reopening the module: %v", err)
+	}
+	defer adapter.Close()
+	ws, err := findWorkspace(ctx, adapter, b.Primary.Label, "")
+	if err != nil {
+		t.Fatalf("findWorkspace: %v", err)
+	}
+	if err := adapter.LoginToken(ctx, ws, []byte(b.PrimaryPIN), pk11.RoleUser); err != nil {
+		t.Fatalf("LoginToken: %v", err)
+	}
+	defer func() { _ = adapter.LogoutToken(ctx) }()
+	s, err := adapter.OpenSession(ctx, ws, pk11.DefaultSessionOptions())
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	defer func() { _ = adapter.CloseSession(ctx, s) }()
+
+	for _, class := range []pk11.ObjectClass{pk11.ClassPublicKey, pk11.ClassPrivateKey} {
+		free, err := pk11.LabelIsFree(ctx, adapter, s, class, label)
+		if err != nil {
+			t.Fatalf("LabelIsFree(class=%d): %v", class, err)
+		}
+		if !free {
+			t.Errorf("label %q (class %d) still exists after the duplicate was rejected; "+
+				"the version number is now burnt and can never be provisioned", label, class)
+		}
+	}
+}
+
+// TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt states
+// the property the platform actually depends on, rather than asserting a
+// behaviour one backend happens to have.
+//
+// Provisioning is one key per process, so each key is the first key after
+// its own C_Initialize. A token that reseeds gives two different keys; a
+// token that does not gives the same key twice — measured on
+// ProtectToolkit-C 7.3.3 in software emulation, where C_GenerateRandom
+// repeats byte for byte too (docs/lessons.md §8). Either is survivable. What
+// is not survivable is the third outcome: two labels quietly naming one key
+// pair, which is the key reuse CLAUDE.md §3.6 forbids.
+//
+// So this asserts the disjunction and logs which branch the backend took,
+// so a new vendor's behaviour is recorded by running the suite rather than
+// by someone remembering to check.
+func TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		firstDir, secondDir := t.TempDir(), t.TempDir()
+		firstLabel := b.Label("image-signing-key-v20")
+		secondLabel := b.Label("artifact-signing-key-v20")
+
+		if err := runProvisionSigningKeyCmd(provisionArgs(t, b, firstDir, firstLabel)); err != nil {
+			t.Fatalf("first invocation: %v", err)
+		}
+		first, err := os.ReadFile(filepath.Join(firstDir, "signing.pub"))
+		if err != nil {
+			t.Fatalf("reading the first public key: %v", err)
+		}
+
+		err = runProvisionSigningKeyCmd(provisionArgs(t, b, secondDir, secondLabel))
+		switch {
+		case err == nil:
+			second, readErr := os.ReadFile(filepath.Join(secondDir, "signing.pub"))
+			if readErr != nil {
+				t.Fatalf("reading the second public key: %v", readErr)
+			}
+			if string(first) == string(second) {
+				t.Fatal("two processes produced one key pair and the duplicate check did not catch it")
+			}
+			t.Logf("%s: the token reseeds across C_Initialize — two processes, two keys", b.Name)
+		case errors.Is(err, signingkey.ErrDuplicateKey):
+			t.Logf("%s: the token repeated its first key across C_Initialize; the duplicate check refused it, "+
+				"which is why this backend must not be used to provision keys anyone relies on", b.Name)
+			assertLabelIsFree(t, b, secondLabel)
+		default:
+			t.Fatalf("second invocation failed for an unrelated reason: %v", err)
 		}
 	})
 }
