@@ -133,10 +133,10 @@ func run(args []string, out io.Writer) error {
 		})
 	}
 
-	var expressions []string
-	for _, list := range []string{"containers", "initContainers", "ephemeralContainers"} {
-		expressions = append(expressions, list)
-	}
+	// Every list a pod can carry an image in. Enumerated rather than
+	// discovered, so a fourth one appearing in a future Kubernetes is a
+	// change somebody makes deliberately instead of a gap nobody sees.
+	lists := []string{"containers", "initContainers", "ephemeralContainers"}
 
 	var buf bytes.Buffer
 	if err := policyTemplate.Execute(&buf, struct {
@@ -150,7 +150,7 @@ func run(args []string, out io.Writer) error {
 			ExcludedNS:   []string{"kube-system", "kube-public", "kube-node-lease", "kyverno"},
 			Insecure:     *insecure,
 		},
-		Lists: expressions,
+		Lists: lists,
 	}); err != nil {
 		return fmt.Errorf("rendering the policy: %w", err)
 	}
