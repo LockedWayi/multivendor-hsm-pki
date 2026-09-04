@@ -56,8 +56,43 @@ variable and never as pin-value= in the PKCS#11 URI -- a URI is a command
 line argument, so it reaches ps output, shell history and any log that
 echoes the command (CLAUDE.md §3.1)."
 
-# Paths as the runner sees them: ci/cosign.sh mounts the repository at /repo.
-rel() { realpath --relative-to="$REPO_ROOT" "$1"; }
+# Paths as the runner sees them: ci/cosign.sh mounts the repository at /repo
+# and nothing else, so a path outside the repository cannot be reached from
+# inside the container -- and the way it fails is the dangerous kind.
+#
+# Measured. Signing /etc/hostname produced `../../../etc/hostname`, which the
+# container resolved against its *own* root: cosign hashed the container's
+# /etc/hostname and signed it, reporting success, while the file the operator
+# named sat unread on the host. The signature was over real bytes, correctly
+# made, by the right key -- of the wrong file.
+#
+# It did not reach anyone: ci/verify-artifact recomputes the digest from the
+# bytes actually in front of it, so it refused the bundle and the run exited
+# non-zero. That is the independent verifier earning its cost on a bug cosign
+# could not see, because cosign was looking at a different filesystem. But
+# being rescued downstream is not the same as being correct, and the message
+# a reader got ("the bundle is for a different artifact") described a symptom
+# rather than the cause. So the containment is checked here, before signing.
+inside_repo() {
+    local resolved
+    resolved="$(realpath -m -- "$1")"
+    case "$resolved" in
+        "$REPO_ROOT"/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+rel() { realpath --relative-to="$REPO_ROOT" -- "$1"; }
+
+for path in "$ARTIFACT" "$BUNDLE"; do
+    inside_repo "$path" || die \
+        "$path is outside the repository at $REPO_ROOT.
+The signer runs in a container with only the repository mounted, so a path
+outside it resolves against the container's own filesystem -- which means
+signing whatever happens to be at that path in the container, or writing a
+bundle the host never receives. Copy the artifact into the repository (or
+into .local/) and sign it there."
+done
 
 log "signing $(rel "$ARTIFACT") with $KEY_LABEL on token $TOKEN_LABEL"
 "$REPO_ROOT/ci/cosign.sh" sign-blob \

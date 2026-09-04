@@ -113,11 +113,20 @@ before="$(sha256sum "$GOOD" | cut -d' ' -f1)"
 BIN_DIR="$WORK/installed"; COSIGN_BIN="$GOOD"
 COSIGN_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
 # Compared as a set difference rather than a count. This suite runs from its
-# own mktemp directory, so "are there any /tmp/tmp.* left" can never be no --
+# own mktemp directory, so "are there any temp dirs left" can never be no --
 # the first version of this check said so and could not fail.
-tmp_before="$(ls -d /tmp/tmp.* 2>/dev/null | sort)"
+#
+# And the directory is asked of mktemp rather than assumed to be /tmp.
+# mktemp honours $TMPDIR, so a hardcoded /tmp/tmp.* glob finds nothing
+# wherever TMPDIR points elsewhere -- macOS puts it under /var/folders by
+# default, and any Linux shell can set it -- and the check would then pass
+# vacuously while a real leak went unseen. Measured: with TMPDIR elsewhere,
+# the glob matched 0 of 1 leaked directories.
+tmp_root="$(dirname "$(mktemp -d -u)")"
+leak_glob() { ls -d "$tmp_root"/tmp.* 2>/dev/null | sort; }
+tmp_before="$(leak_glob)"
 expect refuse "D1 fetch with a pin nothing can satisfy" fetch
-tmp_after="$(ls -d /tmp/tmp.* 2>/dev/null | sort)"
+tmp_after="$(leak_glob)"
 after="$(sha256sum "$GOOD" | cut -d' ' -f1)"
 if [ "$before" = "$after" ]; then
     echo "  ok    D1 the existing binary is untouched"; pass=$((pass+1))
@@ -130,6 +139,31 @@ if [ -z "$leaked" ]; then
 else
     echo "  FAIL  D1 leaked: $leaked"; fail=$((fail+1))
 fi
+
+echo
+echo "E. the Rekor check refuses a response that records nothing"
+rekor_fixture() { printf '%s' "$2" > "$WORK/$1.json"; echo "$WORK/$1.json"; }
+DIGEST="549398fbe5a2f930b4eb564c7bbe9588270566ffcc8c9cb45644c066714aa380"
+# The case that shipped: valid JSON, no entry. A loop over it checks nothing
+# and returns success, which reads as "publicly logged" to the caller.
+expect refuse "E1 an empty object" \
+    assert_rekor_records "$(rekor_fixture e1 '{}')" "$DIGEST"
+expect refuse "E2 an entry recording a different digest" \
+    assert_rekor_records "$(rekor_fixture e2 "{\"abc\":{\"body\":\"$(printf '{"spec":{"data":{"hash":{"value":"deadbeef"}},"signature":{"publicKey":{"content":"eA=="}}}}' | base64 -w0)\"}}")" "$DIGEST"
+
+echo
+echo "F. sign-artifact refuses a path the container cannot reach"
+# Measured before this guard existed: signing /etc/hostname made cosign hash
+# the *container's* /etc/hostname and sign it, successfully, under the right
+# key -- the wrong file, correctly signed. The check runs before signing, so
+# a throwaway PIN is enough to reach it and the token is never opened.
+expect refuse "F1 an artifact outside the repository" \
+    env COSIGN_PKCS11_PIN=unused "$REPO_ROOT/ci/sign-artifact.sh" /etc/hostname
+expect refuse "F2 a bundle written outside the repository" \
+    env COSIGN_PKCS11_PIN=unused "$REPO_ROOT/ci/sign-artifact.sh" \
+        "$REPO_ROOT/internal/artifactsig/testdata/sample-artifact.txt" /tmp/escapes.bundle
+[ -e /tmp/escapes.bundle ] && { echo "  FAIL  F2 wrote a bundle anyway"; fail=$((fail+1)); } \
+                           || { echo "  ok    F2 wrote nothing"; pass=$((pass+1)); }
 
 echo
 echo "$pass passed, $fail failed"
