@@ -16,6 +16,9 @@ resources:
   - ../../base
   - module-mount.yaml
 
+patches:
+  - path: patch-store-pvc.yaml
+
 images:
   # A tag, and only because this image is built locally and never pushed.
   # Sub-task 4.10 replaces this with a digest once a registry exists: a tag

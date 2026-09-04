@@ -1,0 +1,16 @@
+# Bind the base's store claim to this overlay's fixed-path PersistentVolume.
+#
+# The base deliberately asks for no storage class -- a real cluster should
+# hand it whatever it provides. This overlay names one, because k3d's
+# default provisioner keys each directory to the PVC's UID and so loses the
+# store whenever the cluster is rebuilt (module-mount.yaml has the
+# measurement).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hsm-pki-store
+spec:
+  storageClassName: hsm-pki-node-local
+  selector:
+    matchLabels:
+      hsm-pki.local/volume: store

@@ -92,8 +92,28 @@ entirely. The only difference that matters is that the node is a Docker
 container, so the node prerequisite above is staged inside it and the image
 has to be imported rather than pulled.
 
+**Use [`k3d-up.sh`](k3d-up.sh) rather than these commands by hand** — it
+encodes the host-backed volume the CA store depends on, confirms the image
+reached the node before applying, and creates the two operator-supplied
+objects:
+
 ```sh
-k3d cluster create hsm-pki --agents 0 --no-lb --k3s-arg "--disable=traefik@server:0"
+deploy/k8s/overlays/dev/k3d-up.sh              # create (or reuse) and apply
+deploy/k8s/overlays/dev/k3d-up.sh --recreate   # destroy the cluster, keep the state
+```
+
+`--recreate` is the one worth running once: it deletes the cluster entirely
+and brings it back, and the CA's issued and revoked records survive, because
+a fixed-path PersistentVolume keeps them outside the cluster. Backing the
+default provisioner's directory instead does *not* work — it keys each
+volume to the PVC's UID, so a rebuilt cluster gets a new empty one
+(`module-mount.yaml` has the measurement).
+
+What it runs, for reference:
+
+```sh
+k3d cluster create hsm-pki --agents 0 --no-lb --k3s-arg "--disable=traefik@server:0" \
+    --volume "$PWD/.local/k3d/node:/opt/hsm-pki@server:0"
 
 N=k3d-hsm-pki-server-0
 docker exec $N mkdir -p /opt/hsm-pki/pkcs11 /opt/hsm-pki/tokens
