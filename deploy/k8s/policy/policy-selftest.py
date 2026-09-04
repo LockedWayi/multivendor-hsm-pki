@@ -15,7 +15,16 @@ the baseline itself, which must be admitted -- a policy that rejects
 everything is not a working policy, and without this case the suite would
 be green if the CEL were simply `false`.
 
-Three things this is careful about, each learned by getting it wrong first:
+Two shapes of gap this is careful about, beyond one case per rule. A rule
+that names several fields needs a case for each of them -- the host-namespace
+rule covers hostNetwork, hostPID and hostIPC, and testing only the first
+leaves two fields whose message claims coverage it has not demonstrated. And
+a rule written as "on the pod OR on every container" has a second arm that is
+never reached while the first is satisfied, so it gets a case that must be
+*admitted*: a rule rejecting a correctly hardened pod is how an over-strict
+policy gets switched off rather than fixed.
+
+Three further things, each learned by getting it wrong first:
 
   * The namespace has no Pod Security Admission labels. In hsm-pki-dev, PSA
     refuses these pods before Kyverno sees them, so every case would pass
@@ -76,6 +85,14 @@ def case_host_network(p):
     p["spec"]["hostNetwork"] = True
 
 
+def case_host_pid(p):
+    p["spec"]["hostPID"] = True
+
+
+def case_host_ipc(p):
+    p["spec"]["hostIPC"] = True
+
+
 def case_privileged(p):
     # Both flags, deliberately: see the module docstring.
     p["spec"]["containers"][0]["securityContext"].update(
@@ -107,6 +124,18 @@ def case_no_memory_limit(p):
     drop(p["spec"]["containers"][0], "resources")
 
 
+def case_runasnonroot_on_the_container(p):
+    """The other arm of an `or`: satisfied per container, not on the pod."""
+    drop(p["spec"]["securityContext"], "runAsNonRoot")
+    p["spec"]["containers"][0]["securityContext"]["runAsNonRoot"] = True
+
+
+def case_seccomp_on_the_container(p):
+    """As above, for the seccomp rule."""
+    drop(p["spec"]["securityContext"], "seccompProfile")
+    p["spec"]["containers"][0]["securityContext"]["seccompProfile"] = {"type": "RuntimeDefault"}
+
+
 def case_privileged_init_container(p):
     p["spec"]["initContainers"] = [
         {
@@ -126,7 +155,11 @@ def case_privileged_init_container(p):
 
 CASES = [
     ("the compliant baseline, which must be ADMITTED", None, None),
+    # One rule, three fields. Testing only the first would leave two
+    # untested and the rule's message claiming all three.
     ("hostNetwork", case_host_network, "host namespaces"),
+    ("hostPID", case_host_pid, "host namespaces"),
+    ("hostIPC", case_host_ipc, "host namespaces"),
     ("a privileged container", case_privileged, "privileged container"),
     ("allowPrivilegeEscalation left unset", case_escalation_unset, "allowPrivilegeEscalation"),
     ("a writable root filesystem", case_writable_rootfs, "readOnlyRootFilesystem"),
@@ -135,6 +168,13 @@ CASES = [
     ("no seccomp profile", case_seccomp_unset, "seccomp"),
     ("no memory limit", case_no_memory_limit, "memory limit"),
     ("a privileged INIT container", case_privileged_init_container, "privileged container"),
+    # Two rules say "on the pod OR on every container", and the second arm
+    # of an `or` is never reached while the first is satisfied. Both cases
+    # must be ADMITTED: a rule that rejected them would be rejecting a pod
+    # that is correctly hardened, which is how an over-strict policy gets
+    # switched off rather than fixed.
+    ("runAsNonRoot set per container, not on the pod", case_runasnonroot_on_the_container, None),
+    ("seccomp set per container, not on the pod", case_seccomp_on_the_container, None),
 ]
 
 
