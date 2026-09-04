@@ -83,10 +83,15 @@ docker image inspect hsm-pki-server:local >/dev/null 2>&1 || {
     exit 1
 }
 k3d image import hsm-pki-server:local -c "$CLUSTER" 2>&1 | tail -1
-# Confirm it landed rather than assuming the import said so. Applying while
-# the node lacks the image sends the pod into ImagePullBackOff, and kubelet's
-# backoff then outlives the rollout wait even after the image arrives -- so
-# the failure reads as "the deployment is broken" long after it is fixed.
+# Confirm it landed rather than assuming the import said so: the import has
+# been seen to report success while leaving the node without the image, and
+# the pod then sits in ImagePullBackOff for as long as nobody notices. The
+# check is cheap and turns a silent stall into a refusal to apply.
+#
+# It is NOT here because kubelet's backoff is slow to recover -- that was
+# measured and is false: after 3m19s and twelve failed attempts, the pod went
+# Running 11s after the image appeared. The problem is an image that never
+# arrives at all, not one that arrives late.
 for _ in $(seq 1 10); do
     if docker exec "$NODE" crictl images 2>/dev/null | grep -q 'hsm-pki-server'; then
         echo "    present on the node"
