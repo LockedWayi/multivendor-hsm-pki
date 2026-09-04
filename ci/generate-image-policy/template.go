@@ -53,6 +53,13 @@ const policyTemplateText = `# GENERATED FILE -- do not edit.
 # in here by hand is exactly the hard-coded verifier CLAUDE.md 3.7 forbids,
 # and it would make the next rotation a breaking change to the cluster.
 #
+# The inventory's signature was verified against
+#   {{ .Anchor }}
+# before this was rendered, and the document was inside its stated validity
+# window (valid_until {{ .ValidUntil }}). A rendering the generator refuses
+# to produce -- bad signature, expired document, version rollback -- never
+# reaches this file.
+#
 # Trusted image keys in this rendering:
 {{- range .Attestors }}
 #   {{ printf "%-28s" .Label }}{{ .Status }}
