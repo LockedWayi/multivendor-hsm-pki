@@ -1,0 +1,48 @@
+# The permission Kyverno's reports controller needs to report on the
+# `pods/ephemeralcontainers` rule in pod-hardening.yaml.
+#
+# # Why this file exists, and why its absence was not harmless
+#
+# Kyverno's default install grants its reports controller get/list/watch on
+# the resources its own bundled policies touch. `pods/ephemeralcontainers`
+# is not among them, so adding that subresource to the policy's match rules
+# left it reporting:
+#
+#   RBACPermissionsGranted  False
+#   "Policy is not ready for reporting, missing permissions:
+#    get /v1, Resource=pods/ephemeralcontainers; list …; watch …"
+#
+# and `kubectl get validatingpolicy` showing **READY false**.
+#
+# Measured before assuming the worst: enforcement was unaffected. The
+# webhook condition stayed `WebhookConfigured: True`, and a privileged
+# ephemeral container attached to a running pod was refused with the
+# policy's own message. The two conditions answer different questions --
+# whether the admission webhook is wired, and whether the reports controller
+# can build a policy report — and only the first decides what is admitted.
+#
+# It is still worth fixing, for a reason that has nothing to do with
+# reporting. An operator running `kubectl get vpol` sees `READY false` next
+# to the policy that protects the cluster. The next step from there is not
+# "read the condition", it is "this is broken" — and the repair somebody
+# reaches for is deleting the policy. A control that looks broken while
+# working is a control with a shorter life than one that looks fine.
+#
+# Aggregated rather than bound directly: Kyverno's ClusterRoles carry an
+# aggregationRule selecting on this label, so the grant lands in
+# `kyverno:reports-controller` without editing anything the next Kyverno
+# upgrade will overwrite.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hsm-pki:kyverno-reports-ephemeralcontainers
+  labels:
+    rbac.kyverno.io/aggregate-to-reports-controller: "true"
+rules:
+  # Read-only, and on one subresource. The reports controller builds
+  # reports; it never needs to change a pod, and a grant wider than the
+  # thing that asked for it is how a component ends up able to do what
+  # nobody intended (CLAUDE.md §3.4).
+  - apiGroups: [""]
+    resources: ["pods/ephemeralcontainers"]
+    verbs: ["get", "list", "watch"]

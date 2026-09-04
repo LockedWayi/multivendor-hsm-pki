@@ -30,9 +30,27 @@ const shutdownGrace = 10 * time.Second
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to the service config file")
+	healthcheck := flag.Bool("healthcheck", false,
+		"probe this container's own /healthz and exit 0 (healthy) or 1 (not), then stop; this is what the image's HEALTHCHECK runs, because the image has no shell to invoke a tool from")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// Handled before anything else starts: this mode opens no HSM session,
+	// no store, and no listener. It reads the config only to learn which
+	// address the service it is probing was told to bind.
+	if *healthcheck {
+		cfg, err := config.Load(*configPath)
+		if err == nil {
+			err = runHealthcheck(cfg.Server.ListenAddr)
+		}
+		if err != nil {
+			logger.Error("healthcheck failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(*configPath, logger); err != nil {
 		logger.Error("hsm-pki-server exited with an error", "error", err)
 		os.Exit(1)

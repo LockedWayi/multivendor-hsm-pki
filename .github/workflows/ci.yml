@@ -1,0 +1,120 @@
+# Minimal CI — Phase 5.1 (and 5.2's gitleaks gate) pulled forward, 2026-09-04.
+#
+# Everything here ran locally before it ran here: each step below is the
+# same command a contributor runs from CONTRIBUTING.md, wrapped in the same
+# dev container. That is the point of this workflow's shape — CI is not a
+# second environment to keep in sync, it is the first environment made
+# unforgettable. The rest of Phase 5 (Semgrep, trivy, signing as a gate,
+# SLSA provenance, the rotation drill) lands on top of this file, not
+# instead of it.
+#
+# Two decisions worth naming:
+#
+#   * Everything Go runs INSIDE ci/softhsm2-dev.Dockerfile, never on the
+#     runner's own Go. The suite needs the SoftHSM2 module, and the
+#     coverage floor is only honest in-container: a host without the module
+#     skips every token-touching test and reports ~34% against the real
+#     ~78% (ci/coverage.sh's header, measured).
+#
+#   * Every third-party ref is pinned to an immutable identifier — actions
+#     by commit SHA, the gitleaks image by digest — the same discipline the
+#     repository applies to its base images and to cosign (CLAUDE.md §3.8:
+#     a tag is a pointer somebody can move).
+#
+# "Blocks merge" needs one repository setting this file cannot make: mark
+# both checks required under branch protection. Until then a red run is
+# loud but advisory.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: build, vet, test, coverage (SoftHSM2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Build the dev container
+        run: docker build -f ci/softhsm2-dev.Dockerfile -t hsm-pki-dev .
+
+      # The safe.directory line in each step below is not decoration: the
+      # checkout is owned by the runner's uid, the container runs as root,
+      # and git refuses to read a repository with "dubious ownership" —
+      # which surfaces as a misleading VCS error inside go, not as a clear
+      # git one.
+      - name: gofmt and go vet
+        run: |
+          docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev sh -c '
+            git config --global --add safe.directory /repo
+            unformatted="$(gofmt -l cmd internal ci)"
+            if [ -n "$unformatted" ]; then
+              echo "gofmt wants to reformat:" >&2
+              echo "$unformatted" >&2
+              exit 1
+            fi
+            go vet ./...'
+
+      # -p 1 matches the documented invocation everywhere this suite runs.
+      # SoftHSM2 gets a fresh temp token store per test, so parallel package
+      # binaries are PROBABLY safe here — but the vendor backends share a
+      # persistent store, the rule exists for them, and one invocation that
+      # works on every backend beats two that each work on one.
+      - name: Full suite with the race detector
+        run: |
+          docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev sh -c '
+            git config --global --add safe.directory /repo
+            go test -race -p 1 ./...'
+
+      # This re-runs the suite instrumented. The bare run above is kept
+      # anyway: its failure output is the readable one, and a coverage-run
+      # failure would otherwise be the only signal for a plain test bug.
+      # Merging the two into one instrumented run is a Phase 5 optimization,
+      # not a correctness change.
+      - name: Coverage floor
+        run: |
+          docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev sh -c '
+            git config --global --add safe.directory /repo
+            bash ci/coverage.sh -race -p 1'
+
+  gitleaks:
+    name: secret scan (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out with full history
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          # The scan's subject IS the history (CLAUDE.md §3.2 forbids
+          # secrets in commits, not just in the tree); a shallow clone
+          # would scan only the tip and pass on anything already buried.
+          fetch-depth: 0
+
+      # v8.30.1, pinned by digest. The GIT_CONFIG_* environment is how a
+      # container whose entrypoint is the gitleaks binary (no shell) gets
+      # told the runner-owned checkout is safe to read.
+      #
+      # Exceptions live in two committed, reviewed files: .gitleaks.toml
+      # (exact public key-label strings, and .local/ for directory scans)
+      # and .gitleaksignore (one commit-pinned fingerprint for Phase 3.6's
+      # deliberately planted scanner-demo credential). Both say why.
+      - name: Scan every commit
+        run: |
+          docker run --rm -v "$PWD":/repo -w /repo \
+            -e GIT_CONFIG_COUNT=1 \
+            -e GIT_CONFIG_KEY_0=safe.directory \
+            -e GIT_CONFIG_VALUE_0='*' \
+            zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git . --config .gitleaks.toml

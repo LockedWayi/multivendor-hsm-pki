@@ -10,6 +10,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -189,22 +190,20 @@ func rawECDSAToASN1(sig []byte) ([]byte, error) {
 // one session is not valid in another — see the Signer doc comment — so
 // every operation that needs a key handle finds it fresh, in its own
 // session, rather than being handed one from elsewhere.
+// The ambiguity rule it enforces belongs to the PKCS#11 layer rather than
+// to the CA — it is a property of how tokens name objects, and the signing
+// keys in Phase 4.8 need exactly the same refusal — so the logic lives in
+// pkcs11.FindKeyByLabel and this wraps it to keep ca.ErrKeyNotFound as the
+// error callers here already match on.
 func findKeyByLabel(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, class pk11.ObjectClass, label string) (pk11.ObjectHandle, error) {
-	handles, err := adapter.FindObjects(ctx, s, []pk11.Attribute{
-		pk11.NumericAttribute(pk11.AttrClass, uint64(class)),
-		{Type: pk11.AttrLabel, Value: []byte(label)},
-	})
-	if err != nil {
-		return 0, fmt.Errorf("ca: FindObjects(class=%d, label=%q): %w", class, label, err)
-	}
-	switch len(handles) {
-	case 0:
+	handle, err := pk11.FindKeyByLabel(ctx, adapter, s, class, label)
+	if errors.Is(err, pk11.ErrKeyNotFound) {
 		return 0, fmt.Errorf("%w: class=%d label=%q", ErrKeyNotFound, class, label)
-	case 1:
-		return handles[0], nil
-	default:
-		return 0, fmt.Errorf("ca: %d objects found with class %d and label %q, want exactly 1", len(handles), class, label)
 	}
+	if err != nil {
+		return 0, fmt.Errorf("ca: %w", err)
+	}
+	return handle, nil
 }
 
 // withSession opens a session against ws, runs fn, and closes the session

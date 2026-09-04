@@ -5,7 +5,71 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **The service image** (`deploy/docker/Dockerfile`): multi-stage, cgo-enabled
+  build onto a digest-pinned `distroless/cc` base — 53.8 MB, no shell, no
+  package manager, non-root UID 65532, read-only-root-filesystem compatible.
+  `cmd/hsm-pki-keytool` is deliberately not in it: it is the only binary here
+  that can reach a root token.
+- **`hsm-pki-server -healthcheck`**, a self-probe against the process's own
+  `/healthz`, so the image can carry a `HEALTHCHECK` without gaining a shell
+  or an HTTP client. Liveness only — readiness touches the HSM, and a failed
+  health check causes a restart.
+- **`deploy/docker/run-local.sh`**: the whole platform on a machine with no
+  HSM and no vendor SDK. Initializes two SoftHSM2 tokens, runs the real root
+  ceremony, moves the root's token out of the store the service can reach,
+  and starts the service read-only and non-root.
+
+- **`internal/signingkey`**: provisioning for the supply-chain signing keys.
+  Enforces versioned labels, refuses a label already in use, generates
+  `CKA_SIGN` + `CKA_SENSITIVE` + non-extractable keys with a distinct
+  `CKA_ID`, and **reads the protection attributes back off the token**,
+  failing closed when the token declined the template. No extractable
+  option exists: a supply-chain key is answered by rotation, not by a copy.
+- **`docs/lessons.md`**: the seven defects that earned the rules in
+  `CLAUDE.md` — what was true, why it survived, which rule it produced.
+  Five of the seven survived a green test suite.
+- **`ci/scan-image.sh`**: vulnerability gate and SBOM generation for the
+  service image, with a pinned scanner. Exits non-zero on any HIGH or
+  CRITICAL, and is verified to do so against a deliberately outdated image
+  rather than only against a clean one. Baseline for the service image:
+  zero HIGH/CRITICAL, 11 OS packages, 25 SBOM components.
+- **Kubernetes manifests** (`deploy/k8s`): base plus a K3s/SoftHSM2 dev
+  overlay, running on a real cluster. Single replica with a `Recreate`
+  strategy — a correctness constraint, not a capacity choice, since the CRL
+  is cached per process. No RBAC at all, because the service never calls the
+  Kubernetes API. A deliberately insecure pod is refused by Pod Security
+  Admission, with the refusal captured in the repository.
+
+### Changed
+- **The supply-chain signing keys get their own token**, separate from the
+  CA intermediate's. PKCS#11 authenticates a token rather than a key, so
+  co-locating them would have meant a compromise of the CA daemon also
+  yielding image and release signing — CLAUDE.md §3.6's guarantee true
+  against mistakes and false against the attacker it names. The
+  architecture diagram now draws three tokens.
+- **`CLAUDE.md` keeps its rules and hands the narratives to
+  `docs/lessons.md`.** No rule was removed; the accounts that justified them
+  moved to where they are read once rather than every session.
+- **The ambiguous-label refusal moved to `internal/pkcs11`**
+  (`FindKeyByLabel`, `LabelIsFree`). It is a property of how tokens name
+  objects, not of the CA, and the signing keys need the same refusal.
+- **No PKCS#11 module ships in any image.** Every module, SoftHSM2 included,
+  is mounted at run time, so the backend CI exercises and the backend
+  production uses are delivered by one mechanism rather than two. The image
+  therefore contains no key store, and the same image runs against SoftHSM2
+  and ProtectToolkit with only `config.yaml` changing — verified both ways.
+  The cost, recorded rather than glossed: the image cannot start alone, which
+  is what `run-local.sh` above exists to answer.
+
 ### Fixed
+- **A deleted k3d cluster took the CA store with it**, reintroducing the
+  Phase 3b.3 regression — a revoked certificate valid again — at the
+  deployment level. Host-backing the provisioner's directory did *not* fix
+  it: local-path keys each volume to its PVC's UID, so a rebuilt cluster
+  provisioned an empty one beside the full one. The store now uses a
+  fixed-path PersistentVolume, verified by issuing, revoking, destroying the
+  cluster and finding the serial still on the CRL.
 - **`FindObjects` silently truncated every search to 50 objects.** The
   pagination loop broke on the boolean `miekg/pkcs11` returns, which that
   library documents as "deprecated and should be ignored" and computes as

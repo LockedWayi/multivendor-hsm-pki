@@ -468,6 +468,20 @@ rotation — distinct from the CA hierarchy this section covers — is
 implemented in Phases 4.8 and 5.9 per CLAUDE.md §3.7, with a mechanical
 rotation drill in CI (`docs/phases/phase-5-cicd.md`, 5.9).
 
+**As of 2026-09-04 that half exists in code**, and it is worth reading
+before picking up the CA-hierarchy gaps above, because it is the shape they
+should take. `hsm-pki-keytool provision-signing-key` creates the next
+version under a new versioned label — it never overwrites one, and it
+refuses a token that already holds a CA-hierarchy key — and
+`hsm-pki-keytool generate-inventory -in <current>` republishes the signed
+list with the previous version marked `verify-only`. Retirement is the step
+that still has no command: the inventory refuses to call a key retired
+while its private half is on the token, so destroying it is currently a
+manual `C_DestroyObject`. That missing subcommand is tracked in
+`docs/phases/phase-4-container-k8s.md` 4.8, alongside the
+`reissue-intermediate` gap this section describes — the two are the same
+piece of work seen from two tiers.
+
 ## 8. Cross-references
 
 - Threat model — what each key is worth, what each attacker gets:

@@ -9,6 +9,15 @@
 #
 # Usage: ci/coverage.sh [go test flags...]
 #   COVERAGE_THRESHOLD=70 ci/coverage.sh -race
+#
+# Run it where SoftHSM2 is, which on a developer machine means inside the
+# ci/softhsm2-dev.Dockerfile image and not on the host. A host without
+# SOFTHSM2_MODULE set skips every token-touching test by design (CLAUDE.md
+# §2.4: a missing backend skips, never fails), so the suite stays green
+# while the coverage it produces collapses — measured 34.2% on such a host
+# against 79.1% in the container. The gate then fails for a reason that has
+# nothing to do with the code being measured, which is the worst kind of
+# red.
 set -euo pipefail
 
 THRESHOLD="${COVERAGE_THRESHOLD:-70}"

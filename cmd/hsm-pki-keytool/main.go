@@ -5,8 +5,10 @@
 // which the online service's configuration must never reference, and a
 // single PIN-handling implementation (pkcs11.SecurePIN) shared between the
 // two binaries is safer than reimplementing it wherever a ceremony is
-// needed. Later signing-key lifecycle operations (Phase 4.8) are expected
-// to land as further subcommands of this same tool.
+// needed. Phase 4.8 added the first of the signing-key lifecycle
+// operations as a further subcommand of this same tool:
+// provision-signing-key, which creates the supply-chain signing keys on
+// their own token (see provision.go).
 package main
 
 import (
@@ -35,13 +37,17 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hsm-pki-keytool <command> [flags]\n  commands: ceremony")
+		return errors.New("usage: hsm-pki-keytool <command> [flags]\n  commands: ceremony, provision-signing-key, generate-inventory")
 	}
 	switch args[0] {
 	case "ceremony":
 		return runCeremonyCmd(args[1:])
+	case "provision-signing-key":
+		return runProvisionSigningKeyCmd(args[1:])
+	case "generate-inventory":
+		return runGenerateInventoryCmd(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (want: ceremony)", args[0])
+		return fmt.Errorf("unknown command %q (want: ceremony, provision-signing-key, generate-inventory)", args[0])
 	}
 }
 
