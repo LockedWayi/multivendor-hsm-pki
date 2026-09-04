@@ -91,14 +91,27 @@ verification.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - ECDSA P-256 default curve.
 - Fail-closed on every ambiguous security decision; all enforcement server-side.
-- Signing is purpose-separated at the key level: the CA hierarchy's keys
-  (offline root, online intermediate — Phase 3b), `image-signing-key`, and
-  `artifact-signing-key` are distinct HSM-held keys behind the same PKCS#11
-  core, never interchangeable — a compromised image key cannot issue a
-  certificate, and a compromised CA key cannot sign a release. Keys carry
-  versioned labels and a published, signed inventory so rotation is a
-  lifecycle event, not a breaking change. See `docs/architecture.md`,
-  "The signing layer."
+- Signing is purpose-separated at the key level, and on separate *tokens*:
+  the CA hierarchy's keys (offline root, online intermediate — Phase 3b),
+  `image-signing-key` and `artifact-signing-key` on a supply-chain token of
+  their own, and `inventory-signing-key` offline again. They are distinct
+  HSM-held keys behind the same PKCS#11 core, never interchangeable — a
+  compromised image key cannot issue a certificate, and a compromised CA key
+  cannot sign a release. Separate tokens rather than separate labels because
+  PKCS#11 authenticates a *token*, not a key.
+- Keys carry versioned labels and a **published, signed inventory** —
+  [`docs/keys/`](docs/keys/) — so rotation is a lifecycle event rather than
+  a breaking change: a new version arrives `active`, the previous one goes
+  `verify-only` for a stated window, and only then is it destroyed on the
+  token. Verifiers read the inventory, never a hard-coded key. Anyone can
+  check it with nothing but `openssl`:
+
+  ```sh
+  openssl dgst -sha256 -verify docs/keys/inventory-signing-key-v1.pub \
+      -signature docs/keys/key-inventory.json.sig docs/keys/key-inventory.json
+  ```
+
+  See `docs/architecture.md`, "The signing layer."
 
 ## Status
 
