@@ -20,6 +20,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   ceremony, moves the root's token out of the store the service can reach,
   and starts the service read-only and non-root.
 
+- **`internal/signingkey`**: provisioning for the supply-chain signing keys.
+  Enforces versioned labels, refuses a label already in use, generates
+  `CKA_SIGN` + `CKA_SENSITIVE` + non-extractable keys with a distinct
+  `CKA_ID`, and **reads the protection attributes back off the token**,
+  failing closed when the token declined the template. No extractable
+  option exists: a supply-chain key is answered by rotation, not by a copy.
+- **`docs/lessons.md`**: the seven defects that earned the rules in
+  `CLAUDE.md` — what was true, why it survived, which rule it produced.
+  Five of the seven survived a green test suite.
 - **`ci/scan-image.sh`**: vulnerability gate and SBOM generation for the
   service image, with a pinned scanner. Exits non-zero on any HIGH or
   CRITICAL, and is verified to do so against a deliberately outdated image
@@ -33,6 +42,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Admission, with the refusal captured in the repository.
 
 ### Changed
+- **The supply-chain signing keys get their own token**, separate from the
+  CA intermediate's. PKCS#11 authenticates a token rather than a key, so
+  co-locating them would have meant a compromise of the CA daemon also
+  yielding image and release signing — CLAUDE.md §3.6's guarantee true
+  against mistakes and false against the attacker it names. The
+  architecture diagram now draws three tokens.
+- **`CLAUDE.md` keeps its rules and hands the narratives to
+  `docs/lessons.md`.** No rule was removed; the accounts that justified them
+  moved to where they are read once rather than every session.
+- **The ambiguous-label refusal moved to `internal/pkcs11`**
+  (`FindKeyByLabel`, `LabelIsFree`). It is a property of how tokens name
+  objects, not of the CA, and the signing keys need the same refusal.
 - **No PKCS#11 module ships in any image.** Every module, SoftHSM2 included,
   is mounted at run time, so the backend CI exercises and the backend
   production uses are delivered by one mechanism rather than two. The image
@@ -42,6 +63,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   is what `run-local.sh` above exists to answer.
 
 ### Fixed
+- **A deleted k3d cluster took the CA store with it**, reintroducing the
+  Phase 3b.3 regression — a revoked certificate valid again — at the
+  deployment level. Host-backing the provisioner's directory did *not* fix
+  it: local-path keys each volume to its PVC's UID, so a rebuilt cluster
+  provisioned an empty one beside the full one. The store now uses a
+  fixed-path PersistentVolume, verified by issuing, revoking, destroying the
+  cluster and finding the serial still on the CRL.
 - **`FindObjects` silently truncated every search to 50 objects.** The
   pagination loop broke on the boolean `miekg/pkcs11` returns, which that
   library documents as "deprecated and should be ignored" and computes as
