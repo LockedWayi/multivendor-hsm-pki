@@ -1,0 +1,20 @@
+# Kyverno's refusal of deploy/k8s/policy/testdata/insecure-pod.yaml.
+#
+# Captured 2026-09-04T15:09:02Z against Kyverno v1.19.0 on
+# K3s v1.35.5+k3s1, policy deploy/k8s/policy/pod-hardening.yaml.
+#
+# Applied to kyverno-policy-selftest, a namespace carrying NO Pod Security
+# Admission labels. That is the whole point of this file: in hsm-pki-dev,
+# PSA refuses the same manifest first, so a refusal there is evidence about
+# PSA and none at all about Kyverno. Here PSA is not watching, so the only
+# thing that can have said no is the policy.
+#
+# Compare with insecure-pod.rejected.txt, which is PSA refusing it.
+#
+# Note what this does NOT show: the other seven rules. This manifest breaks
+# every rule at once and admission reports the first, which is why
+# deploy/k8s/policy/policy-selftest.py exists -- ten near-miss pods, each
+# breaking exactly one rule.
+
+$ kubectl apply -n kyverno-policy-selftest -f deploy/k8s/policy/testdata/insecure-pod.yaml
+Error from server: error when creating "deploy/k8s/policy/testdata/insecure-pod.yaml": admission webhook "vpol.validate.kyverno.svc-fail" denied the request: Policy require-pod-hardening failed: host namespaces are not available: hostNetwork, hostPID and hostIPC each dissolve the boundary between the pod and the node.
