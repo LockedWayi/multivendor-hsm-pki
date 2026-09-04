@@ -163,6 +163,14 @@ SoftHSM2 alone, which is what CI does:
 docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev go test -race ./...
 ```
 
+Inside the container, not on the host — including for `ci/coverage.sh`. A
+host with no SoftHSM2 skips every token-touching test, exactly as §2.4's
+skip policy intends, and the suite is still green; what changes is that the
+coverage those tests would have produced is gone. Measured 2026-09-04:
+**34.2% on the host against 79.1% in the container**, from the same commit.
+The coverage gate then goes red for a reason that has nothing to do with the
+code it is measuring.
+
 Every configured backend — note `-p 1`, which is required rather than
 advisable when a vendor's token store is shared between package test
 binaries ([`protectserver-setup.md`](protectserver-setup.md) §5):
