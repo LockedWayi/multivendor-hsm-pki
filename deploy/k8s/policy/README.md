@@ -95,13 +95,60 @@ and the reason it is a separate file from the PSA refusal beside it.
 
 Everything runs as a server-side dry run: nothing is scheduled.
 
+## Image signatures
+
+`image-signature.yaml` is **generated**, never edited:
+
+```sh
+go run ./ci/generate-image-policy -out deploy/k8s/policy/image-signature.yaml
+```
+
+It renders every key the published inventory calls `active` or
+`verify-only` for the image purpose, so rotation is a regeneration rather
+than a breaking change to the cluster. A key pasted in by hand is exactly
+the hard-coded verifier CLAUDE.md §3.7 forbids.
+
+Two things it took measurement to get right, both recorded because a reader
+will otherwise assume they were free:
+
+- **cosign v3 and Kyverno v1.19 disagree about where a signature lives.**
+  v3 attaches it as an OCI referrers artifact; Kyverno looks for
+  `sha256-<digest>.sig`, which is what cosign **v2** writes. So this
+  repository pins both versions — v3 for release artifacts, v2 for images —
+  and `ci/cosign.sh` verifies each by the same four checks.
+- **Kyverno rewrites a tag-named image** to `repo:tag@sha256:<digest>`
+  before the validating policy runs. A `contains('@sha256:')` rule therefore
+  passes on a manifest that named a tag, satisfied by the mutation rather
+  than by the author. `require-image-digest` matches the shape an author
+  writes instead.
+
+```sh
+deploy/k8s/policy/image-policy-selftest.py
+```
+
+Six cases, written from the ways "an image nobody signed cannot run here"
+can be false rather than from the code that implements it: unsigned; signed
+by the *artifact* key instead of the image key; named by tag; unsigned as an
+init container; unsigned attached to a running pod through
+`pods/ephemeralcontainers`; and the platform's own signed image, which must
+be admitted. Fixtures come from `ci/regen-image-fixtures.sh`, three of them
+the same bytes in different repositories — a cosign signature is stored per
+repository, so that varies what is signed without varying the image.
+
 ## Installing Kyverno
 
 ```sh
 kubectl apply --server-side -f \
   https://github.com/kyverno/kyverno/releases/download/v1.19.0/install.yaml
+kubectl apply -f deploy/k8s/policy/kyverno-rbac.yaml
 kubectl apply -f deploy/k8s/policy/pod-hardening.yaml
+kubectl apply -f deploy/k8s/policy/image-signature.yaml
 ```
+
+`deploy/k8s/overlays/dev/k3d-up.sh` does all of this, and renders the image
+policy with `-allow-insecure-registry` because the local k3d registry speaks
+plaintext HTTP. The committed policy deliberately does not carry that
+concession.
 
 `--server-side` is not optional: Kyverno's CRDs exceed the annotation size
 limit that client-side apply uses to store the last-applied configuration.

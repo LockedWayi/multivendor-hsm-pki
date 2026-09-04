@@ -53,6 +53,12 @@ import sys
 
 NAMESPACE = "kyverno-policy-selftest"
 
+# A signed image, by digest. Once deploy/k8s/policy/image-signature.yaml is
+# installed, every pod here also passes through the image rules -- so an
+# unsigned `busybox:1.36` makes each case fail for a reason that has nothing
+# to do with the rule under test. Produced by ci/regen-image-fixtures.sh.
+IMAGE = "k3d-hsm-pki-registry:5000/signed@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f"
+
 BASE = {
     "apiVersion": "v1",
     "kind": "Pod",
@@ -65,7 +71,7 @@ BASE = {
         "containers": [
             {
                 "name": "c",
-                "image": "busybox:1.36",
+                "image": IMAGE,
                 "command": ["sh", "-c", "sleep 1"],
                 "securityContext": {
                     "allowPrivilegeEscalation": False,
@@ -166,7 +172,7 @@ def case_privileged_init_container(p):
     p["spec"]["initContainers"] = [
         {
             "name": "i",
-            "image": "busybox:1.36",
+            "image": IMAGE,
             "command": ["true"],
             "securityContext": {
                 "privileged": True,
@@ -254,7 +260,7 @@ COMPLIANT_POD = {
         "containers": [
             {
                 "name": "c",
-                "image": "busybox:1.36",
+                "image": IMAGE,
                 "command": ["sh", "-c", "sleep 600"],
                 "securityContext": {
                     "allowPrivilegeEscalation": False,
@@ -298,7 +304,7 @@ def check_ephemeral_container_subresource():
         live["spec"]["ephemeralContainers"] = [
             {
                 "name": "debugger",
-                "image": "busybox:1.36",
+                "image": IMAGE,
                 "command": ["sh", "-c", "sleep 300"],
                 "targetContainerName": "c",
                 "terminationMessagePolicy": "File",
@@ -328,6 +334,51 @@ def check_ephemeral_container_subresource():
              "-n", NAMESPACE, "--wait=false", "--ignore-not-found"],
             capture_output=True, text=True,
         )
+
+
+def check_compliant_ephemeral_container():
+    """A hardened ephemeral container must be ADMITTED.
+
+    The rule this guards is the memory limit, and the trap is that
+    Kubernetes *forbids* `resources` on an ephemeral container. Applying the
+    limit rule to them therefore demanded a field the API server rejects,
+    and refused every compliant `kubectl debug` in any covered namespace --
+    for no security reason at all. Measured, after the rule had been in
+    place and the suite had been green: the case that would have caught it
+    did not exist, because every ephemeral case here was deliberately
+    insecure.
+    """
+    target = dict(COMPLIANT_POD)
+    target["metadata"] = dict(COMPLIANT_POD["metadata"], name="hardening-eph-target")
+    subprocess.run(["kubectl", "apply", "-f", "-"], input=json.dumps(target),
+                   capture_output=True, text=True, check=True)
+    try:
+        subprocess.run(["kubectl", "wait", "--for=condition=Ready",
+                        "pod/hardening-eph-target", "-n", NAMESPACE, "--timeout=180s"],
+                       capture_output=True, text=True, check=True)
+        live = json.loads(subprocess.run(
+            ["kubectl", "get", "pod", "hardening-eph-target", "-n", NAMESPACE, "-o", "json"],
+            capture_output=True, text=True, check=True).stdout)
+        live["spec"]["ephemeralContainers"] = [{
+            "name": "debugger", "image": COMPLIANT_POD["spec"]["containers"][0]["image"],
+            "command": ["sh", "-c", "sleep 30"], "targetContainerName": "c",
+            "terminationMessagePolicy": "File", "imagePullPolicy": "IfNotPresent",
+            "securityContext": {
+                "allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True,
+                "runAsUser": 65532, "capabilities": {"drop": ["ALL"]},
+            },
+        }]
+        r = subprocess.run(
+            ["kubectl", "replace", "--raw",
+             f"/api/v1/namespaces/{NAMESPACE}/pods/hardening-eph-target/ephemeralcontainers", "-f", "-"],
+            input=json.dumps(live), capture_output=True, text=True)
+        if r.returncode == 0:
+            return True, "admitted"
+        msg = (r.stderr or r.stdout).strip().replace("\n", " ")
+        return False, f"REFUSED: {msg[:110]}"
+    finally:
+        subprocess.run(["kubectl", "delete", "pod", "hardening-eph-target", "-n", NAMESPACE,
+                        "--wait=false", "--ignore-not-found"], capture_output=True, text=True)
 
 
 def main():
@@ -360,7 +411,12 @@ def main():
           f"{'a privileged EPHEMERAL container via kubectl debug':46s} {detail}")
     failures += 0 if ok else 1
 
-    total = len(CASES) + 1
+    ok, detail = check_compliant_ephemeral_container()
+    print(f"  {'ok  ' if ok else 'FAIL'}  "
+          f"{'a HARDENED ephemeral container, which must be ADMITTED':46s} {detail}")
+    failures += 0 if ok else 1
+
+    total = len(CASES) + 2
     print(f"\n{total - failures} passed, {failures} failed")
     return 1 if failures else 0
 

@@ -100,6 +100,23 @@ spec:
         object.spec.containers +
         (has(object.spec.initContainers) ? object.spec.initContainers : []) +
         (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
+    # Everything except ephemeral containers, for the one rule that cannot
+    # apply to them: Kubernetes **forbids** setting `resources` on an
+    # ephemeral container, so requiring a memory limit there demands a field
+    # the API server rejects.
+    #
+    # Measured, and it was not theoretical: a fully compliant ephemeral
+    # container -- non-root, read-only rootfs, all capabilities dropped --
+    # was refused for having no memory limit, which it is not allowed to
+    # have. The effect was that `kubectl debug` could not be used at all in
+    # any namespace this policy covers, for no security reason. That is the
+    # shape a policy gets switched off over rather than fixed, and the
+    # comment two rules below warning about exactly that was written before
+    # this rule had the bug.
+    - name: resourceContainers
+      expression: >-
+        object.spec.containers +
+        (has(object.spec.initContainers) ? object.spec.initContainers : [])
   validations:
     # Written per field as "absent, or explicitly false" rather than as
     # "all three absent, or all three false". The second form reads a field
@@ -192,7 +209,7 @@ spec:
       message: >-
         runAsUser 0 is root by another name, on the pod or on any container.
     - expression: >-
-        variables.allContainers.all(c, has(c.resources) && has(c.resources.limits)
+        variables.resourceContainers.all(c, has(c.resources) && has(c.resources.limits)
           && 'memory' in c.resources.limits)
       message: >-
         every container must set a memory limit. This is the rule Pod

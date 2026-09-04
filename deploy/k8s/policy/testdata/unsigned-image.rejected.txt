@@ -1,0 +1,28 @@
+# Admission refusing a pod whose image nobody signed.
+#
+# Captured 2026-09-04T16:10:12Z against Kyverno v1.19.0 on
+# K3s v1.35.5+k3s1, policy deploy/k8s/policy/image-signature.yaml
+# (rendered from docs/keys/key-inventory.json by ci/generate-image-policy).
+#
+# The image is the same bytes as the signed fixture beside it and differs
+# only in repository, because a cosign signature is stored per repository.
+# So this is not "a different image was refused" -- it is the same content,
+# refused because nothing in this repository vouches for it.
+#
+# What this single case does NOT show, and what
+# deploy/k8s/policy/image-policy-selftest.py does: an image signed by the
+# *artifact* key rather than the image key, an image named by tag, and an
+# unsigned image arriving as an init container or attached to a running pod
+# through pods/ephemeralcontainers.
+
+$ kubectl apply -n kyverno-policy-selftest -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata: {name: unsigned-image-probe}
+spec:
+  containers:
+    - name: c
+      image: k3d-hsm-pki-registry:5000/unsigned@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f
+      ...
+EOF
+Error from server: error when creating "STDIN": admission webhook "ivpol.validate.kyverno.svc-fail" denied the request: Policy require-signed-images failed: every container image must carry a signature by a key the published inventory vouches for. Sign it with ci/sign-image.sh, or check docs/keys/key-inventory.json for which keys are trusted.
