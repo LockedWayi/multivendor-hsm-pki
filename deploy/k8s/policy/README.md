@@ -63,12 +63,29 @@ once when the newer kinds become the path Kyverno documents first.
 deploy/k8s/policy/policy-selftest.py
 ```
 
-Fourteen cases, mostly **near misses**: a pod satisfying every rule except one,
-asserted to be refused with the message belonging to that rule — plus the
-compliant baseline, which must be admitted. The insecure pod in `testdata/`
-breaks every rule at once, so admission reports the first and the other
-seven go untested; a rule with a typo in its CEL would pass everything until
-somebody wrote a pod that broke only it.
+Nineteen cases, mostly **near misses**: a pod satisfying every rule except
+one, asserted to be refused with the message belonging to that rule — plus
+three that must be *admitted*, and one that attaches a container to a running
+pod. The insecure pod in `testdata/` breaks every rule at once, so admission
+reports the first and the other eight go untested; a rule with a typo in its
+CEL would pass everything until somebody wrote a pod that broke only it.
+
+Four of the cases exist because the policy was **wrong** and the suite did
+not notice, which is worth stating plainly:
+
+- A container may override the pod's `securityContext`. The first version of
+  two rules read "the pod says so **or** every container says so", so a pod
+  declaring `runAsNonRoot: true` with a container setting it to `false` was
+  admitted — the pod-level clause was true and the `or` short-circuited
+  before the container was examined. Both rules now compute the *effective*
+  value per container.
+- Ephemeral containers do not arrive as a pod update. They go to
+  `pods/ephemeralcontainers`, which the match rules did not name, so
+  `kubectl debug` attached a privileged root container to a running pod with
+  every rule in force and none of them run.
+
+Neither is expressible as an obviously-insecure manifest, which is why the
+`testdata/` pod could not have found them.
 
 The self-test creates `kyverno-policy-selftest`, a namespace with **no** PSA
 labels. In `hsm-pki-dev`, PSA refuses these pods before Kyverno sees them,
