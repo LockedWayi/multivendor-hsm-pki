@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
@@ -161,12 +162,8 @@ func TestVerify_RejectsARawSignatureInsteadOfASN1(t *testing.T) {
 	// the raw form would be this package quietly widening an interop
 	// contract it does not own.
 	b, artifact := loadFixture(t)
-	der, err := base64.StdEncoding.DecodeString(b.MessageSignature.Signature)
-	if err != nil {
-		t.Fatalf("decoding fixture signature: %v", err)
-	}
 	var parsed struct{ R, S *big.Int }
-	if _, err := asn1.Unmarshal(der, &parsed); err != nil {
+	if _, err := asn1.Unmarshal(b.Signature, &parsed); err != nil {
 		t.Fatalf("the fixture signature is not a DER SEQUENCE of r and s: %v", err)
 	}
 	raw := make([]byte, 64)
@@ -199,9 +196,43 @@ func TestParse_RefusesTheShapesThisPlatformDoesNotProduce(t *testing.T) {
 			name: "keyless bundle carrying a certificate",
 			mutate: func(m map[string]any) {
 				vm := m["verificationMaterial"].(map[string]any)
+				delete(vm, "publicKey")
 				vm["certificate"] = map[string]any{"rawBytes": "AAAA"}
 			},
 			want: "keyless bundle",
+		},
+		{
+			// The older keyless shape. Checking only `certificate` would
+			// have let this through as keyed material.
+			name: "keyless bundle carrying an x509 certificate chain",
+			mutate: func(m map[string]any) {
+				vm := m["verificationMaterial"].(map[string]any)
+				delete(vm, "publicKey")
+				vm["x509CertificateChain"] = map[string]any{"certificates": []any{}}
+			},
+			want: "keyless bundle",
+		},
+		{
+			name: "no verification material at all",
+			mutate: func(m map[string]any) {
+				m["verificationMaterial"] = map[string]any{}
+			},
+			want: "no verification material",
+		},
+		{
+			name: "no content at all",
+			mutate: func(m map[string]any) {
+				delete(m, "messageSignature")
+			},
+			want: "signs nothing",
+		},
+		{
+			name: "a message digest that is not 32 bytes",
+			mutate: func(m map[string]any) {
+				md := m["messageSignature"].(map[string]any)["messageDigest"].(map[string]any)
+				md["digest"] = "AAAA"
+			},
+			want: "not the 32",
 		},
 		{
 			name: "a media type from some future version",
@@ -219,9 +250,11 @@ func TestParse_RefusesTheShapesThisPlatformDoesNotProduce(t *testing.T) {
 			want: "not SHA2_256",
 		},
 		{
-			name: "no public key named at all",
+			// The arm is present but empty, which is a different failure
+			// from the arm being absent and must read as one.
+			name: "public key material carrying no hint",
 			mutate: func(m map[string]any) {
-				m["verificationMaterial"] = map[string]any{}
+				m["verificationMaterial"].(map[string]any)["publicKey"] = map[string]any{}
 			},
 			want: "names no public key",
 		},
@@ -246,11 +279,88 @@ func TestParse_RefusesTheShapesThisPlatformDoesNotProduce(t *testing.T) {
 	}
 }
 
+// TestParse_RefusesTwoArmsOfOneOneof covers the gap this package shipped
+// with: it checked for `certificate` and nothing else, so a bundle carrying
+// BOTH a published key and certificate material, or BOTH a blob signature
+// and a DSSE envelope, was accepted and one arm silently discarded.
+// Measured open before the fix.
+//
+// sigstore_bundle.proto defines both as `oneof`, and that is the point: two
+// arms are not an extra field, they are two contradictory claims about what
+// authenticates the signature or about what it covers. Choosing either is
+// choosing for a sender who said two things.
+func TestParse_RefusesTwoArmsOfOneOneof(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(m map[string]any)
+		want   string
+	}{
+		{
+			name: "keyed and certificate-chain material at once",
+			mutate: func(m map[string]any) {
+				vm := m["verificationMaterial"].(map[string]any)
+				vm["x509CertificateChain"] = map[string]any{"certificates": []any{}}
+			},
+			want: "exactly one",
+		},
+		{
+			name: "keyed and single-certificate material at once",
+			mutate: func(m map[string]any) {
+				vm := m["verificationMaterial"].(map[string]any)
+				vm["certificate"] = map[string]any{"rawBytes": "AAAA"}
+			},
+			want: "exactly one",
+		},
+		{
+			name: "a blob signature and a DSSE envelope at once",
+			mutate: func(m map[string]any) {
+				m["dsseEnvelope"] = map[string]any{"payload": "AAAA", "payloadType": "application/vnd.in-toto+json"}
+			},
+			want: "exactly one",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := artifactsig.Parse(rewrite(t, tc.mutate))
+			if err == nil {
+				t.Fatal("accepted a bundle making two contradictory claims")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("wrong reason: got %v", err)
+			}
+		})
+	}
+}
+
+// TestParse_AcceptsABundleCarryingFieldsThisPackageDoesNotRead is the other
+// half of the same decision, and the reason DisallowUnknownFields was not
+// the fix. A real Sigstore bundle carries tlogEntries and
+// timestampVerificationData; measured, Go's strict decoding rejects cosign's
+// own release bundles over exactly that. Strictness has to fall on the
+// fields that change meaning, not on every field.
+func TestParse_AcceptsABundleCarryingFieldsThisPackageDoesNotRead(t *testing.T) {
+	raw := rewrite(t, func(m map[string]any) {
+		m["verificationMaterial"].(map[string]any)["tlogEntries"] = []any{
+			map[string]any{"logIndex": "2352228362"},
+		}
+		m["verificationMaterial"].(map[string]any)["timestampVerificationData"] = map[string]any{}
+	})
+	b, err := artifactsig.Parse(raw)
+	if err != nil {
+		t.Fatalf("a valid bundle with a transparency log entry was rejected: %v", err)
+	}
+	_, artifact := loadFixture(t)
+	if err := artifactsig.Verify(b, bytes.NewReader(artifact), loadKey(t, publishedKey)); err != nil {
+		t.Fatalf("and it no longer verifies: %v", err)
+	}
+}
+
 func TestParse_KeylessBundleIsIdentifiable(t *testing.T) {
 	// Callers need to distinguish "this is the wrong kind of bundle" from
 	// "this bundle is broken", so the sentinel is part of the contract.
 	_, err := artifactsig.Parse(rewrite(t, func(m map[string]any) {
 		vm := m["verificationMaterial"].(map[string]any)
+		delete(vm, "publicKey")
 		vm["certificate"] = map[string]any{"rawBytes": "AAAA"}
 	}))
 	if !errors.Is(err, artifactsig.ErrKeylessBundle) {
@@ -302,5 +412,50 @@ func TestVerify_RefusesWithoutAKey(t *testing.T) {
 	b, artifact := loadFixture(t)
 	if err := artifactsig.Verify(b, bytes.NewReader(artifact), nil); err == nil {
 		t.Fatal("verified with no public key")
+	}
+}
+
+// TestParse_AcceptsAForeignBundleProducedByAnotherToolchain is the
+// tolerance half of the oneof decision, proven against a bundle this
+// repository did not make: cosign's own v3.1.3 release signature, as
+// published by the Sigstore project. It carries tlogEntries,
+// inclusionProof, checkpoint and rfc3161Timestamps — none of which this
+// package reads — and it is the artifact whose verification bootstraps
+// ci/cosign.sh.
+//
+// It is here because the synthetic version of this test supplies its own
+// answer (docs/lessons.md §3): a bundle written by the test to carry fields
+// the test chose proves only that the test agrees with itself. This one was
+// produced by a different toolchain, on a different day, for a different
+// artifact, and it is what a strict-by-default parser would have rejected.
+func TestParse_AcceptsAForeignBundleProducedByAnotherToolchain(t *testing.T) {
+	raw, err := os.ReadFile("testdata/foreign-cosign-release.sigstore.json")
+	if err != nil {
+		t.Fatalf("reading the foreign bundle: %v", err)
+	}
+	b, err := artifactsig.Parse(raw)
+	if err != nil {
+		t.Fatalf("a real Sigstore bundle was rejected: %v", err)
+	}
+	// It names the Sigstore release key this repository pins, which is the
+	// same identity check ci/cosign.sh makes before trusting the download.
+	anchor, err := os.ReadFile("../../ci/sigstore-release-cosign.pub")
+	if err != nil {
+		t.Fatalf("reading the pinned release key: %v", err)
+	}
+	pub, err := artifactsig.PublicKeyFromPEM(anchor)
+	if err != nil {
+		t.Fatalf("parsing the pinned release key: %v", err)
+	}
+	spki, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatalf("encoding the pinned release key: %v", err)
+	}
+	sum := sha256.Sum256(spki)
+	if want := base64.StdEncoding.EncodeToString(sum[:]); b.KeyHint != want {
+		t.Fatalf("the foreign bundle names key %s, the pinned release key is %s", b.KeyHint, want)
+	}
+	if len(b.Digest) != sha256.Size || len(b.Signature) == 0 {
+		t.Fatalf("parsed a bundle with digest %d bytes and signature %d bytes", len(b.Digest), len(b.Signature))
 	}
 }
