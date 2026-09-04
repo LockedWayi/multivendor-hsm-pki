@@ -115,10 +115,11 @@ verification.
 
 ## Status
 
-Phase 1 (PKCS#11 core), Phase 2 (CA core), and Phase 3 (infrastructure as
-code) complete. **Phase 3b (PKI hardening) is in progress**: the two-tier
-hierarchy and durable revocation state are built; certificate profile
-extensions and two design documents remain.
+Phase 1 (PKCS#11 core), Phase 2 (CA core), Phase 3 (infrastructure as
+code) and Phase 3b (PKI hardening) complete. **Phase 4 (containerization
+and Kubernetes) is in progress**: the image, its Kubernetes deployment, the
+scanning gate and the purpose-separated signing keys are built; the
+admission-policy and image-signing halves remain.
 
 Phase 1: the interface, session lifecycle, PIN custody, and both the
 SoftHSM2 and ProtectServer adapters are implemented, tested, and share one
@@ -176,6 +177,34 @@ server down, brings it back over the same file, and re-fetches the CRL.
 
 Phase 3b is now complete — code and documents both.
 
+Phase 4 (in progress): a multi-stage build producing a **53.8 MB
+`distroless/cc` image** with no shell, no package manager and no PKCS#11
+module of any kind — every module, SoftHSM2 included, is a read-only mount,
+so the CI backend and the vendor backend are delivered by the same code and
+differ only in configuration. It runs `--read-only --user 65532 --cap-drop
+ALL`, and on K3s (via k3d) as a single replica with `Recreate`, a
+`restricted` Pod Security Admission namespace, probes wired to
+`/healthz`/`/readyz`, and the CA store on a `PersistentVolume` — verified by
+issuing a certificate through the Service and by destroying and rebuilding
+the cluster to confirm a revocation survives it. `trivy` reports zero
+HIGH/CRITICAL across 11 OS packages and the gate is proven to fail on a
+deliberately outdated image.
+
+Phase 4 also builds the **signing layer**: `image-signing-key-v1` and
+`artifact-signing-key-v1` on a supply-chain token of their own, and
+`inventory-signing-key-v1` on an offline token that holds none of the keys
+it vouches for — four tokens in total, because PKCS#11 authenticates a
+*token*, not a key. What is published is not a bare PEM but a **signed key
+inventory** ([`docs/keys/`](docs/keys/)) that any verifier can check with
+nothing but `openssl`, and a mechanical audit (`internal/keyaudit`) fails
+the test suite if any configuration file names a CA key and a signing key
+together. Provisioning it needs no hardware:
+[`deploy/docker/provision-signing-keys.sh`](deploy/docker/provision-signing-keys.sh).
+
+Still open in Phase 4, and stated rather than implied: the Kyverno
+admission policy, release-artifact signing, and container-image signing
+with admission verification.
+
 The security reasoning behind all of this — what each key is worth, what an
 attacker gets by compromising the service process and what they still do not
 get, and the seven things this platform deliberately does not defend
@@ -188,7 +217,8 @@ Per-sub-task detail is tracked in
 [`docs/phases/phase-1-pkcs11-core.md`](docs/phases/phase-1-pkcs11-core.md),
 [`docs/phases/phase-2-ca-core.md`](docs/phases/phase-2-ca-core.md),
 [`docs/phases/phase-3-infrastructure.md`](docs/phases/phase-3-infrastructure.md),
-and [`docs/phases/phase-3b-pki-hardening.md`](docs/phases/phase-3b-pki-hardening.md).
+[`docs/phases/phase-3b-pki-hardening.md`](docs/phases/phase-3b-pki-hardening.md),
+and [`docs/phases/phase-4-container-k8s.md`](docs/phases/phase-4-container-k8s.md).
 
 ## License
 
