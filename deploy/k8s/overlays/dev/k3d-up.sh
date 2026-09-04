@@ -30,6 +30,21 @@ NODE="k3d-${CLUSTER}-server-0"
 NS=hsm-pki-dev
 LOCAL="$REPO_ROOT/.local/dev"
 
+# The registry exists because cosign stores an image signature *in the
+# registry* -- there is no local-only signing path -- so Phase 4.10 cannot
+# verify anything at admission without one. It is k3d-managed and separate
+# from the cluster, so `k3d cluster delete` leaves the signed image alone.
+REGISTRY_NAME="${HSM_PKI_K3D_REGISTRY:-hsm-pki-registry}"
+REGISTRY_HOST_PORT=5000
+# Two names for one registry, and the difference matters exactly once. The
+# host pushes and signs through localhost; the cluster pulls through the
+# container name on the k3d network. Same registry, so a signature written
+# through one is found through the other -- what a signature is stored under
+# is the repository path and the digest, not the hostname used to reach it.
+REGISTRY_FROM_HOST="localhost:$REGISTRY_HOST_PORT"
+REGISTRY_IN_CLUSTER="k3d-$REGISTRY_NAME:$REGISTRY_HOST_PORT"
+IMAGE_REPO="hsm-pki-server"
+
 # One host directory backs everything that must outlive the cluster: the
 # module, the token store and the CA's SQLite store. All three reach the pod
 # as fixed-path PersistentVolumes, because a dynamically provisioned volume
@@ -52,14 +67,25 @@ if [ "${1:-}" = "--recreate" ]; then
     k3d cluster delete "$CLUSTER" >/dev/null 2>&1 || true
 fi
 
+if k3d registry list "k3d-$REGISTRY_NAME" >/dev/null 2>&1; then
+    log "registry k3d-$REGISTRY_NAME already exists"
+else
+    log "creating registry k3d-$REGISTRY_NAME"
+    k3d registry create "$REGISTRY_NAME" --port "$REGISTRY_HOST_PORT" >/dev/null
+fi
+
 if k3d cluster list "$CLUSTER" >/dev/null 2>&1; then
     log "cluster $CLUSTER already exists"
 else
     log "creating cluster $CLUSTER with host-backed state"
     mkdir -p "$NODE_STATE/pkcs11" "$NODE_STATE/tokens" "$NODE_STATE/store"
+    # --registry-use writes the node's registries.yaml. Without it
+    # containerd tries HTTPS against a plain-HTTP registry and the pod sits
+    # in ImagePullBackOff with a TLS error that says nothing about the cause.
     k3d cluster create "$CLUSTER" \
         --agents 0 --no-lb \
         --k3s-arg "--disable=traefik@server:0" \
+        --registry-use "k3d-$REGISTRY_NAME:$REGISTRY_HOST_PORT" \
         --volume "$NODE_STATE:/opt/hsm-pki@server:0" >/dev/null
 fi
 
@@ -77,33 +103,81 @@ else
 fi
 docker exec "$NODE" sh -c 'chown -R 65532:65532 /opt/hsm-pki/tokens /opt/hsm-pki/store; chmod 0770 /opt/hsm-pki/tokens /opt/hsm-pki/store'
 
-log "importing the image"
-docker image inspect hsm-pki-server:local >/dev/null 2>&1 || {
-    echo "build it first: docker build -f deploy/docker/Dockerfile -t hsm-pki-server:local ." >&2
+log "publishing the image to the registry, by digest"
+docker image inspect "$IMAGE_REPO:local" >/dev/null 2>&1 || {
+    echo "build it first: docker build -f deploy/docker/Dockerfile -t $IMAGE_REPO:local ." >&2
     exit 1
 }
-k3d image import hsm-pki-server:local -c "$CLUSTER" 2>&1 | tail -1
-# Confirm it landed rather than assuming the import said so: the import has
-# been seen to report success while leaving the node without the image, and
-# the pod then sits in ImagePullBackOff for as long as nobody notices. The
-# check is cheap and turns a silent stall into a refusal to apply.
-#
-# It is NOT here because kubelet's backoff is slow to recover -- that was
-# measured and is false: after 3m19s and twelve failed attempts, the pod went
-# Running 11s after the image appeared. The problem is an image that never
-# arrives at all, not one that arrives late.
-for _ in $(seq 1 10); do
-    if docker exec "$NODE" crictl images 2>/dev/null | grep -q 'hsm-pki-server'; then
-        echo "    present on the node"
-        break
-    fi
-    sleep 2
-done
-docker exec "$NODE" crictl images 2>/dev/null | grep -q 'hsm-pki-server' || {
-    echo "image did not reach the node; not applying" >&2; exit 1; }
+docker tag "$IMAGE_REPO:local" "$REGISTRY_FROM_HOST/$IMAGE_REPO:local"
+docker push -q "$REGISTRY_FROM_HOST/$IMAGE_REPO:local" >/dev/null
+
+# The digest is read back from the registry rather than taken from the local
+# image, because what the cluster will pull is what the registry holds. They
+# agree today; asking the registry means they cannot silently stop agreeing.
+DIGEST="$(docker inspect "$REGISTRY_FROM_HOST/$IMAGE_REPO:local" \
+    --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+    | grep "^$REGISTRY_FROM_HOST/" | head -1 | cut -d@ -f2)"
+[ -n "$DIGEST" ] || { echo "could not resolve the pushed image's digest" >&2; exit 1; }
+IMAGE_REF="$REGISTRY_IN_CLUSTER/$IMAGE_REPO@$DIGEST"
+echo "    $IMAGE_REF"
 
 log "applying the overlay"
 kubectl apply -k "$REPO_ROOT/deploy/k8s/overlays/dev" >/dev/null
+
+# The manifest carries a tag, and the deployment runs a digest. That is not
+# a contradiction to tidy away: a digest is build output and changes with
+# every build, so it cannot be a committed value, while a tag is a mutable
+# pointer and so cannot be what is deployed (CLAUDE.md §3.8). The reference
+# is therefore resolved here, at deploy time, from the registry.
+#
+# The tag in the manifest is a placeholder that is never pulled, and the
+# admission policy in deploy/k8s/policy/image-signature.yaml refuses a
+# by-tag reference outright -- so applying the overlay without this step
+# fails closed rather than quietly running an unverifiable image.
+kubectl -n "$NS" set image deployment/hsm-pki "hsm-pki-server=$IMAGE_REF" >/dev/null
+
+log "installing the admission policies"
+# Part of bringing the cluster up, not a separate ritual: a cluster whose
+# guardrails are applied by hand is a cluster that has run without them.
+kubectl apply --server-side -f \
+    "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION:-v1.19.0}/install.yaml" >/dev/null
+kubectl -n kyverno rollout status deploy/kyverno-admission-controller --timeout=300s >/dev/null
+kubectl apply -f "$REPO_ROOT/deploy/k8s/policy/kyverno-rbac.yaml" >/dev/null
+kubectl apply -f "$REPO_ROOT/deploy/k8s/policy/pod-hardening.yaml" >/dev/null
+
+# The image-signature policy is applied only once the image it will demand a
+# signature for actually has one. Applying it first would leave the cluster
+# correctly refusing its own workload, which reads as a broken policy rather
+# than as an unsigned image.
+#
+# Signing needs the supply-chain token's PIN, which is deliberately not
+# something this script can invent. With it, the chain runs end to end in one
+# command; without it, the cluster comes up with pod hardening enforced and
+# the image rule absent, and says so rather than pretending.
+if [ -n "${COSIGN_PKCS11_PIN:-}" ]; then
+    log "signing the image and installing the image-signature policy"
+    "$REPO_ROOT/ci/sign-image.sh" "$REGISTRY_FROM_HOST/$IMAGE_REPO@$DIGEST" >/dev/null
+    # Rendered here rather than applied from the repository, because the k3d
+    # registry speaks plaintext HTTP and the committed policy deliberately
+    # does not carry that concession. Measured before this line existed: with
+    # the committed policy, Kyverno spoke HTTPS to the HTTP registry, could
+    # not verify, and refused the pod -- `ReplicaFailure: ... http: server
+    # gave HTTP response to HTTPS client`. Fail-closed and correct, and the
+    # cluster does not start, so the concession is made explicitly and only
+    # here.
+    devpolicy="$(mktemp)"
+    go run "$REPO_ROOT/ci/generate-image-policy" -allow-insecure-registry \
+        -inventory "$REPO_ROOT/docs/keys/key-inventory.json" > "$devpolicy"
+    kubectl apply -f "$devpolicy" >/dev/null
+    rm -f "$devpolicy"
+    echo "    require-signed-images and require-image-digest are enforcing"
+else
+    echo
+    echo "    NOTE: COSIGN_PKCS11_PIN is not set, so the image was not signed and"
+    echo "    deploy/k8s/policy/image-signature.yaml was NOT applied. Pod hardening"
+    echo "    is enforcing; the 'an unsigned image cannot run here' half is not."
+    echo "    To close it:  COSIGN_PKCS11_PIN=... $0"
+fi
 
 log "creating the two operator-supplied objects"
 # Neither can live in the repository: one is the ceremony's output, the other

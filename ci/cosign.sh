@@ -41,14 +41,30 @@
 # against a value a human approved, not a re-run of the same fetch.
 set -euo pipefail
 
-# Pinned. cosign's PKCS#11 support is a build tag, not a runtime flag, so
-# the asset name is part of the pin: the default cosign-linux-<arch> is
-# statically linked and cannot dlopen a module at all.
-COSIGN_VERSION="v3.1.3"
+# Two pinned versions, and the reason is measured rather than cautious.
+#
+# cosign v3 stores an image signature as an OCI referrers artifact, under the
+# fallback tag `sha256-<digest>` when the registry has no referrers API.
+# Kyverno v1.19's cosign verifier looks for the older `sha256-<digest>.sig`
+# tag and reports "no signatures found" against a v3 signature that cosign
+# itself verifies happily. There is no flag on either side that bridges it:
+# v3 has no legacy-format option, and v1.19 is the current Kyverno.
+#
+# So blobs are signed with v3 (its bundle is what internal/artifactsig
+# reads) and images with v2 (its layout is what admission reads), and both
+# are pinned and verified the same way rather than one being trusted because
+# the other was.
+#
+#   HSM_PKI_COSIGN_VERSION=v3   release artifacts   (default)
+#   HSM_PKI_COSIGN_VERSION=v2   container images
+#
+# cosign's PKCS#11 support is a build tag, not a runtime flag, so the asset
+# name is part of the pin: the default cosign-linux-<arch> is statically
+# linked and cannot dlopen a module at all.
+COSIGN_TRACK="${HSM_PKI_COSIGN_VERSION:-v3}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="${HSM_PKI_COSIGN_DIR:-$REPO_ROOT/.local/bin}"
-COSIGN_BIN="$BIN_DIR/cosign"
 RELEASE_KEY="$REPO_ROOT/ci/sigstore-release-cosign.pub"
 RUNNER_IMAGE="hsm-pki-cosign:local"
 
@@ -56,8 +72,8 @@ RUNNER_IMAGE="hsm-pki-cosign:local"
 # module. Overridable so a real deployment can point at its own.
 STATE="${HSM_PKI_SIGNING_STATE:-$REPO_ROOT/.local/signing}"
 
-RELEASE_URL="https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION"
 REKOR_API="https://rekor.sigstore.dev/api/v1/log/entries"
+REKOR_INDEX_API="https://rekor.sigstore.dev/api/v1/index/retrieve"
 
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { echo "cosign.sh: $*" >&2; exit 1; }
@@ -74,18 +90,44 @@ die() { echo "cosign.sh: $*" >&2; exit 1; }
 # produces a binary that cannot run, which is a worse outcome than being told
 # so.
 case "$(uname -m)" in
-    x86_64)
-        COSIGN_ARCH="amd64"
-        COSIGN_SHA256="549398fbe5a2f930b4eb564c7bbe9588270566ffcc8c9cb45644c066714aa380" ;;
-    aarch64|arm64)
-        COSIGN_ARCH="arm64"
-        COSIGN_SHA256="43266ec58f867517ab60e46972a1700f72f277d4c62a039325a4af66e4a1a1e4" ;;
+    x86_64)        COSIGN_ARCH="amd64" ;;
+    aarch64|arm64) COSIGN_ARCH="arm64" ;;
     *)
         die "no pinned cosign for architecture $(uname -m). cosign publishes
 the PKCS#11-capable build for linux/amd64 and linux/arm64 only; adding one
 means adding its digest here, verified the same way as the others." ;;
 esac
+
+# RELEASE_SIG_STYLE says where the release's own signature lives, which
+# differs between the two tracks and is the one thing the verification below
+# cannot share:
+#   bundle    v3: <asset>-kms.sigstore.json, a keyed Sigstore bundle
+#   detached  v2: <asset>.sig, base64 of the raw ECDSA signature
+# Same release key either way, and openssl checks both.
+case "$COSIGN_TRACK" in
+    v3)
+        COSIGN_VERSION="v3.1.3"
+        RELEASE_SIG_STYLE="bundle"
+        case "$COSIGN_ARCH" in
+            amd64) COSIGN_SHA256="549398fbe5a2f930b4eb564c7bbe9588270566ffcc8c9cb45644c066714aa380" ;;
+            arm64) COSIGN_SHA256="43266ec58f867517ab60e46972a1700f72f277d4c62a039325a4af66e4a1a1e4" ;;
+        esac ;;
+    v2)
+        COSIGN_VERSION="v2.6.1"
+        RELEASE_SIG_STYLE="detached"
+        case "$COSIGN_ARCH" in
+            amd64) COSIGN_SHA256="cc616c0d689a1ce248de015db41a925eb4cb1fcd8f49349e4e884a3a3838e328" ;;
+            arm64) COSIGN_SHA256="5d3fa7ef6c86156f33077ea953a97e147dfd57311eef9dabd7b0869bdf8db926" ;;
+        esac ;;
+    *)
+        die "HSM_PKI_COSIGN_VERSION must be v3 (release artifacts) or v2 (container images), not \"$COSIGN_TRACK\"" ;;
+esac
 COSIGN_ASSET="cosign-linux-pivkey-pkcs11key-$COSIGN_ARCH"
+# One binary per track, side by side. A single path would mean the last
+# fetch decides which version every later command runs, and the two are not
+# interchangeable -- that is the whole reason both are pinned.
+COSIGN_BIN="$BIN_DIR/cosign-$COSIGN_VERSION"
+RELEASE_URL="https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION"
 
 verify_pinned_digest() {
     local actual
@@ -115,8 +157,10 @@ fetch() {
 
     log "downloading $COSIGN_ASSET $COSIGN_VERSION"
     curl -sSL --fail -o "$work/cosign" "$RELEASE_URL/$COSIGN_ASSET"
-    curl -sSL --fail -o "$work/bundle.json" "$RELEASE_URL/$COSIGN_ASSET-kms.sigstore.json"
     curl -sSL --fail -o "$work/checksums.txt" "$RELEASE_URL/cosign_checksums.txt"
+    if [ "$RELEASE_SIG_STYLE" = "bundle" ]; then
+        curl -sSL --fail -o "$work/bundle.json" "$RELEASE_URL/$COSIGN_ASSET-kms.sigstore.json"
+    fi
 
     local digest
     digest="$(sha256sum "$work/cosign" | cut -d' ' -f1)"
@@ -134,6 +178,14 @@ different version. Investigate before changing the pin."
     echo "    listed in cosign_checksums.txt"
 
     log "3/4  the Sigstore release key signed exactly these bytes"
+    if [ "$RELEASE_SIG_STYLE" = "detached" ]; then
+        # v2 publishes <asset>.sig: base64 of the DER ECDSA signature over
+        # the artifact, and nothing else. Fewer moving parts than the bundle
+        # and the same question answered by the same key.
+        curl -sSL --fail -o "$work/asset.sig.b64" "$RELEASE_URL/$COSIGN_ASSET.sig"
+        base64 -d < "$work/asset.sig.b64" > "$work/sig.der"
+        echo "    detached signature, checked against the pinned release key"
+    else
     # The bundle's messageSignature is a raw ECDSA-SHA256 signature over the
     # artifact, which is what `openssl dgst -verify` checks -- so this needs
     # no Sigstore tooling and no network trust beyond the pinned key. The
@@ -158,6 +210,7 @@ if hint != expected:
 open(sig_path, "wb").write(base64.b64decode(bundle["messageSignature"]["signature"]))
 print(f"    bundle names the pinned release key ({hint})")
 PY
+    fi
     openssl dgst -sha256 -verify "$RELEASE_KEY" \
         -signature "$work/sig.der" "$work/cosign" \
         || die "the release signature does not verify over the downloaded bytes"
@@ -166,12 +219,45 @@ PY
     # The one check GitHub cannot answer for itself. If this step is the
     # only one that fails the network is the likely cause, not an attack --
     # so it warns rather than dies, and says which it is.
-    local log_index
-    log_index="$(python3 -c '
+    local located=1
+    if [ "$RELEASE_SIG_STYLE" = "bundle" ]; then
+        local log_index
+        log_index="$(python3 -c '
 import json,sys
 print(json.load(open(sys.argv[1]))["verificationMaterial"]["tlogEntries"][0]["logIndex"])
 ' "$work/bundle.json")"
-    if curl -sS --fail --max-time 30 "$REKOR_API?logIndex=$log_index" -o "$work/rekor.json"; then
+        curl -sS --fail --max-time 30 "$REKOR_API?logIndex=$log_index" -o "$work/rekor.json" || located=0
+    else
+        # No bundle, so no log index to follow. Rekor's index is searchable
+        # by the artifact's hash instead, which reaches the same entries
+        # from the other end and keeps this check the same check.
+        local uuids
+        uuids="$(curl -sS --fail --max-time 30 -X POST -H 'Content-Type: application/json' \
+            -d "{\"hash\":\"sha256:$digest\"}" "$REKOR_INDEX_API" 2>/dev/null \
+            | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)))' 2>/dev/null || true)"
+        if [ -n "$uuids" ]; then
+            # Every entry the index knows about, merged into one document,
+            # because the check below is "at least one of these" and taking
+            # only the first makes the answer depend on Rekor's ordering.
+            : > "$work/entries.jsonl"
+            while read -r u; do
+                [ -n "$u" ] || continue
+                curl -sS --fail --max-time 30 "$REKOR_API/$u" >> "$work/entries.jsonl" 2>/dev/null || true
+                printf '\n' >> "$work/entries.jsonl"
+            done <<< "$uuids"
+            python3 -c '
+import json,sys
+merged={}
+for line in open(sys.argv[1]):
+    line=line.strip()
+    if line:
+        merged.update(json.loads(line))
+json.dump(merged, open(sys.argv[2],"w"))' "$work/entries.jsonl" "$work/rekor.json" || located=0
+        else
+            located=0
+        fi
+    fi
+    if [ "$located" = 1 ]; then
         assert_rekor_records "$work/rekor.json" "$digest"
     else
         echo "    WARNING: could not reach Rekor. The first three checks passed," >&2
@@ -209,17 +295,30 @@ entries = json.load(open(sys.argv[1]))
 digest, key_path = sys.argv[2], sys.argv[3]
 pinned = open(key_path).read().strip()
 if not entries:
-    sys.exit("Rekor returned no entry for this log index, so nothing "
-             "confirms the signature is publicly logged")
+    sys.exit("Rekor returned no entry, so nothing confirms the signature is "
+             "publicly logged")
+
+# At least one entry must record this digest under the pinned key -- not
+# every entry. Rekor's index returns everything logged for an artifact, and
+# a cosign release is signed twice: once with the release key and once
+# keylessly. Requiring all of them to match rejected a perfectly good
+# release because the keyless entry, correctly, names a different key.
+matched = []
 for uuid, entry in entries.items():
     spec = json.loads(base64.b64decode(entry["body"]))["spec"]
-    logged = spec["data"]["hash"]["value"]
-    key = base64.b64decode(spec["signature"]["publicKey"]["content"]).decode().strip()
-    if logged != digest:
-        sys.exit(f"Rekor entry {uuid} records digest {logged}, not {digest}")
-    if key != pinned:
-        sys.exit(f"Rekor entry {uuid} records a different signing key")
-    print(f"    entry {uuid[:16]}... records this digest under the pinned key")
+    if spec.get("data", {}).get("hash", {}).get("value") != digest:
+        continue
+    content = spec.get("signature", {}).get("publicKey", {}).get("content")
+    if not content:
+        continue
+    if base64.b64decode(content).decode().strip() == pinned:
+        matched.append(uuid)
+
+if not matched:
+    sys.exit(f"none of the {len(entries)} Rekor entries for this artifact "
+             f"records digest {digest} under the pinned release key")
+print(f"    entry {matched[0][:16]}... records this digest under the pinned "
+      f"key ({len(matched)} of {len(entries)} entries)")
 PY
 }
 
@@ -314,7 +413,18 @@ Provision the keys first:  deploy/docker/provision-signing-keys.sh
         pin_args=(-e COSIGN_PKCS11_PIN)
     fi
 
+    # Image signing has to reach a registry, and blob signing must not. So
+    # the network is opt-in per invocation rather than always on: with no
+    # HSM_PKI_COSIGN_NETWORK set, the signer runs with docker's default
+    # bridge and cannot see the host's registry at all. ci/sign-image.sh
+    # sets it; ci/sign-artifact.sh does not.
+    local net_args=()
+    if [ -n "${HSM_PKI_COSIGN_NETWORK:-}" ]; then
+        net_args=(--network "$HSM_PKI_COSIGN_NETWORK")
+    fi
+
     docker run --rm -i \
+        "${net_args[@]}" \
         -v "$COSIGN_BIN":/usr/local/bin/cosign:ro \
         -v "$REPO_ROOT":/repo -w /repo \
         -v "$STATE/tokens":/var/lib/softhsm/tokens \
