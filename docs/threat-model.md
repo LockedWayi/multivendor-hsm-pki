@@ -284,9 +284,15 @@ the blast-radius separation §3.6 describes is only half real: it holds
 against mistakes and not against the attacker it names.
 
 This is the same reasoning that put the root on its own token in Phase 3b,
-applied one tier down. **Recorded as a decision Phase 4.8 must make before
-provisioning those keys**, with the options and their costs, rather than
-settled here.
+applied one tier down. **Resolved 2026-09-04: the supply-chain keys are
+provisioned on a third, separate token**, so A3 — compromise of the CA
+daemon — yields the intermediate and nothing else. The rejected options and
+their costs are recorded in `docs/phases/phase-4-container-k8s.md` 4.8; the
+architecture diagram was corrected with the decision rather than after it.
+
+What this does *not* buy: A4 (host root) still reaches both tokens if both
+PINs are on the same host, which is why a CI-controlled token remains the
+stronger end state and is reachable from here as a deployment change.
 
 ### 6.2 The revocation channel's availability is a security property
 
