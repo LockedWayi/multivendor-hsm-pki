@@ -425,3 +425,203 @@ func TestProvision_SatisfiesWhatCosignsBindingRequiresToFindThePair(t *testing.T
 		}
 	})
 }
+
+// --- lateral and boundary cases around duplicate detection and key naming ---
+
+// TestFindDuplicateKey_SeesAKeyUnderAnotherLabelAndSkipsItsOwn exercises the
+// comparison directly, because the path that triggers it in Provision cannot
+// be arranged on a backend whose RNG works.
+//
+// Both halves matter. Missing a genuine duplicate is the defect the check
+// exists for; *reporting* the key against itself would make every
+// provisioning fail, so the guard has to distinguish "another object holds
+// my key" from "I am on the token".
+func TestFindDuplicateKey_SeesAKeyUnderAnotherLabelAndSkipsItsOwn(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+		label := b.Label("image-signing-key-v5")
+
+		key, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: label})
+		if err != nil {
+			t.Fatalf("Provision: %v", err)
+		}
+
+		// Asked from the point of view of a hypothetical second key: this
+		// public point is already on the token, under `label`.
+		found, err := signingkey.FindDuplicateKey(ctx, b.Adapter, s, b.Label("artifact-signing-key-v5"), key.Public, pk11.P256)
+		if err != nil {
+			t.Fatalf("FindDuplicateKey: %v", err)
+		}
+		if found != label {
+			t.Errorf("FindDuplicateKey = %q, want %q — a duplicate under another label went unnoticed", found, label)
+		}
+
+		// Asked from the point of view of the key itself: not a duplicate.
+		found, err = signingkey.FindDuplicateKey(ctx, b.Adapter, s, label, key.Public, pk11.P256)
+		if err != nil {
+			t.Fatalf("FindDuplicateKey: %v", err)
+		}
+		if found != "" {
+			t.Errorf("FindDuplicateKey reported %q against the key's own label; every provisioning would fail", found)
+		}
+	})
+}
+
+// TestFindDuplicateKey_DoesNotMatchAcrossCurves pins that a key on another
+// curve is skipped rather than mistaken for a match or turned into an error.
+// A token holding P-384 keys for some other purpose must not make P-256
+// provisioning unusable.
+func TestFindDuplicateKey_DoesNotMatchAcrossCurves(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+
+		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{
+			Label: b.Label("artifact-signing-key-v6"),
+			Curve: pk11.P384,
+		}); err != nil {
+			t.Skipf("this backend did not provision a P-384 key (%v); the cross-curve case cannot be exercised here", err)
+		}
+		p256, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: b.Label("image-signing-key-v6")})
+		if err != nil {
+			t.Fatalf("Provision P-256: %v", err)
+		}
+
+		found, err := signingkey.FindDuplicateKey(ctx, b.Adapter, s, b.Label("image-signing-key-v7"), p256.Public, pk11.P256)
+		if err != nil {
+			t.Fatalf("FindDuplicateKey with a P-384 key on the token: %v", err)
+		}
+		if found != b.Label("image-signing-key-v6") {
+			t.Errorf("FindDuplicateKey = %q, want the P-256 key; a key on another curve must be skipped, not confused with it", found)
+		}
+	})
+}
+
+// TestProvision_LabelRoundTripsExactly pins that what the token stores is
+// what was asked for, byte for byte.
+//
+// It is the precondition for every label-based lookup in this repository and
+// for cosign's PKCS#11 URI, whose `object=` carries exactly this string. A
+// token that padded CKA_LABEL to a fixed width, or truncated it, would leave
+// keys that this platform creates and then cannot find — and the failure
+// would read as "no key pair found" for a key plainly on the token.
+func TestProvision_LabelRoundTripsExactly(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+		label := b.Label("artifact-signing-key-v7")
+
+		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: label}); err != nil {
+			t.Fatalf("Provision: %v", err)
+		}
+		for _, class := range []pk11.ObjectClass{pk11.ClassPublicKey, pk11.ClassPrivateKey} {
+			h, err := pk11.FindKeyByLabel(ctx, b.Adapter, s, class, label)
+			if err != nil {
+				t.Fatalf("FindKeyByLabel(class=%d): %v", class, err)
+			}
+			attrs, err := b.Adapter.GetAttributes(ctx, s, h, []pk11.AttributeType{pk11.AttrLabel})
+			if err != nil {
+				t.Fatalf("GetAttributes: %v", err)
+			}
+			if got := string(attrs[0].Value); got != label {
+				t.Errorf("class %d: CKA_LABEL round-tripped as %q (%d bytes), want %q (%d bytes)",
+					class, got, len(got), label, len(label))
+			}
+		}
+	})
+}
+
+// TestProvision_LabelLookupIsExactNotAPrefixMatch is the boundary case
+// versioned labels create for themselves: `-v1` is a prefix of `-v10`, and
+// they are different keys with different lifecycle states.
+//
+// A token that prefix-matched would return two objects for `-v1` — caught by
+// FindKeyByLabel's ambiguity refusal — or, worse, the wrong one. Either way a
+// verify-only key and an active key would be indistinguishable by the only
+// name a PKCS#11 URI can carry.
+func TestProvision_LabelLookupIsExactNotAPrefixMatch(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+		short := b.Label("image-signing-key-v1")
+		long := b.Label("image-signing-key-v10")
+
+		shortKey, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: short})
+		if err != nil {
+			t.Fatalf("Provision %s: %v", short, err)
+		}
+		longKey, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: long})
+		if err != nil {
+			t.Fatalf("Provision %s: %v", long, err)
+		}
+		if signingkey.SameKey(shortKey.Public, longKey.Public) {
+			t.Fatal("the two versions are the same key pair")
+		}
+
+		// Each label must resolve to its own key, not to the other and not
+		// to both.
+		gotShort, err := signingkey.Load(ctx, b.Adapter, s, short, pk11.P256)
+		if err != nil {
+			t.Fatalf("Load %s: %v", short, err)
+		}
+		if !signingkey.SameKey(gotShort.Public, shortKey.Public) {
+			t.Errorf("%q resolved to a different key — a prefix match would do exactly this", short)
+		}
+		gotLong, err := signingkey.Load(ctx, b.Adapter, s, long, pk11.P256)
+		if err != nil {
+			t.Fatalf("Load %s: %v", long, err)
+		}
+		if !signingkey.SameKey(gotLong.Public, longKey.Public) {
+			t.Errorf("%q resolved to a different key", long)
+		}
+
+		// And the label of the shorter one must still count as taken, so a
+		// second provisioning under it cannot succeed.
+		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: short}); !errors.Is(err, signingkey.ErrLabelTaken) {
+			t.Errorf("re-provisioning %q = %v, want ErrLabelTaken", short, err)
+		}
+	})
+}
+
+// TestProvision_DistinctKeysGetDistinctCKAIDs matters because of how cosign
+// resolves a key: crypto11 takes CKA_ID as authoritative and, when cosign is
+// configured with an id, uses it in preference to the label. Two keys
+// sharing an id would make that lookup ambiguous in a way no label check
+// could see.
+func TestProvision_DistinctKeysGetDistinctCKAIDs(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+
+		readID := func(label string) []byte {
+			t.Helper()
+			h, err := pk11.FindKeyByLabel(ctx, b.Adapter, s, pk11.ClassPrivateKey, label)
+			if err != nil {
+				t.Fatalf("FindKeyByLabel(%s): %v", label, err)
+			}
+			attrs, err := b.Adapter.GetAttributes(ctx, s, h, []pk11.AttributeType{pk11.AttrID})
+			if err != nil {
+				t.Fatalf("GetAttributes(%s): %v", label, err)
+			}
+			return attrs[0].Value
+		}
+
+		image := b.Label("image-signing-key-v8")
+		artifact := b.Label("artifact-signing-key-v8")
+		for _, label := range []string{image, artifact} {
+			if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: label}); err != nil {
+				t.Fatalf("Provision(%s): %v", label, err)
+			}
+		}
+
+		imageID, artifactID := readID(image), readID(artifact)
+		if len(imageID) == 0 || len(artifactID) == 0 {
+			t.Fatal("a signing key has an empty CKA_ID; crypto11 rejects such a key outright")
+		}
+		if bytes.Equal(imageID, artifactID) {
+			t.Errorf("the image and artifact keys share CKA_ID %x — cosign resolves by id in preference to label, "+
+				"so the two purposes would be indistinguishable to it", imageID)
+		}
+	})
+}

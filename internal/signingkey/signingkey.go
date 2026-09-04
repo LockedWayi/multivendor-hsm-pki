@@ -193,6 +193,19 @@ func Provision(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session,
 // pair as one already on the token.
 var ErrDuplicateKey = errors.New("signingkey: the token generated a key it had already generated")
 
+// FindDuplicateKey reports the label of a key on the token carrying the same
+// public point as pub, ignoring the object named by ownLabel, or "" when
+// there is none.
+//
+// Exported so the check can be tested against a real token on both backends
+// rather than only through the path that triggers it: forcing Provision to
+// generate a colliding key is not something a test can arrange on a backend
+// whose RNG works, and a guard nobody can exercise deliberately is a guard
+// nobody has seen work.
+func FindDuplicateKey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, ownLabel string, pub *ecdsa.PublicKey, curve pk11.ECCurve) (string, error) {
+	return findDuplicatePoint(ctx, adapter, s, ownLabel, pub, curve)
+}
+
 // findDuplicatePoint returns the label of another key on the token carrying
 // the same public point as pub, or "" when the key really is new.
 //
