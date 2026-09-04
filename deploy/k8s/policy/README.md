@@ -63,7 +63,7 @@ once when the newer kinds become the path Kyverno documents first.
 deploy/k8s/policy/policy-selftest.py
 ```
 
-Ten cases, each a **near miss**: a pod satisfying every rule except one,
+Fourteen cases, mostly **near misses**: a pod satisfying every rule except one,
 asserted to be refused with the message belonging to that rule — plus the
 compliant baseline, which must be admitted. The insecure pod in `testdata/`
 breaks every rule at once, so admission reports the first and the other
