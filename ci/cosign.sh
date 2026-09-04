@@ -42,11 +42,9 @@
 set -euo pipefail
 
 # Pinned. cosign's PKCS#11 support is a build tag, not a runtime flag, so
-# the asset name is part of the pin: the default cosign-linux-amd64 is
+# the asset name is part of the pin: the default cosign-linux-<arch> is
 # statically linked and cannot dlopen a module at all.
 COSIGN_VERSION="v3.1.3"
-COSIGN_ASSET="cosign-linux-pivkey-pkcs11key-amd64"
-COSIGN_SHA256="549398fbe5a2f930b4eb564c7bbe9588270566ffcc8c9cb45644c066714aa380"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="${HSM_PKI_COSIGN_DIR:-$REPO_ROOT/.local/bin}"
@@ -63,6 +61,31 @@ REKOR_API="https://rekor.sigstore.dev/api/v1/log/entries"
 
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { echo "cosign.sh: $*" >&2; exit 1; }
+
+# The digest is per architecture, so the architecture has to be resolved
+# before there is anything to pin against. The runner image's base is a
+# multi-arch manifest list, so on an arm64 host docker pulls an arm64
+# runtime -- and an amd64 binary mounted into it fails with `exec format
+# error`. Hardcoding amd64 would have made that the failure a reader on an
+# Apple Silicon machine meets first.
+#
+# An unknown architecture is refused rather than guessed at: cosign publishes
+# a pivkey-pkcs11key asset for exactly these two, and picking the wrong one
+# produces a binary that cannot run, which is a worse outcome than being told
+# so.
+case "$(uname -m)" in
+    x86_64)
+        COSIGN_ARCH="amd64"
+        COSIGN_SHA256="549398fbe5a2f930b4eb564c7bbe9588270566ffcc8c9cb45644c066714aa380" ;;
+    aarch64|arm64)
+        COSIGN_ARCH="arm64"
+        COSIGN_SHA256="43266ec58f867517ab60e46972a1700f72f277d4c62a039325a4af66e4a1a1e4" ;;
+    *)
+        die "no pinned cosign for architecture $(uname -m). cosign publishes
+the PKCS#11-capable build for linux/amd64 and linux/arm64 only; adding one
+means adding its digest here, verified the same way as the others." ;;
+esac
+COSIGN_ASSET="cosign-linux-pivkey-pkcs11key-$COSIGN_ARCH"
 
 verify_pinned_digest() {
     local actual
@@ -149,21 +172,7 @@ import json,sys
 print(json.load(open(sys.argv[1]))["verificationMaterial"]["tlogEntries"][0]["logIndex"])
 ' "$work/bundle.json")"
     if curl -sS --fail --max-time 30 "$REKOR_API?logIndex=$log_index" -o "$work/rekor.json"; then
-        python3 - "$work/rekor.json" "$digest" "$RELEASE_KEY" <<'PY'
-import base64, json, sys
-entries = json.load(open(sys.argv[1]))
-digest, key_path = sys.argv[2], sys.argv[3]
-pinned = open(key_path).read().strip()
-for uuid, entry in entries.items():
-    spec = json.loads(base64.b64decode(entry["body"]))["spec"]
-    logged = spec["data"]["hash"]["value"]
-    key = base64.b64decode(spec["signature"]["publicKey"]["content"]).decode().strip()
-    if logged != digest:
-        sys.exit(f"Rekor entry {uuid} records digest {logged}, not {digest}")
-    if key != pinned:
-        sys.exit(f"Rekor entry {uuid} records a different signing key")
-    print(f"    entry {uuid[:16]}... records this digest under the pinned key")
-PY
+        assert_rekor_records "$work/rekor.json" "$digest"
     else
         echo "    WARNING: could not reach Rekor. The first three checks passed," >&2
         echo "    so the bytes are the ones the release key signed; what is" >&2
@@ -185,6 +194,54 @@ PY
     log "ready: $COSIGN_BIN ($COSIGN_VERSION, $COSIGN_ASSET)"
 }
 
+# assert_rekor_records checks that Rekor's response for this log index
+# really records this digest under the pinned key.
+#
+# Extracted from fetch so it can be driven directly by
+# ci/cosign-selftest.sh. It was inline, and inline it hid a fail-open: a
+# loop over an empty response checks nothing and returns success, so a valid
+# but empty JSON object read as confirmation that the signature is publicly
+# logged. A guard nobody can point a test at is a guard nobody has seen work.
+assert_rekor_records() {
+    python3 - "$1" "$2" "$RELEASE_KEY" <<'PY'
+import base64, json, sys
+entries = json.load(open(sys.argv[1]))
+digest, key_path = sys.argv[2], sys.argv[3]
+pinned = open(key_path).read().strip()
+if not entries:
+    sys.exit("Rekor returned no entry for this log index, so nothing "
+             "confirms the signature is publicly logged")
+for uuid, entry in entries.items():
+    spec = json.loads(base64.b64decode(entry["body"]))["spec"]
+    logged = spec["data"]["hash"]["value"]
+    key = base64.b64decode(spec["signature"]["publicKey"]["content"]).decode().strip()
+    if logged != digest:
+        sys.exit(f"Rekor entry {uuid} records digest {logged}, not {digest}")
+    if key != pinned:
+        sys.exit(f"Rekor entry {uuid} records a different signing key")
+    print(f"    entry {uuid[:16]}... records this digest under the pinned key")
+PY
+}
+
+# ensure_runner_image makes sure the runner matches ci/cosign.Dockerfile.
+#
+# Called from both entry points, because they each need it and neither can
+# assume the other ran first: on a fresh checkout `fetch` reached its last
+# check with no image to run and failed there -- fail-closed, but the script
+# was unusable on exactly the machine CLAUDE.md §1 cares most about.
+ensure_runner_image() {
+    # Built every time rather than skipped when the tag exists. Measured: an
+    # existence check returns a *stale* image after ci/cosign.Dockerfile
+    # changes -- adding a package to it and re-running left the old image in
+    # place, so the signing environment silently stopped matching the file
+    # that is supposed to define it. Docker's layer cache makes an unchanged
+    # rebuild cost about a second, which is the whole price of removing that
+    # class of bug. (Alternative: stamp the image with a label carrying the
+    # Dockerfile's digest and compare. Correct, and it saves the second, but
+    # it is a second source of truth about when a rebuild is needed.)
+    docker build -q -f "$REPO_ROOT/ci/cosign.Dockerfile" -t "$RUNNER_IMAGE" "$REPO_ROOT" >/dev/null
+}
+
 # assert_pkcs11_build confirms that the binary at $1 was built with the
 # pkcs11key tag, by asking it to do something only that build can attempt.
 #
@@ -201,18 +258,6 @@ PY
 #
 # Anything else -- a docker failure, a changed message in a future release --
 # is unrecognised and fails closed rather than being read as a pass.
-# ensure_runner_image builds the runner if it is not already present.
-#
-# Called from both entry points, because they each need it and neither can
-# assume the other ran first: on a fresh checkout `fetch` reached its last
-# check with no image to run and failed there -- fail-closed, but the script
-# was unusable on exactly the machine CLAUDE.md §1 cares most about.
-ensure_runner_image() {
-    docker image inspect "$RUNNER_IMAGE" >/dev/null 2>&1 && return 0
-    log "building the cosign runner image"
-    docker build -q -f "$REPO_ROOT/ci/cosign.Dockerfile" -t "$RUNNER_IMAGE" "$REPO_ROOT" >/dev/null
-}
-
 assert_pkcs11_build() {
     local binary="$1" out
     ensure_runner_image
