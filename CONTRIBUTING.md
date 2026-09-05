@@ -18,7 +18,7 @@ implementation, but it is built to real contribution standards.
    ci/scan-deps.sh                                    # trivy fs + govulncheck
    docker build -f deploy/docker/Dockerfile -t hsm-pki-server:local .
    ci/scan-image.sh hsm-pki-server:local              # trivy image + SBOM
-   ci/terraform-scan.sh                               # trivy config + secrets
+   ci/terraform-scan.sh                               # tofu fmt/validate + trivy
    ```
 
 5. Open a PR. In the description, include a short **reasoning note** for any

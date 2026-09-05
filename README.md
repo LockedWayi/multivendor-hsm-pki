@@ -50,7 +50,8 @@ The baseline path develops and tests against **SoftHSM2**, so the full suite —
 the capstone auto-unseal mechanism included, once it lands — runs in CI with no
 HSM and no proprietary SDK (`.github/workflows/ci.yml`: the race-detector
 suite, the coverage floor, Semgrep, a full-history secret scan, dependency
-and reachability scanning, and an image scan with an SBOM — all on every PR).
+and reachability scanning, an image scan with an SBOM, and infrastructure
+scanning — all on every PR).
 Clone it, run `go test ./...` in the provided dev container, and everything CI
 checks runs on your machine too.
 

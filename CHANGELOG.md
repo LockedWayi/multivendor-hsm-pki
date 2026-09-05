@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **The OpenTofu tree is formatted, validated and scanned in CI**
+  (Phase 5.4). `ci/terraform-scan.sh` existed from Phase 3 and now runs as a
+  job, extended with `tofu fmt -check` and `tofu validate` — not security
+  checks themselves, but what makes the security checks worth reading, since
+  `trivy config` produces no findings for a file it cannot parse and an
+  invalid configuration is otherwise indistinguishable from a clean one.
+  `tofu plan` is deliberately absent until there is a deploy target to plan
+  against.
 - **Semgrep as a blocking SAST gate** (Phase 5.2), `ci/scan-code.sh` with
   `p/golang` and `p/security-audit`. It reads what was *written* here, which
   is the one question none of the other scanners ask. The three pre-existing
@@ -43,6 +51,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   digest-pinned builder image from `deploy/docker/Dockerfile` rather than on
   the runner's Go, because part of its answer is about the standard library
   and that is a property of the toolchain that ships.
+- **`ci/terraform-scan.sh` runs `trivy` and `tofu` in digest-pinned
+  containers** rather than off the host's PATH, where "it passed locally"
+  was a statement about that machine. It also cleans up the root-owned
+  `.terraform/` directories the containerised `tofu init` leaves inside a
+  user-owned checkout.
 - **`CONTRIBUTING.md` no longer claims `gitleaks` blocks merge.** It cannot,
   on this plan; the report-only decision of 2026-09-05 had been applied to
   the README but not here.
