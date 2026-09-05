@@ -12,7 +12,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD="$HERE/assert-publishable.sh"
 
-ALL_GREEN="suite=success sast=success gitleaks=success deps=success image=success terraform=success"
+ALL_GREEN="suite=success sast=success gitleaks=success deps=success image=success terraform=success trustchain=success"
 
 failures=0
 pass() { printf '  ok      %s\n' "$1"; }
@@ -58,7 +58,7 @@ refuses "a tag push never publishes" "not 'refs/heads/main'" \
     PUBLISH_EVENT=push PUBLISH_REF=refs/tags/v9.9.9 PUBLISH_GATES="$ALL_GREEN"
 
 echo "== a gate that did not pass =="
-for gate in suite sast gitleaks deps image terraform; do
+for gate in suite sast gitleaks deps image terraform trustchain; do
     for result in failure cancelled skipped ""; do
         refuses "$gate=${result:-<empty>} blocks the publish" "gate '$gate' is" \
             PUBLISH_EVENT=push PUBLISH_REF=refs/heads/main \
@@ -67,7 +67,7 @@ for gate in suite sast gitleaks deps image terraform; do
 done
 
 echo "== a gate that went missing =="
-for gate in suite sast gitleaks deps image terraform; do
+for gate in suite sast gitleaks deps image terraform trustchain; do
     refuses "removing $gate blocks the publish" "gate '$gate' reported no result" \
         PUBLISH_EVENT=push PUBLISH_REF=refs/heads/main \
         PUBLISH_GATES="$(printf '%s' "$ALL_GREEN" | sed "s/${gate}=success//")"

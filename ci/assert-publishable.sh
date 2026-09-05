@@ -45,7 +45,7 @@ set -euo pipefail
 
 # The gates that must have passed for an artifact to be publishable. This
 # list is the contract; ci.yml must pass exactly these and no others.
-REQUIRED_GATES="suite sast gitleaks deps image terraform"
+REQUIRED_GATES="suite sast gitleaks deps image terraform trustchain"
 
 die() { echo "assert-publishable: $*" >&2; exit 1; }
 
