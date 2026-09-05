@@ -7,6 +7,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **A coverage badge in the README that CI verifies rather than publishes**
+  (Phase 5.1). `docs/coverage.svg` is committed like a lockfile;
+  `COVERAGE_BADGE_CHECK=1` recomputes it in CI and fails on a mismatch. The
+  alternatives — a workflow with `contents: write` pushing to the default
+  branch, or a token and a third-party badge service — both add a
+  credential to a pipeline whose subject is supply-chain provenance. The
+  figure rounds down, because a coverage badge that rounds up overstates.
+- **Go module and build caching in CI**, mounted into the dev container
+  rather than left on the runner where the container could not see it.
 - **The OpenTofu tree is formatted, validated and scanned in CI**
   (Phase 5.4). `ci/terraform-scan.sh` existed from Phase 3 and now runs as a
   job, extended with `tofu fmt -check` and `tofu validate` — not security
