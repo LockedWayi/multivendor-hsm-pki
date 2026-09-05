@@ -6,6 +6,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 ### Added
+- **Routine CA rotation exists in code, not only in prose**
+  (`internal/ca/reissue.go`, `hsm-pki-keytool reissue-intermediate`).
+  CLAUDE.md §3.7 has always said the hierarchy rotates by "re-issuing the
+  intermediate (routine)"; until now no code path did that — `RunCeremony`
+  generates both tiers in one run, so the only way to get a new
+  intermediate was to mint a new root, which is the *exceptional* case and
+  rebuilds every trust store that holds it. `reissue-intermediate` signs a
+  new intermediate, over a new key, under the **existing** root, and
+  cannot generate a root at all: a root key it cannot find is a hard
+  error, never a fresh key pair. The previous intermediate stays valid —
+  the overlap is the transition window, not an oversight. Verified on
+  SoftHSM2 with `openssl verify` accepting both intermediates against the
+  one root; the ProtectServer half is tracked, not claimed
+  (`docs/phases/phase-4-container-k8s.md` 4.11).
 - **The service image** (`deploy/docker/Dockerfile`): multi-stage, cgo-enabled
   build onto a digest-pinned `distroless/cc` base — 53.8 MB, no shell, no
   package manager, non-root UID 65532, read-only-root-filesystem compatible.
