@@ -1,6 +1,6 @@
 # Copy to terraform.tfvars (gitignored). staging is plan-only for this
 # phase -- see the "Dev/staging with only one real VPS" decision in
-# docs/phases/phase-3-infrastructure.md -- so these values are illustrative
+# -- so these values are illustrative
 # of how a second environment would differ, not a real second VPS to
 # import or apply against.
 #

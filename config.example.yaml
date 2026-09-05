@@ -5,7 +5,7 @@
 # the NAME of the environment variable the PIN is read from at startup. That
 # keeps the secret out of the config file, out of the image, and out of any
 # backup of either — and it means a leaked config.yaml leaks nothing. Do not
-# "simplify" this into a literal `pin:` field (CLAUDE.md §3.1, §3.2).
+# "simplify" this into a literal `pin:` field.
 
 server:
   listen_addr: "0.0.0.0:8080"
@@ -13,7 +13,7 @@ server:
 pkcs11:
   # Which vendor adapter to use: "softhsm2" or "protectserver".
   # Both implement the same VendorAdapter interface — see
-  # docs/architecture.md, "The core idea: one interface, many vendors".
+  #
   adapter: "softhsm2"
 
   # Session budget enforced by the adapter. A session is rejected once either
@@ -33,7 +33,7 @@ pkcs11:
     pin_env: "SOFTHSM2_PIN"
 
   # Thales ProtectServer, via the ProtectToolkit-C PKCS#11 module. Requires
-  # your own ProtectToolkit entitlement; see docs/protectserver-setup.md for
+  # your own ProtectToolkit entitlement; for
   # installation, token initialization, and how to verify the module loads.
   # This path cannot run in public CI — the SDK is proprietary and is never
   # vendored into this repository.
@@ -46,13 +46,13 @@ pkcs11:
     # uninitialized, so this has no working default.
     workspace_label: "CHANGE_ME"
     # Environment variable holding the user PIN — not the PIN itself.
-    # docs/protectserver-setup.md uses a throwaway dev PIN for local
+    # uses a throwaway dev PIN for local
     # emulator setup; never reuse it anywhere real.
     pin_env: "PROTECTSERVER_PIN"
 
 ca:
   # ECDSA P-256 is the default curve; P-384 is available where a larger
-  # security margin is warranted (see docs/architecture.md).
+  # security margin is warranted.
   curve: "P-256"
   # Validity window for the leaf certificates this service issues. The
   # intermediate's own validity was fixed at ceremony time and is not
@@ -66,11 +66,11 @@ ca:
   # on a separate token reachable only from the offline ceremony
   # (cmd/hsm-pki-keytool), so compromising this service cannot reach it.
   # Both values below come from a ceremony run — see
-  # docs/phases/phase-3b-pki-hardening.md.
+  #
 
   # CKA_LABEL of the intermediate key pair the ceremony created. Versioned,
   # so rotation provisions -v2 alongside -v1 rather than overwriting it
-  # (CLAUDE.md 3.7).
+  #
   intermediate_key_label: "ca-intermediate-key-v1"
   # The ceremony-produced intermediate certificate. Contains no private key
   # material. The service refuses to start if this is self-signed, since a

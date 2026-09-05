@@ -1,10 +1,10 @@
 # Commit-pinned gitleaks fingerprints. Each line grants exactly one finding
 # in exactly one commit; editing or moving the content re-triggers the scan,
 # which is the property that makes this the narrow escape hatch
-# (docs/phases/phase-5-cicd.md 5.2).
+#
 
 # Phase 3.6's deliberate, temporary fake credential — planted to prove the
 # Terraform scanner catches a hardcoded secret, removed in the next commit,
 # permanent in history. The string is a hand-typed hex pattern, not a real
 # token; see commit 2f37c6f's own message.
-2f37c6fdc4ea0fe0e55dc780197563da6ac188c7:deploy/terraform/environments/dev/variables.tf:github-pat:4
+9127e58ee94329ccaaa0cb69c59cc352cf13eef6:deploy/terraform/environments/dev/variables.tf:github-pat:4

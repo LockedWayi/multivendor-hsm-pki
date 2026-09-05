@@ -19,7 +19,7 @@ import (
 // midway through using. Verified identical on SoftHSM2 2.6.1 and
 // ProtectToolkit 7.3.3 — the symmetry across two unrelated implementations
 // is what establishes it as the spec's model rather than a vendor quirk
-// (docs/pkcs11-vendor-notes.md).
+//
 //
 // The consequence is that a per-operation login/logout cycle cannot be made
 // concurrency-safe by serializing the individual calls, because the

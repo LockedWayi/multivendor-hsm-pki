@@ -18,7 +18,7 @@
 # <asset>-kms.sigstore.json, signed by the long-lived release key published
 # as release-cosign.pub. The second needs nothing but that public key and an
 # ECDSA verifier, so it is checked here with openssl -- an implementation
-# that is not cosign and did not produce the signature (CLAUDE.md §3.10).
+# that is not cosign and did not produce the signature.
 #
 # Three independent parties have to agree before the binary is used:
 #
@@ -331,7 +331,7 @@ PY
 # Called from both entry points, because they each need it and neither can
 # assume the other ran first: on a fresh checkout `fetch` reached its last
 # check with no image to run and failed there -- fail-closed, but the script
-# was unusable on exactly the machine CLAUDE.md §1 cares most about.
+# was unusable on exactly the machine this project’s priority cares most about.
 ensure_runner_image() {
     # Built every time rather than skipped when the tag exists. Measured: an
     # existence check returns a *stale* image after ci/cosign.Dockerfile
@@ -411,7 +411,7 @@ Provision the keys first:  deploy/docker/provision-signing-keys.sh
     # The PIN reaches cosign as an environment variable and never as
     # pin-value= in the PKCS#11 URI: a URI is a command-line argument, so it
     # lands in ps output, shell history and any log that echoes the command
-    # (CLAUDE.md §3.1).
+    #
     local pin_args=()
     if [ -n "${COSIGN_PKCS11_PIN:-}" ]; then
         pin_args=(-e COSIGN_PKCS11_PIN)

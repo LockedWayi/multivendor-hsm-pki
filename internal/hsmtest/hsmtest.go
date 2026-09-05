@@ -15,13 +15,12 @@
 // # The rule this package exists to enforce
 //
 // Every test that touches a token runs against every backend the
-// environment provides (CLAUDE.md §2.4). An abstraction exercised against
+// environment provides. An abstraction exercised against
 // one implementation is a guess, and this repository has the scar to prove
 // it: CKA_SENSITIVE was false on every private key it ever generated, and
 // the SoftHSM2-only suite stayed green for the whole project because
 // SoftHSM2 declines to disclose a key it is permitted to disclose. The
 // second backend is what turned that from a latent defect into a fixed one
-// (docs/pkcs11-vendor-notes.md).
 //
 // # Availability, and why a missing backend skips rather than fails
 //
@@ -29,7 +28,7 @@
 // present and carries CI. Every other backend runs only when its
 // environment variables are set, and skips otherwise — so a contributor
 // with no HSM gets an honest green rather than a red that means nothing,
-// and nothing vendor-only is ever reported as CI-verified (CLAUDE.md §2.3).
+// and nothing vendor-only is ever reported as CI-verified.
 package hsmtest
 
 import (
@@ -124,7 +123,7 @@ func (b *Backend) Cleanup(t *testing.T) {
 	//
 	// It stayed invisible until the duplicate-key check turned leftover
 	// keys into a hard failure on a backend whose RNG repeats
-	// (docs/lessons.md §8). A cleanup that reports failure into a log
+	//. A cleanup that reports failure into a log
 	// nobody reads is a cleanup that does not happen, so this now retries
 	// rather than trusting a flag to tell it whether it can.
 	if !b.released() {
@@ -242,7 +241,7 @@ func (b *Backend) released() bool {
 // over one library. Vendors disagree about whether that is allowed:
 // SoftHSM2 2.6.1 tolerates a second C_Initialize through a separate dlopen
 // handle, while ProtectToolkit 7.3.3 rejects it with
-// CKR_CRYPTOKI_ALREADY_INITIALIZED (docs/pkcs11-vendor-notes.md). Releasing
+// CKR_CRYPTOKI_ALREADY_INITIALIZED. Releasing
 // first is what makes such a test portable across both.
 //
 // Safe to call more than once, and safe not to call at all: the backend's
@@ -428,13 +427,13 @@ func setupSoftHSM2(t *testing.T) *Backend {
 
 // setupProtectServer wires in the maintainer's own ProtectToolkit tokens.
 // Unlike SoftHSM2 it provisions nothing: the user tokens are created once,
-// by hand, with ctconf/ctkmu (docs/protectserver-setup.md §3b).
+// by hand, with ctconf/ctkmu.
 func setupProtectServer(t *testing.T) *Backend {
 	t.Helper()
 	modulePath := os.Getenv("PROTECTSERVER_MODULE")
 	if modulePath == "" {
-		t.Skip("PROTECTSERVER_MODULE not set — see docs/protectserver-setup.md; " +
-			"this backend is maintainer-verified, never CI-verified (CLAUDE.md §2.3)")
+		t.Skip("PROTECTSERVER_MODULE not set: " +
+			"this backend is maintainer-verified, never CI-verified")
 	}
 	primaryLabel := os.Getenv("PROTECTSERVER_INTERMEDIATE_WORKSPACE")
 	secondaryLabel := os.Getenv("PROTECTSERVER_ROOT_WORKSPACE")
@@ -443,7 +442,7 @@ func setupProtectServer(t *testing.T) *Backend {
 	if primaryLabel == "" || secondaryLabel == "" || primaryPIN == "" || secondaryPIN == "" {
 		t.Skip("ProtectServer needs PROTECTSERVER_INTERMEDIATE_WORKSPACE, " +
 			"PROTECTSERVER_ROOT_WORKSPACE, PROTECTSERVER_INTERMEDIATE_PIN and " +
-			"PROTECTSERVER_ROOT_PIN — see docs/protectserver-setup.md")
+			"PROTECTSERVER_ROOT_PIN")
 	}
 	if primaryLabel == secondaryLabel {
 		t.Fatal("PROTECTSERVER_INTERMEDIATE_WORKSPACE and PROTECTSERVER_ROOT_WORKSPACE " +
@@ -475,7 +474,7 @@ func setupProtectServer(t *testing.T) *Backend {
 //
 // The serial check is not incidental: a Workspace built by hand rather than
 // returned by Workspaces() has none, and the ceremony's token-identity
-// guard compares serials rather than labels (CLAUDE.md §3.8). A backend
+// guard compares serials rather than labels. A backend
 // that cannot supply one cannot be used for the two-token tests, and it is
 // better to say so here than to fail inside the ceremony.
 func MustFindWorkspace(t *testing.T, adapter pk11.VendorAdapter, label string) pk11.Workspace {

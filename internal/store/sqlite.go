@@ -87,7 +87,7 @@ func OpenSQLite(ctx context.Context, path string, logger *slog.Logger, crlNumber
 	}
 
 	// One connection, deliberately. The embedded store is single-writer by
-	// design at this scale (docs/architecture.md), and serializing at the
+	// design at this scale, and serializing at the
 	// pool removes SQLITE_BUSY as a failure mode entirely rather than
 	// managing it with retries. If replicas ever exist this moves to an
 	// external database, which is the swap the Store interface exists to
@@ -259,7 +259,7 @@ func (s *SQLite) NextCRLNumber(ctx context.Context) (*big.Int, error) {
 			// A counter we cannot parse is worse than one we do not have:
 			// continuing would mean guessing, and a guess below the real
 			// value strands every future CRL. Reject rather than repair
-			// (CLAUDE.md §3.4).
+			//
 			return nil, fmt.Errorf("store: CRL counter %q is not a valid integer; refusing to guess the next number", stored)
 		}
 		next = new(big.Int).Add(current, big.NewInt(1))

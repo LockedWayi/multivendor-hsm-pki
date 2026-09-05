@@ -4,7 +4,7 @@ package ca
 // touches a token. Every property here is a property of a certificate or of
 // a parameter struct, not of a key on an HSM, so these build certificates
 // in software: an HSM would add minutes of setup and prove nothing extra
-// (CLAUDE.md §2.4). The token-touching half — the real rotation, the
+//. The token-touching half — the real rotation, the
 // missing-root-key refusal, the overwrite guard — is in reissue_test.go and
 // runs against every backend.
 
@@ -100,7 +100,7 @@ func TestCheckRootMaySign_Rejects(t *testing.T) {
 			wantErr:  ErrNotAnIntermediate,
 		},
 		{
-			// CLAUDE.md §3.11: the issuing certificate must assert the key
+			// the issuer-authority rule: the issuing certificate must assert the key
 			// usage the operation needs.
 			name:     "no keyCertSign",
 			root:     softRoot(t, func(c *x509.Certificate) { c.KeyUsage = x509.KeyUsageCRLSign }),
@@ -126,7 +126,7 @@ func TestCheckRootMaySign_Rejects(t *testing.T) {
 			wantErr:  ErrIssuerNotValid,
 		},
 		{
-			// CLAUDE.md §3.11: the issuer must be able to cover the
+			// the issuer-authority rule: the issuer must be able to cover the
 			// lifetime about to be granted. Rejected, never clamped.
 			name:     "intermediate would outlive the root",
 			root:     softRoot(t, func(c *x509.Certificate) { c.NotAfter = time.Now().Add(year) }),
@@ -151,7 +151,7 @@ func TestCheckRootMaySign_Rejects(t *testing.T) {
 // however much its Subject claims to be. checkRootMaySign verifies the
 // signature rather than comparing Subject to Issuer, because those strings
 // are operator-controlled and say nothing about who actually signed
-// (CLAUDE.md §3.8). The fixture is built to make the two disagree: Subject
+// . The fixture is built to make the two disagree: Subject
 // and Issuer are identical strings, and the signature is by a different key.
 func TestCheckRootMaySign_RejectsNonSelfSignedRoot(t *testing.T) {
 	const sharedCN = "soft test root"
@@ -250,7 +250,7 @@ func TestCheckRootMaySign_VerdictDependsOnTheInstantGiven(t *testing.T) {
 }
 
 // The parameter validation that runs before any key is generated
-// (CLAUDE.md §3.9). Every case here must be caught without an HSM being
+// . Every case here must be caught without an HSM being
 // reachable at all, which is what makes it safe to run this as pure logic.
 func TestReissueIntermediateParams_Validate(t *testing.T) {
 	root := softRoot(t, nil)
@@ -285,7 +285,7 @@ func TestReissueIntermediateParams_Validate(t *testing.T) {
 		{"missing root CRL URL", func(p *ReissueIntermediateParams) { p.RootCRLURL = "" }},
 		{"missing root cert URL", func(p *ReissueIntermediateParams) { p.RootCertURL = "" }},
 		{"nil root certificate", func(p *ReissueIntermediateParams) { p.RootCert = nil }},
-		// An empty subject is checkable without an HSM, so §3.9 says reject
+		// An empty subject is checkable without an HSM, so validating before mutating says reject
 		// it before the first key exists. validateCSR applies the same test
 		// to a leaf; this one names a CA.
 		{"empty intermediate subject", func(p *ReissueIntermediateParams) { p.IntermediateSubject = pkix.Name{} }},

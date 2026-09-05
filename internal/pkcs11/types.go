@@ -3,10 +3,10 @@
 // The interface (VendorAdapter) is designed against the standard PKCS#11
 // surface only — no vendor extension leaks into it. A concrete adapter
 // (SoftHSM2Adapter, ProtectServerAdapter today; nShield/Luna later, see
-// docs/phases/phase-1-pkcs11-core.md and docs/phases/phase-7-hsm-unseal.md)
+// and)
 // resolves vendor quirks internally and presents this one interface, the
 // way a travel power adapter presents one plug to an appliance regardless
-// of which wall socket is behind it (docs/architecture.md).
+// of which wall socket is behind it.
 package pkcs11
 
 import (
@@ -62,7 +62,7 @@ const (
 )
 
 // SessionOptions bounds a session's lifetime. Phase 1 requires both an idle
-// timeout and a maximum TTL be enforced (docs/phases/phase-1-pkcs11-core.md)
+// timeout and a maximum TTL be enforced
 // so a forgotten session cannot hold a login — and an HSM session slot —
 // open indefinitely.
 type SessionOptions struct {
@@ -82,7 +82,7 @@ func DefaultSessionOptions() SessionOptions {
 
 // AttributeType identifies a PKCS#11 object attribute (a CKA_* constant).
 // Re-exported here so callers never need to import miekg/pkcs11 directly —
-// this package is the only vendor-facing surface (CLAUDE.md §6).
+// this package is the only vendor-facing surface.
 type AttributeType uint
 
 const (
@@ -137,7 +137,7 @@ const (
 //
 // PKCS#11 encodes these as a native CK_ULONG, whose width is platform-
 // dependent (4 bytes on Windows' LLP64 model, 8 bytes on Linux/macOS's
-// LP64 model). This service targets Linux containers only (CLAUDE.md §6),
+// LP64 model). This service targets Linux containers only,
 // so this hard-codes the 8-byte little-endian LP64 encoding rather than
 // taking on a runtime width check for a platform this project never runs
 // on. A caller building attributes by hand with the wrong width is exactly
@@ -175,7 +175,7 @@ type Mechanism struct {
 type ObjectHandle uint
 
 // ECCurve selects the curve for GenerateKeyPair. The zero value is P256,
-// matching the platform default (CLAUDE.md §3.3, docs/architecture.md).
+// matching the platform default.
 type ECCurve int
 
 const (
@@ -187,7 +187,7 @@ const (
 // KeyPairRequest carries the parameters for generating an asymmetric key
 // pair. Phase 1 supports EC only — the CA (Phase 2) is ECDSA P-256 by
 // default and this is the key type it needs; RSA support is deferred until
-// a phase actually requires it (CLAUDE.md: no speculative abstraction).
+// a phase actually requires it.
 type KeyPairRequest struct {
 	Curve  ECCurve
 	Label  string

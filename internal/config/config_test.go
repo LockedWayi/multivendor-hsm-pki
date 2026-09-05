@@ -306,7 +306,7 @@ func TestConfig_NoRootKeyReferences(t *testing.T) {
 			name, _, _ := strings.Cut(tag, ",")
 			for _, bad := range forbidden {
 				if name == bad {
-					t.Fatalf("%s carries a %q field: the service's configuration must never be able to name the root's token or key (docs/phases/phase-3b-pki-hardening.md)",
+					t.Fatalf("%s carries a %q field: the service's configuration must never be able to name the root's token or key",
 						typ.Name(), name)
 				}
 			}

@@ -8,13 +8,13 @@
 # The reference may be a tag; what gets signed never is. A signature is made
 # over a digest, and a tag is a mutable pointer -- signing "the thing this
 # name points at right now" attests to nothing that survives the next push
-# (CLAUDE.md §3.8). So the tag is resolved against the registry first and the
+#. So the tag is resolved against the registry first and the
 # digest form is what reaches cosign, and what the message prints.
 #
 # The key is image-signing-key-v1 on the supply-chain token. It signs images
 # and nothing else: the release binary is signed by artifact-signing-key-v1
 # and certificates by the CA, because a compromise of one must not be able to
-# do the others' job (CLAUDE.md §3.6). Proven rather than asserted -- the
+# do the others' job. Proven rather than asserted -- the
 # verification below is repeated with the artifact key in
 # deploy/k8s/policy/policy-selftest.py, and it fails.
 set -euo pipefail
@@ -35,7 +35,7 @@ REF="${1:-}"
 [ -n "$REF" ] || die "usage: ci/sign-image.sh <image-reference>"
 [ -n "${COSIGN_PKCS11_PIN:-}" ] || die \
     "set COSIGN_PKCS11_PIN. The PIN reaches cosign as an environment
-variable and never as pin-value= in the PKCS#11 URI (CLAUDE.md §3.1)."
+variable and never as pin-value= in the PKCS#11 URI."
 
 case "$REF" in
     *@sha256:*)

@@ -41,7 +41,7 @@ import (
 // use by pinResolver (shared with the ceremony command, one line above this
 // one in main.go), handed straight to adapter.LoginToken, and wrapped in
 // pkcs11.SecurePIN there. No PIN value is stored, logged, or passed on a
-// command line (CLAUDE.md §3.1).
+// command line.
 func runProvisionSigningKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("provision-signing-key", flag.ExitOnError)
 
@@ -72,7 +72,7 @@ func runProvisionSigningKeyCmd(args []string) error {
 		}
 	}
 	// Everything checkable without the token is checked before the token is
-	// touched (CLAUDE.md §3.9). The label shape is signingkey's rule, not
+	// touched. The label shape is signingkey's rule, not
 	// this command's, so it is asked rather than restated — a second copy of
 	// the pattern here would be a second place for it to drift.
 	if err := signingkey.ValidateLabel(*keyLabel); err != nil {
@@ -106,7 +106,7 @@ func runProvisionSigningKeyCmd(args []string) error {
 	// reason the ceremony writes its certificates first: provisionSigningKey
 	// can return a usable key alongside a teardown error, and the key pair
 	// it describes cannot be regenerated because its label is now taken
-	// (CLAUDE.md §3.9). Discarding the public half would leave an operator
+	//. Discarding the public half would leave an operator
 	// with a key on a token and no published way to verify anything it signs.
 	if key.Public != nil {
 		if err := writePublicKeyPEM(*publicKeyOut, key); err != nil {
@@ -116,7 +116,7 @@ func runProvisionSigningKeyCmd(args []string) error {
 			ws.Label, ws.Serial, key.Label, *curveName, *publicKeyOut)
 		// Reported because they were read back off the token rather than
 		// assumed from the template that asked for them — the distinction
-		// this platform has paid to learn twice (docs/lessons.md §1, §6).
+		// this platform has paid to learn twice.
 		fmt.Printf("token reports CKA_SENSITIVE=%t CKA_EXTRACTABLE=%t — the private key stays on the token\n",
 			key.Sensitive, key.Extractable)
 	}
@@ -132,7 +132,7 @@ func runProvisionSigningKeyCmd(args []string) error {
 // It may return a valid Key alongside a non-nil error: a logout or session
 // close that fails after the key pair was generated does not un-generate it,
 // and the caller needs the public half more than it needs a tidy signature
-// (CLAUDE.md §3.9). The ceremony's withTokenLogin makes the same trade for
+// . The ceremony's withTokenLogin makes the same trade for
 // the same reason.
 func provisionSigningKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), params signingkey.Params) (key signingkey.Key, err error) {
 	if adapter.TokenLoggedIn() {

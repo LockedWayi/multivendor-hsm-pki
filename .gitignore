@@ -12,7 +12,7 @@ config.yml
 
 # Proprietary vendor SDK material (Thales ProtectToolkit and friends).
 # Licensed, non-redistributable, and never vendored into this repository —
-# see docs/protectserver-setup.md. These patterns are a safety net, not the
+#. These patterns are a safety net, not the
 # policy; the policy is that vendor code lives outside the repo entirely.
 libctsw.so
 libcthsm.so
@@ -41,5 +41,5 @@ coverage.txt
 
 # Local run state created by deploy/docker/run-local.sh: SoftHSM2 tokens
 # (which hold real private keys, throwaway or not), ceremony artifacts, and
-# the CA database. Never committed -- CLAUDE.md §3.1, §3.2.
+# the CA database. Never committed -- the key-and-PIN rule and the no-secrets rule.
 .local/

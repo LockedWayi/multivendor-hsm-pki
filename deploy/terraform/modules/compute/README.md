@@ -3,7 +3,7 @@
 Wraps the single `hostinger_vps` resource this platform manages: the
 maintainer's own, already-existing Hostinger VPS -- the same machine this
 repository is developed on. See "Provider and blast-radius control" in
-[`docs/phases/phase-3-infrastructure.md`](../../../../docs/phases/phase-3-infrastructure.md)
+[](../../../../)
 for the full reasoning; this README covers the module itself.
 
 This module never provisions a new VPS. It only ever *imports* one that
@@ -51,7 +51,7 @@ tofu -chdir=deploy/terraform/environments/dev import \
 After import, run `tofu -chdir=deploy/terraform/environments/dev plan`
 and confirm the plan is empty -- or only the attribute changes actually
 intended -- before ever running `apply` against this resource. This step
-is **maintainer-verified, not CI-verified** (CLAUDE.md §2.3): CI has no
+is **maintainer-verified, not CI-verified**: CI has no
 path to the maintainer's real Hostinger account, and none should be given
 one.
 

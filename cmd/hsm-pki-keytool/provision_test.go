@@ -42,8 +42,8 @@ func provisionArgs(t *testing.T, b *hsmtest.Backend, dir, keyLabel string) []str
 // TestRunProvisionSigningKeyCmd_WritesAPublicKeyAVerifierCanUse runs the
 // command the way an operator does and then reads its output the way a
 // verifier will — through the standard library's generic PKIX path, not
-// through anything that knows how this repository wrote it (CLAUDE.md
-// §3.10).
+// through anything that knows how this repository wrote it (the engineering contract
+// independent verification).
 func TestRunProvisionSigningKeyCmd_WritesAPublicKeyAVerifierCanUse(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		dir := t.TempDir()
@@ -79,7 +79,7 @@ func TestRunProvisionSigningKeyCmd_WritesAPublicKeyAVerifierCanUse(t *testing.T)
 
 // TestRunProvisionSigningKeyCmd_RejectsAnUnversionedLabelBeforeTouchingTheToken
 // pins the ordering, not just the refusal. Key generation is irreversible,
-// so a typo has to be caught while it still costs nothing (CLAUDE.md §3.9)
+// so a typo has to be caught while it still costs nothing
 // — the evidence that it was is that no output file was created and no PIN
 // was ever needed.
 func TestRunProvisionSigningKeyCmd_RejectsAnUnversionedLabelBeforeTouchingTheToken(t *testing.T) {
@@ -194,7 +194,7 @@ func TestRun_RoutesTheProvisionSubcommand(t *testing.T) {
 // real backend. ProtectToolkit-C 7.3.3 in software emulation seeds its RNG
 // per C_Initialize, so the first key pair generated after each library
 // initialisation is byte-for-byte identical (measured 2026-09-04,
-// docs/pkcs11-vendor-notes.md). Every attribute of the result was correct —
+// ). Every attribute of the result was correct —
 // distinct labels, distinct CKA_ID, sensitive, non-extractable — and the
 // platform's purpose separation was gone.
 //
@@ -226,7 +226,7 @@ func TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey(t *testing.T) {
 			}
 			if string(imagePEM) == string(artifactPEM) {
 				t.Fatal("two invocations produced one key pair under two labels: " +
-					"a compromise of the image key would also sign releases (CLAUDE.md §3.6)")
+					"a compromise of the image key would also sign releases")
 			}
 		case errors.Is(err, signingkey.ErrDuplicateKey):
 			// The token repeated itself and the platform refused. Two
@@ -291,9 +291,9 @@ func assertLabelIsFree(t *testing.T, b *hsmtest.Backend, label string) {
 // its own C_Initialize. A token that reseeds gives two different keys; a
 // token that does not gives the same key twice — measured on
 // ProtectToolkit-C 7.3.3 in software emulation, where C_GenerateRandom
-// repeats byte for byte too (docs/lessons.md §8). Either is survivable. What
+// repeats byte for byte too. Either is survivable. What
 // is not survivable is the third outcome: two labels quietly naming one key
-// pair, which is the key reuse CLAUDE.md §3.6 forbids.
+// pair, which is the key reuse purpose separation forbids.
 //
 // So this asserts the disjunction and logs which branch the backend took,
 // so a new vendor's behaviour is recorded by running the suite rather than

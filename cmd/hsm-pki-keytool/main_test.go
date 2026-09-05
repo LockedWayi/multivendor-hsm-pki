@@ -17,13 +17,13 @@ func requireSoftHSM2(t *testing.T) string {
 
 // initTwoTokens exposes the backend's two tokens to a CLI test: it puts the
 // PINs into environment variables, because the command takes the *name* of
-// the variable rather than a PIN value (CLAUDE.md §3.1), and hands back the
+// the variable rather than a PIN value, and hands back the
 // labels the flags need.
 //
 // It used to provision SoftHSM2 tokens inline, which is why every ceremony
 // CLI test ran against one vendor. The tokens now come from
 // internal/hsmtest, so these run wherever the environment provides a
-// backend (CLAUDE.md §2.4).
+// backend.
 func initTwoTokens(t *testing.T, b *hsmtest.Backend) (rootPINEnv, interPINEnv string) {
 	t.Helper()
 	rootPINEnv, interPINEnv = "KEYTOOL_TEST_ROOT_PIN", "KEYTOOL_TEST_INTER_PIN"

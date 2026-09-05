@@ -15,11 +15,11 @@ Three audiences, three sections:
 - A token was lost, destroyed, or is suspected compromised: §4.
 - Designing what this platform does not yet build — wrap-based backup,
   vendor-native ceremony hardware, CA rotation: §5–§7, all labelled
-  **documented-design** per CLAUDE.md §2.3 where they have not been run.
+  **documented-design** per the verified-claim split where they have not been run.
 
 Every artifact this document describes is public: certificates and a CRL.
 Nothing here ever writes a private key, a PIN, or a wrapped key blob to a
-log line or a plaintext file (CLAUDE.md §3.1).
+log line or a plaintext file.
 
 ## 2. The root ceremony as an operator procedure
 
@@ -31,12 +31,11 @@ this repository demonstrates a **single-operator** ceremony, which
 of duties. The operator needs:
 
 - PINs for **two** tokens: the root's and the intermediate's
-  (`docs/phases/phase-3b-pki-hardening.md`, "Where the root key lives
-  relative to the intermediate"). Never the same token — `RunCeremony`
+  . Never the same token — `RunCeremony`
   refuses to run if the two workspaces resolve to the same serial.
 - The vendor module path and adapter name (`softhsm2` or `protectserver`).
 - Every certificate parameter decided **before** the ceremony starts,
-  because a ceremony is irreversible (CLAUDE.md §3.9): subject names, the
+  because a ceremony is irreversible: subject names, the
   EC curve, and — the one that is easiest to get wrong — the root CRL and
   root certificate distribution URLs. Those two URLs are baked into the
   intermediate's extensions at signature time and can never be changed
@@ -91,7 +90,7 @@ Three files, all PEM, all public:
 - The root's initial CRL — long-lived (`DefaultRootCRLValidity`, five
   years), covering exactly the intermediate, with zero revoked entries. The
   reasoning for a long-lived CRL rather than a recurring "root online"
-  schedule is in `docs/phases/phase-3b-pki-hardening.md`, "How the root CRL
+  schedule is in, "How the root CRL
   is produced while the root is offline."
 
 No private key material of any kind. Both key pairs are generated on, and
@@ -124,7 +123,7 @@ revoking the intermediate — means **running the ceremony again**: a fresh
 root key, a fresh intermediate signed under it, a fresh CRL. This is not a
 limitation to work around; it is the operational consequence of choosing a
 long-lived CRL over a recurring "root online" moment
-(`docs/phases/phase-3b-pki-hardening.md`), and it is why §4's disaster
+, and it is why §4's disaster
 recovery procedures and a routine CRL refresh are, mechanically, the same
 event — the ceremony does not distinguish "the root's CRL is due for
 renewal" from "the intermediate was compromised."
@@ -136,7 +135,7 @@ renewal" from "the intermediate was compromised."
 A real key ceremony leaves a written record of what was produced, on which
 physical token, by whom, and when — evidence a later operator uses to
 confirm they are looking at the same token the root was generated on, not
-one that merely shares its label (CLAUDE.md §3.8). `threat-model.md` §A7
+one that merely shares its label. `threat-model.md` §A7
 names exactly why this matters: the one attacker the ceremony's own design
 cannot stop is the operator running it, and the mitigation for that is
 procedural, not cryptographic — a written record and, eventually,
@@ -149,7 +148,7 @@ Everything here is public — no PIN, no private key, no wrapped key blob:
 
 | Field | Source | Why it is in the manifest |
 |---|---|---|
-| Root token label and serial | `pkcs11.Workspace` | Serial is identity, label is address (CLAUDE.md §3.8) — both are recorded so a later operator can resolve either |
+| Root token label and serial | `pkcs11.Workspace` | Serial is identity, label is address — both are recorded so a later operator can resolve either |
 | Intermediate token label and serial | `pkcs11.Workspace` | Same reasoning, other tier |
 | Root key label | operator-supplied flag | What `C_FindObjects` resolves at signing time |
 | Intermediate key label | operator-supplied flag | Same, intermediate tier |
@@ -158,7 +157,7 @@ Everything here is public — no PIN, no private key, no wrapped key blob:
 | Intermediate certificate serial number | `CeremonyResult` (parsed) | Same, intermediate tier |
 | Root and intermediate subject DNs | operator-supplied flags | What the certificates assert, for a human cross-check against what was intended |
 | Root and intermediate validity windows | `CeremonyParams` (defaults or flags) | When each certificate — and therefore the chain — stops being valid |
-| Root CRL validity | `CeremonyParams` (default or flag) | When the root's CRL must be refreshed (§2.4) |
+| Root CRL validity | `CeremonyParams` (default or flag) | When the root's CRL must be refreshed (the every-backend rule) |
 | Root CRL URL / root certificate URL | operator-supplied flags | The values baked into the intermediate's extensions, irreversibly, at signature time |
 | Timestamp | ceremony run time | When this happened, in absolute terms |
 | Operator identity | outside this tool's scope | Who ran it — a procedural fact, not something PKCS#11 can attest to; recorded by whatever process wraps the ceremony (sign-off sheet, ticket, commit) |
@@ -166,9 +165,9 @@ Everything here is public — no PIN, no private key, no wrapped key blob:
 ### 3.3 Current state, and what is deferred
 
 Not all of this is captured automatically today. Token labels, key labels,
-the CDP/AIA URLs, and (since §5.2) the root's `CKA_EXTRACTABLE` choice are
+the CDP/AIA URLs, and (since the tag convention) the root's `CKA_EXTRACTABLE` choice are
 either what the operator typed on the command line or printed by
-`hsm-pki-keytool ceremony`'s own stdout (§2.3's output block). Certificate
+`hsm-pki-keytool ceremony`'s own stdout (the verified-claim split's output block). Certificate
 serial numbers, subject DNs, and validity windows are **not** printed
 anywhere today — the operator has to read them off the written PEM files
 themselves (`openssl x509 -text -in root.pem`, and likewise for the
@@ -176,8 +175,7 @@ intermediate) and assemble the manifest by hand from the command line used,
 the stdout output, and that inspection. What does not exist yet is a
 **structured file** — JSON or YAML — that the ceremony emits automatically,
 parsing its own output the way an operator currently has to. That is
-recorded as a Phase 4.8 item (`docs/phases/phase-4-container-k8s.md`, "Emit
-the ceremony manifest as a file, not just as printed output"), alongside
+recorded as a Phase 4.8 item , alongside
 that phase's other `hsm-pki-keytool` extensions, rather than bolted onto
 the CLI here ahead of the format being exercised by real use.
 
@@ -188,8 +186,7 @@ destroyed, the hardware fails, or a compromise means the key can no longer
 be trusted — `threat-model.md` A6 and A7 name the relevant attackers. The
 recovery path differs by which tier is lost, and that difference is the
 entire reason this platform has two tiers rather than one
-(`docs/architecture.md`, "Two-tier hierarchy rather than a single online
-CA").
+.
 
 ### 4.1 Losing the intermediate token — the routine case
 
@@ -197,7 +194,7 @@ This is the incident the two-tier hierarchy exists to make cheap. The root
 is untouched; every certificate the root ever signed, including the old
 intermediate, is still valid until explicitly revoked. The recovery is:
 
-1. ~~Revoke the old intermediate on the root's CRL — which, per §2.4, means
+1. ~~Revoke the old intermediate on the root's CRL — which, per the every-backend rule, means
    running the ceremony again, since the root is offline. The new run
    signs a *new* intermediate under a *new* root key, because `RunCeremony`
    generates both tiers together (see the gap noted in §4.1.1 below) — so
@@ -210,11 +207,11 @@ intermediate, is still valid until explicitly revoked. The recovery is:
    §4.1.2.
 2. Re-issue every leaf that was still validly issued under the old
    intermediate, under the new one. The service cannot do this
-   automatically: a leaf's issuer is fixed at signature time (CLAUDE.md
-   §3.9), so this is a re-issuance campaign, not a configuration change.
+   automatically: a leaf's issuer is fixed at signature time (the engineering contract
+   validating before mutating), so this is a re-issuance campaign, not a configuration change.
 3. Point the service at the new intermediate certificate and key label
    (`ca.intermediate_cert_path`, `ca.intermediate_key_label`) and restart —
-   `ca.LoadIntermediate`'s startup checks (`docs/phases/
+   `ca.LoadIntermediate`'s startup checks (
    phase-3b-pki-hardening.md`, 3b.2) refuse to start against anything that
    is not a validly-chained, non-self-signed, correctly-`pathlen:0`
    certificate whose public key matches the configured key label, so a
@@ -239,14 +236,14 @@ intermediate, is still valid until explicitly revoked. The recovery is:
 > reasoning that produced the command, and rewriting it would make this
 > document look as though the gap had never existed.
 
-CLAUDE.md §3.7 describes the intermediate rotating by "re-issuing the
+the key lifecycle describes the intermediate rotating by "re-issuing the
 intermediate (routine)" — implying the root key is *reused*, not
 regenerated, for what should be the cheap, frequent case. `RunCeremony`
 does not support that today: `signRootAndIntermediate`
 (`internal/ca/ceremony.go`) always calls `GenerateKeyPair` for the root, so
 every ceremony run mints a fresh root whether one was needed or not. Until
 a `reissue-intermediate` subcommand exists (tracked in
-`docs/phases/phase-4-container-k8s.md`, 4.8), losing *only* the
+), losing *only* the
 intermediate token is handled exactly like §4.2 — which is safe (nothing
 about re-running the full ceremony is incorrect) but more expensive than it
 needs to be: every relying party that pinned the old root now has to trust
@@ -255,7 +252,7 @@ a new one, for an incident that never touched the root at all.
 #### 4.1.2 Routine intermediate rotation, as it works now
 
 Added 2026-09-05, when `reissue-intermediate` landed. This is the procedure
-CLAUDE.md §3.7 calls "re-issuing the intermediate (routine)" — for a planned
+the key lifecycle calls "re-issuing the intermediate (routine)" — for a planned
 rotation, or for the loss of the intermediate token alone.
 
 The root still has to come out of storage: it holds the only key that can
@@ -265,7 +262,7 @@ sign an intermediate. What changed is that it is *used* rather than
 ```sh
 # The root token is attached; the new intermediate key is generated on the
 # intermediate's own token, which is never the root's (checked by serial,
-# and then confirmed empirically by an object search — CLAUDE.md §3.8).
+# and then confirmed empirically by an object search — the identity rule).
 hsm-pki-keytool reissue-intermediate \
   -module "$PKCS11_MODULE" \
   -root-workspace hsm-pki-root -root-pin-env ROOT_PIN \
@@ -286,7 +283,7 @@ Four things this does *not* do, each deliberate:
   verifying against a root nobody trusts — a failure that appears at every
   relying party at once, long after the HSM went back in the safe.
 - **It does not overwrite the previous intermediate's key label.** `-v2`
-  is provisioned alongside `-v1`, per CLAUDE.md §3.7. The old key keeps
+  is provisioned alongside `-v1`, per the key lifecycle. The old key keeps
   working, which is what makes the next step a transition rather than an
   outage.
 - **It does not revoke the old intermediate.** Overlap is the point.
@@ -294,7 +291,7 @@ Four things this does *not* do, each deliberate:
   window, and it means publishing an updated root CRL — still a
   root-online operation.
 - **It does not write private key material anywhere.** Both key pairs stay
-  on their tokens (CLAUDE.md §3.1).
+  on their tokens.
 
 Then, in order:
 
@@ -308,7 +305,7 @@ Then, in order:
    a configuration change.
 3. At the end of the window, revoke the old intermediate and publish an
    updated root CRL — the root comes out once more for this.
-4. Retire the old key by destroying it on the token, per CLAUDE.md §3.7's
+4. Retire the old key by destroying it on the token, per the key lifecycle's
    provision → verify-only → retire lifecycle.
 
 Verified on SoftHSM2, 2026-09-05: after a ceremony and a re-issue,
@@ -316,7 +313,7 @@ Verified on SoftHSM2, 2026-09-05: after a ceremony and a re-issue,
 and `intermediate-v2.pem`, the two carry different public keys, and the v2
 certificate carries `CA:TRUE, pathlen:0` with the root's CDP and AIA. The
 ProtectServer half of that claim is not yet made — see
-`docs/phases/phase-4-container-k8s.md` 4.11.
+4.11.
 
 ### 4.2 Losing the root token — the exceptional case
 
@@ -344,7 +341,7 @@ Cross-signing is **not implemented** in this repository — `RunCeremony`
 signs one intermediate under the root key pair it just generated in the
 same run; there is no path that takes an *existing* intermediate public key
 and signs it under a *newly generated* root. It is recorded here as
-documented-design (CLAUDE.md §2.3): the mechanism is ordinary
+documented-design: the mechanism is ordinary
 `x509.CreateCertificate` with an existing public key and a new issuer,
 identical in shape to what `signRootAndIntermediate` already does for the
 first-ever intermediate, but no operator-facing command exists to invoke it
@@ -382,7 +379,7 @@ wrap its private key under an AES wrapping key, **destroy the original
 object** (simulating the token it lived on being lost), unwrap the ciphertext
 back into a new object, and sign again — the second signature verifies
 against the same public key the first one did. It runs on both backends per
-CLAUDE.md §2.4 and is the sub-task's optional demo, built because
+the every-backend rule and is the sub-task's optional demo, built because
 `DestroyObject` (3b.8) made the "simulate loss" step possible.
 
 **What this is not**: a working restore procedure by itself. It proves the
@@ -401,7 +398,7 @@ that same key are mutually exclusive. A non-extractable key has no door
 default that is obviously correct for every deployment:
 
 - **Non-extractable root.** Matches every other key on this platform, and
-  the strongest reading of CLAUDE.md §3.1. No wrap-based backup exists for
+  the strongest reading of the key-and-PIN rule. No wrap-based backup exists for
   the root; losing the token means §4.2 or §4.3, unconditionally.
 - **Extractable root.** A wrapped backup becomes possible, at a real cost:
   `CKA_EXTRACTABLE=true` does not distinguish a legitimate backup operator
@@ -424,21 +421,20 @@ matters — a real root, meant to last years — the one an operator has to
 remember to opt into, at exactly the one moment (ceremony time) that choice
 can ever be made. `TestRunCeremony_RootKeyExtractableIsOperatorControlled`
 proves the flag reaches the token's `CKA_EXTRACTABLE` attribute in both
-directions, read back rather than assumed from the request (CLAUDE.md
-§3.10), on both backends. The choice is echoed in the ceremony's own
-output (§2.3) so it becomes part of that run's record rather than a fact
+directions, read back rather than assumed from the request (the engineering contract
+independent verification), on both backends. The choice is echoed in the ceremony's own
+output (the verified-claim split) so it becomes part of that run's record rather than a fact
 an operator has to separately remember.
 
 This does not weaken `CKA_SENSITIVE`, which `GenerateKeyPair` forces `true`
 unconditionally regardless of `Extractable` (3b.7) — `C_GetAttributeValue`
 still refuses to disclose the key in the clear either way.
 `CKA_EXTRACTABLE` and `CKA_SENSITIVE` govern two different doors
-(`docs/pkcs11-vendor-notes.md`, "A non-sensitive private key really is
-readable here"), and only the wrap door is ever opened by this decision.
+, and only the wrap door is ever opened by this decision.
 
 ### 5.3 Verify after restore — a measured requirement, not a suggestion
 
-Building the demo in §5.1 found a real divergence, not a hypothetical one:
+Building the demo in the commit convention found a real divergence, not a hypothetical one:
 restoring a key via `C_UnwrapKey` does **not** guarantee the restored
 object actually carries the restrictive attributes the unwrap template
 asked for.
@@ -448,8 +444,7 @@ asked for.
 | SoftHSM2 2.6.1 | `false` — the template is honored |
 | ProtectToolkit 7.3.3 | **`true`** — the template's request is silently ignored |
 
-Both are conformant (`docs/pkcs11-vendor-notes.md`, "A restored key does
-not necessarily inherit the restrictive attributes you asked for"). This is
+Both are conformant . This is
 the same class of finding as 3b.7's `CKA_SENSITIVE` disclosure — a
 caller-requested restriction the standard does not obligate any vendor to
 honor — and it cannot be closed the same way that one was: `GenerateKeyPair`
@@ -463,7 +458,7 @@ this platform's own code can force.
 **The operational rule this produces:** after restoring any key from a
 wrapped backup, on any vendor, read its attributes back off the token and
 confirm them before trusting the restored key with anything — never trust
-the template that was sent. This is CLAUDE.md §3.10's "ask the token, not
+the template that was sent. This is independent verification's "ask the token, not
 the request" discipline, applied to a restore instead of a generation.
 
 ### 5.4 What this must never be used for
@@ -473,7 +468,7 @@ mistake this section exists to head off:
 
 - **Never a bulk-export key.** A wrapping key that can wrap *any* object on
   the token is a single point of failure that recreates the disclosure
-  risk §3.1 exists to prevent, just moved one layer over — compromise the
+  risk the key-and-PIN rule exists to prevent, just moved one layer over — compromise the
   wrapping key and every extractable private key on the token is
   recoverable. Scope it (`CKA_WRAP` / `CKA_UNWRAP` set only on the
   purpose-built wrapping key, used only for the specific backup-eligible
@@ -491,12 +486,12 @@ mistake this section exists to head off:
 
 ## 6. Vendor-native mechanisms (documented-design)
 
-**Labelled per CLAUDE.md §2.3: none of this has been run.** What follows is
+**Labelled per the verified-claim split: none of this has been run.** What follows is
 what each vendor's published documentation states its own mechanism
 provides — not a claim this repository has exercised, verified, or can
 currently afford the hardware/licensing to exercise. Where this repository
 *has* measured vendor behavior directly, it is in
-`docs/pkcs11-vendor-notes.md`, not here.
+, not here.
 
 - **nShield Security World / ACS quorum (Thales, Phase 7).** A Security
   World defines an Administrator Card Set (ACS) with a configurable
@@ -521,14 +516,14 @@ currently afford the hardware/licensing to exercise. Where this repository
   directly in §5.
 
 All three exist specifically to solve the separation-of-custody problem
-§5.2 identifies with a bare AES wrapping key on one token: the backup
+the tag convention identifies with a bare AES wrapping key on one token: the backup
 credential and the operational credential are different people, different
 cards, or different domains, so no single compromised session can both
 create and exfiltrate a usable copy of the key.
 
 ## 7. CA-key rotation design (documented-design)
 
-CLAUDE.md §3.7 states the rule this section designs for: every signing key
+the key lifecycle states the rule this section designs for: every signing key
 has a lifecycle, and the CA hierarchy rotates by "re-issuing the
 intermediate (routine) or by root roll-over with cross-signing (exceptional,
 ceremony-governed)". Mechanically, both are exactly §4.1 and §4.2 above —
@@ -557,8 +552,8 @@ of the two, because it signs a public key that arrives from outside the
 run rather than one just generated, and that is a different trust question
 than anything this codebase does today. The *signing keys'* (image, artifact) own
 rotation — distinct from the CA hierarchy this section covers — is
-implemented in Phases 4.8 and 5.9 per CLAUDE.md §3.7, with a mechanical
-rotation drill in CI (`docs/phases/phase-5-cicd.md`, 5.9).
+implemented in Phases 4.8 and 5.9 per the key lifecycle, with a mechanical
+rotation drill in CI.
 
 **As of 2026-09-04 that half exists in code**, and it is worth reading
 before picking up the CA-hierarchy gaps above, because it is the shape they
@@ -570,7 +565,7 @@ list with the previous version marked `verify-only`. Retirement is the step
 that still has no command: the inventory refuses to call a key retired
 while its private half is on the token, so destroying it is currently a
 manual `C_DestroyObject`. That missing subcommand is tracked in
-`docs/phases/phase-4-container-k8s.md` 4.8, alongside the
+4.8, alongside the
 `reissue-intermediate` gap this section describes — the two are the same
 piece of work seen from two tiers.
 

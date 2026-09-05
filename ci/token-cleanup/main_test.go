@@ -12,7 +12,7 @@ import (
 // TestRun_RefusesAnEmptyPrefix is the one that matters. An empty prefix
 // matches every object on the token, so "clear this run's test keys" and
 // "wipe the token" would be one missing flag apart — and the second is not
-// undoable (CLAUDE.md §3.4, §3.9).
+// undoable.
 func TestRun_RefusesAnEmptyPrefix(t *testing.T) {
 	t.Setenv("TOKEN_CLEANUP_TEST_PIN", "1234")
 	err := run([]string{

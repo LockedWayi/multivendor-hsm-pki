@@ -56,7 +56,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 - **Scanner pins moved to `ci/scanner-pins.sh` and became digests.**
   `ci/scan-image.sh` pinned trivy by the `0.67.0` tag, which is a pointer
-  its publisher can move (CLAUDE.md §3.8). govulncheck runs inside the
+  its publisher can move. govulncheck runs inside the
   digest-pinned builder image from `deploy/docker/Dockerfile` rather than on
   the runner's Go, because part of its answer is about the standard library
   and that is a property of the toolchain that ships.
@@ -77,7 +77,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   object search in between. The lifetime approved was therefore measured
   from an instant strictly earlier than the one the certificate carries, so
   a root close to its own expiry could produce an intermediate that
-  outlives it. CLAUDE.md §3.11 says the check belongs at the point of use
+  outlives it. the issuer-authority rule says the check belongs at the point of use
   as well, and `ca.checkIssuerCanCover` already did exactly this one tier
   down at leaf issuance. Present in v0.1.0; the window is the elapsed time
   between the two calls, so it bites only a root within seconds of its
@@ -90,7 +90,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   value.
 
 ### Changed
-- **`docs/pkcs11-vendor-notes.md` names the trigger** behind the recurring
+- ** names the trigger** behind the recurring
   ProtectServer leftovers, which the previous entry recorded as
   un-isolated. `TestConformance` intermittently hangs on that backend (the
   documented `C_GetSlotList` deadlock needs the process to have done real
@@ -110,12 +110,12 @@ unsigned.
 
 Everything below was already written as it landed; this release only draws
 the line. See the annotated tag for the CI-verified / locally-verified split
-that CLAUDE.md §2.3 requires and §5.2 formats.
+that the verified-claim split requires and the tag convention formats.
 
 ### Added
 - **Routine CA rotation exists in code, not only in prose**
   (`internal/ca/reissue.go`, `hsm-pki-keytool reissue-intermediate`).
-  CLAUDE.md §3.7 has always said the hierarchy rotates by "re-issuing the
+  the key lifecycle has always said the hierarchy rotates by "re-issuing the
   intermediate (routine)"; until now no code path did that — `RunCeremony`
   generates both tiers in one run, so the only way to get a new
   intermediate was to mint a new root, which is the *exceptional* case and
@@ -127,7 +127,7 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   **both backends** — SoftHSM2 with `openssl verify` accepting both
   intermediates against the one root, and ProtectServer with all five
   rotation subtests passing and no divergence in the label-lookup path
-  (`docs/phases/phase-4-container-k8s.md` 4.11). Per CLAUDE.md §2.3 the
+  . Per the verified-claim split the
   ProtectServer half is maintainer-verified, never CI-verified.
 - **The service image** (`deploy/docker/Dockerfile`): multi-stage, cgo-enabled
   build onto a digest-pinned `distroless/cc` base — 53.8 MB, no shell, no
@@ -149,8 +149,8 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   `CKA_ID`, and **reads the protection attributes back off the token**,
   failing closed when the token declined the template. No extractable
   option exists: a supply-chain key is answered by rotation, not by a copy.
-- **`docs/lessons.md`**: the seven defects that earned the rules in
-  `CLAUDE.md` — what was true, why it survived, which rule it produced.
+- ****: the seven defects that earned the rules in
+  the engineering contract — what was true, why it survived, which rule it produced.
   Five of the seven survived a green test suite.
 - **`ci/scan-image.sh`**: vulnerability gate and SBOM generation for the
   service image, with a pinned scanner. Exits non-zero on any HIGH or
@@ -168,11 +168,11 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
 - **The supply-chain signing keys get their own token**, separate from the
   CA intermediate's. PKCS#11 authenticates a token rather than a key, so
   co-locating them would have meant a compromise of the CA daemon also
-  yielding image and release signing — CLAUDE.md §3.6's guarantee true
+  yielding image and release signing — purpose separation's guarantee true
   against mistakes and false against the attacker it names. The
   architecture diagram now draws three tokens.
-- **`CLAUDE.md` keeps its rules and hands the narratives to
-  `docs/lessons.md`.** No rule was removed; the accounts that justified them
+- **the engineering contract keeps its rules and hands the narratives to
+  .** No rule was removed; the accounts that justified them
   moved to where they are read once rather than every session.
 - **The ambiguous-label refusal moved to `internal/pkcs11`**
   (`FindKeyByLabel`, `LabelIsFree`). It is a property of how tokens name
@@ -208,7 +208,7 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   harnesses, pulled forward from Phase 4.8. A full both-backend run left
   +215 objects on a persistent token before this and +23 after. It takes an
   object handle rather than a label, because `CKA_LABEL` cannot identify an
-  object (CLAUDE.md §3.8).
+  object.
 
 ### Security
 - **Private keys were generated with `CKA_SENSITIVE` explicitly false, and on
@@ -255,7 +255,7 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   boundary.
   Two findings came out of writing it: that a PKCS#11 token login
   authenticates a *token* and not a key, so purpose-separated signing keys
-  need separated tokens to deliver what CLAUDE.md §3.6 claims (now a
+  need separated tokens to deliver what purpose separation claims (now a
   "decide before provisioning" item in Phase 4.8); and that the revocation
   channel's *availability* is a security property, since a blocked CRL fetch
   and an unparseable CRL produce the same "proceed anyway" at the relying
@@ -379,14 +379,14 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   before serving any traffic, and shuts down gracefully (drain, then close
   the adapter) on `SIGTERM`/`SIGINT`. Verified against both SoftHSM2 and the
   maintainer's ProtectServer token.
-- Project scaffolding: `CLAUDE.md` engineering contract, architecture document,
+- Project scaffolding: the engineering contract engineering contract, architecture document,
   and phase specifications (Phases 1–7), centered on a multi-vendor PKCS#11 core.
 - `internal/pkcs11`: vendor-agnostic `VendorAdapter` interface (session
   open/close, login/logout, key generation, find objects, sign/verify,
   encrypt/decrypt, get attribute, wrap/unwrap, generate random) and a
   SoftHSM2-backed implementation. Sessions enforce an idle timeout and a
   maximum TTL; PINs are held in a C-heap buffer we control and zeroize,
-  never as a Go-heap string (see docs/phases/phase-1-pkcs11-core.md).
+  never as a Go-heap string.
 - `ci/softhsm2-dev.Dockerfile`: reproducible dev/test environment so the
   SoftHSM2-backed test suite runs the same way on any machine or in CI.
 - `internal/pkcs11/protectserver.go`: `ProtectServerAdapter`, a full,
@@ -404,7 +404,7 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   a real digest, plaintext, or key, never a degenerate stand-in — the earlier
   false "ProtectServer cannot verify" divergence (below) came from exactly
   that shortcut.
-- `docs/protectserver-setup.md`: manual setup for the Thales ProtectToolkit
+-: manual setup for the Thales ProtectToolkit
   backend — module paths, user-token initialization, and why this path is
   local-only and never in CI.
 - `ci/coverage.sh` and `ci/coverage-exclude.txt`: the coverage floor,
@@ -414,8 +414,8 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   what it used to — it conflates "untested" with "untestable here." The
   excluded files are validated instead by the conformance suite passing
   against real hardware, and that claim stays labelled maintainer-verified,
-  never blended into a CI-reported percentage (CLAUDE.md §2.3).
-- `docs/pkcs11-vendor-notes.md`: a living record of where PKCS#11
+  never blended into a CI-reported percentage.
+-: a living record of where PKCS#11
   implementations differ and of the portability traps (`CK_ULONG` width,
   `CKA_EC_POINT` encoding, raw `r||s` signatures, digest-vs-message
   mechanisms) that are easy to write and hard to notice. Every adapter reads
@@ -432,18 +432,18 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   stated as the platform's single signing foundation rather than only the CA's
   key store: certificates, container images, and release artifacts are each
   signed by their own HSM-held key over the same custody boundary. Recorded as
-  a non-negotiable rule in `CLAUDE.md` §3.6 (three purpose-separated keys —
+  a non-negotiable rule in purpose separation (three purpose-separated keys —
   `ca-root-key`, `image-signing-key`, `artifact-signing-key` — never
   interchangeable, fail-closed on anything unsigned) and explained in
-  `docs/architecture.md` under "The signing layer: one core, three purposes",
+  under "The signing layer: one core, three purposes",
   with the two design decisions behind it: purpose-separated keys rather than
   one platform key, and cosign rather than a first-party signing tool.
-  The delivery checklist follows the dependency line: `docs/phases/
+  The delivery checklist follows the dependency line:
   phase-4-container-k8s.md` gains 4.8 (key provisioning through the Phase 1
   core via `cmd/hsm-pki-keytool`), 4.9 (release-artifact signing with
   `cosign sign-blob` over PKCS#11, cross-checked independently in Go with
   `crypto/ecdsa`), and 4.10 (image signing by digest, verified at admission by
-  the Kyverno installed in 4.7); `docs/phases/phase-5-cicd.md` gains 5.9,
+  the Kyverno installed in 4.7); gains 5.9,
   which turns all of it into a blocking pipeline gate.
   Two facts established by reading cosign's own source rather than assuming
   them, and recorded where they will be needed: PKCS#11 support sits behind
@@ -487,13 +487,13 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   inferred from commit history. All seven phases are broken down; where a
   choice is the maintainer's to make, it is recorded as an explicit
   "Decide before starting" item rather than defaulted silently.
-- `CLAUDE.md` §7 gained the tracking discipline this depends on: discovered
+- the engineering contract gained the tracking discipline this depends on: discovered
   work — prerequisites, workarounds, defects found in passing, work belonging
   to a later phase — is added to the relevant checklist rather than silently
   absorbed, and a decision the agent cannot make blocks its sub-task rather
   than the phase.
 - ProtectServer environment prepared: Admin token PINs initialized and a
-  labelled user token created on slot 0. `docs/protectserver-setup.md` now
+  labelled user token created on slot 0. now
   documents the sequence that actually works, including the mid-run label
   prompt that is easy to answer with a PIN by mistake.
 - Phase 1 scope now includes a second, real-vendor adapter (ProtectServer)
@@ -538,7 +538,7 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
 - **The service resolved its HSM workspace by first label match.**
   PKCS#11 places no uniqueness constraint on `CKA_LABEL`, so the driver's
   enumeration order decided which token held the CA key — possibly
-  differently on the next boot (CLAUDE.md §3.8). It now lists the colliding
+  differently on the next boot. It now lists the colliding
   serials and refuses. `cmd/hsm-pki-keytool` already behaved this way.
 - **The ceremony's root CRL carried no clock-skew backdate** while the
   certificates signed beside it did, so a verifier with a trailing clock
@@ -593,7 +593,7 @@ that CLAUDE.md §2.3 requires and §5.2 formats.
   only once execution reaches `NewSecurePIN`. The guard clauses ahead of it
   (cancelled context, expired session) previously returned with the
   caller's PIN still readable in the Go heap — the one copy this package can
-  deterministically wipe, left unwiped (CLAUDE.md §3.1).
+  deterministically wipe, left unwiped.
 - `pkcs11.CloseSession` no longer removes a session from the adapter's map
   before the token has actually released it. A failed `C_CloseSession`
   used to leave a session open on the token that neither the janitor nor

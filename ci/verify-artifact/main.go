@@ -7,7 +7,7 @@
 // But a signature checked only by the tool that produced it proves the tool
 // agrees with itself, which it would do just as convincingly if the whole
 // encoding were wrong -- this repository has shipped that exact defect
-// twice (docs/lessons.md §2 and §3), and CLAUDE.md §3.10 is the rule that
+// twice, and independent verification is the rule that
 // came out of it. So the release gate is this program, and cosign's own
 // verify is the cross-check rather than the other way round.
 //
@@ -23,7 +23,7 @@
 // Exit status is the whole interface: 0 only when the bundle names this key,
 // the digest it carries is the digest of the bytes actually supplied, and
 // the signature verifies over them. Every other outcome -- including a
-// bundle this program does not recognise -- is non-zero (CLAUDE.md §3.4).
+// bundle this program does not recognise -- is non-zero.
 //
 // Usage:
 //

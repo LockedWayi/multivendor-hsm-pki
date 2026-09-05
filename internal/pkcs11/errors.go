@@ -11,7 +11,7 @@ var (
 	ErrSessionClosed = errors.New("pkcs11: session is closed")
 
 	// ErrSessionExpired is returned when a session's idle timeout or
-	// maximum TTL has been exceeded. Fail closed (CLAUDE.md §3.4): the
+	// maximum TTL has been exceeded. Fail closed: the
 	// session is force-closed the moment this is detected, never silently
 	// extended.
 	ErrSessionExpired = errors.New("pkcs11: session idle timeout or max TTL exceeded")

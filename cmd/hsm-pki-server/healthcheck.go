@@ -42,7 +42,7 @@ func probeAddress(listenAddr string) (string, error) {
 // answered. It exists because the runtime image has no shell and no HTTP
 // client for a HEALTHCHECK to invoke, and adding either to get a health
 // check would mean putting a general-purpose tool into a container whose
-// value is that it has none (docs/phases/phase-4-container-k8s.md, 4.2).
+// value is that it has none.
 // The binary is already in the image and already knows the listen address,
 // so it probes itself.
 //

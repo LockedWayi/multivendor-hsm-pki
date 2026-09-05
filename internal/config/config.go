@@ -3,7 +3,6 @@
 // a resolved session budget). See config.example.yaml for the file format and
 // the reasoning behind it — most importantly, that it never holds a PIN
 // itself, only the name of the environment variable the PIN is read from
-// (CLAUDE.md §3.1, §3.2).
 package config
 
 import (
@@ -78,7 +77,6 @@ type VendorConfig struct {
 // reachable only from the offline ceremony (internal/ca.RunCeremony,
 // cmd/hsm-pki-keytool), so a compromise of this service cannot reach it —
 // that is the whole point of the two-tier hierarchy this phase introduced
-// (docs/phases/phase-3b-pki-hardening.md, CLAUDE.md §3.6).
 //
 // RootCertPath and RootCRLPath are not exceptions to that. Both name public
 // artifacts the ceremony emitted — a certificate and a CRL, containing no
@@ -149,7 +147,7 @@ const defaultCRLValidityHours = 24
 // Load reads and validates the config file at path. Validation is
 // deliberately strict and fails fast: an unknown adapter name or a missing
 // PIN environment variable is rejected here, before anything tries to open
-// an HSM session (CLAUDE.md §3.4, fail closed).
+// an HSM session (fail closed).
 //
 // Load never reads the PIN's value — only confirms the environment variable
 // named by pin_env is set. The value itself is read once, at the point of
@@ -181,7 +179,7 @@ func Load(path string) (*Config, error) {
 	// true for PIN="", so a deployment that exports the variable without a
 	// value would pass startup validation and then fail at ResolvePIN, at
 	// the point of an HSM login — which is both later and further from the
-	// cause than it needs to be (CLAUDE.md §3.4). The value is compared
+	// cause than it needs to be. The value is compared
 	// against "" and never read into anything that outlives this check.
 	if pin, ok := os.LookupEnv(vendor.PINEnv); !ok {
 		return nil, fmt.Errorf("config: environment variable %s (pkcs11.%s.pin_env) is not set",
@@ -330,7 +328,7 @@ func (s SessionConfig) parse() (pkcs11.SessionOptions, error) {
 	// that is zero or negative is not a shorter budget, it is a session
 	// that is already over its limit the instant it opens — so it is
 	// rejected here rather than handed to the adapter's janitor to
-	// interpret (CLAUDE.md §3.4).
+	// interpret.
 	if s.IdleTimeout != "" {
 		v, err := time.ParseDuration(s.IdleTimeout)
 		if err != nil {

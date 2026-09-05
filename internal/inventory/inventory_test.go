@@ -20,7 +20,7 @@ import (
 
 // These tests touch no token — an inventory is a document, and the key that
 // signs it in production lives on an HSM but the format does not. So they
-// deliberately do not multiply per backend (CLAUDE.md §2.4, and
+// deliberately do not multiply per backend (and
 // docs/test-matrix.md §4).
 
 func pubPEM(t *testing.T, pub *ecdsa.PublicKey) string {
@@ -114,7 +114,7 @@ func TestInventory_MarshalIsStable(t *testing.T) {
 // for. Every field of this document is individually well-formed; the defect
 // is that the image and artifact purposes resolve to one key pair, so a
 // compromise of "the image key" also signs releases. Comparing labels sees
-// two distinct entries and nothing wrong (CLAUDE.md §3.6, §3.8).
+// two distinct entries and nothing wrong.
 func TestInventory_RejectsTwoLabelsOnOneKey(t *testing.T) {
 	inv := validInventory(t)
 	inv.Keys[1].PublicKeyPEM = inv.Keys[0].PublicKeyPEM
@@ -205,7 +205,7 @@ func TestInventory_ValidateRejects(t *testing.T) {
 
 // TestParse_RejectsAnUnknownField fails closed on a document this build
 // does not fully understand: an unrecognised field may be saying something
-// about a key that changes whether it should be trusted (CLAUDE.md §3.4).
+// about a key that changes whether it should be trusted.
 func TestParse_RejectsAnUnknownField(t *testing.T) {
 	inv := validInventory(t)
 	data, err := inv.Marshal()
@@ -294,7 +294,7 @@ func TestVerify_AcceptsAGoodSignatureAndRejectsTampering(t *testing.T) {
 }
 
 // TestVerify_AgreesWithOpenSSL is the check that matters most here
-// (CLAUDE.md §3.10). Everything above proves this package agrees with
+// . Everything above proves this package agrees with
 // itself, which it would do just as convincingly if the digest, the
 // signature encoding, or the bytes being signed were all wrong together.
 // The published contract is that anyone holding the inventory, the

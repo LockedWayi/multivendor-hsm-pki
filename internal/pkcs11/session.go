@@ -8,7 +8,7 @@ import (
 )
 
 // Session wraps one PKCS#11 session handle and enforces the idle-timeout
-// and max-TTL budget it was opened with (docs/phases/phase-1-pkcs11-core.md
+// and max-TTL budget it was opened with (
 // acceptance criteria). It carries no PKCS#11 call logic itself — that
 // belongs to the owning VendorAdapter, which serializes the underlying
 // stateful PKCS#11 calls. Session only tracks whether it is still allowed
@@ -25,7 +25,7 @@ type Session struct {
 	closed      bool
 }
 
-// touch fails closed (CLAUDE.md §3.4) the instant a session's budget is
+// touch fails closed the instant a session's budget is
 // exceeded, and records this call as activity otherwise. Every adapter
 // operation that uses a session must call this first.
 func (s *Session) touch() error {

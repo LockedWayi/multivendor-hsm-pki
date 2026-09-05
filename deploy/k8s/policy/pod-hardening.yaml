@@ -52,7 +52,7 @@ metadata:
   name: require-pod-hardening
 spec:
   # Fail, not Ignore. If the webhook cannot be reached, a pod that has not
-  # been checked must not be admitted (CLAUDE.md §3.4). The cost is real and
+  # been checked must not be admitted. The cost is real and
   # is stated rather than hidden: if Kyverno is down, pod creation stops.
   failurePolicy: Fail
   validationActions:

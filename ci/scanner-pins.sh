@@ -3,7 +3,7 @@
 # questions instead of one.
 #
 # Digests, not tags. ci.yml already pins its actions by commit SHA and the
-# gitleaks image by digest for the reason CLAUDE.md §3.8 gives: a tag is a
+# gitleaks image by digest for the reason the identity rule gives: a tag is a
 # pointer somebody else can move, so a tag-pinned scanner is a scanner
 # whose version is decided by its publisher after review. The tag beside
 # each digest is for a human reading the file; Docker resolves the digest.
@@ -45,7 +45,7 @@ buildGoImage() {
     local dockerfile="$1" matches
     matches="$(grep -cE '^FROM golang:[^ ]+@sha256:[0-9a-f]{64} AS build$' "$dockerfile" || true)"
     if [ "$matches" != "1" ]; then
-        # Fail closed (CLAUDE.md §3.4): guessing a toolchain here would
+        # Fail closed: guessing a toolchain here would
         # silently scan the wrong standard library.
         echo "scanner-pins: expected exactly one digest-pinned 'AS build' stage in $dockerfile, found $matches" >&2
         return 1

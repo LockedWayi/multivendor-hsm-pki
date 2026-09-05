@@ -3,8 +3,8 @@
 //
 // # What this is for
 //
-// CLAUDE.md §3.6 says signing keys are purpose-separated and never
-// interchangeable, and §3.7 says verifiers consume the inventory rather than
+// purpose separation says signing keys are purpose-separated and never
+// interchangeable, and the key lifecycle says verifiers consume the inventory rather than
 // a hard-coded key. Both are properties of the *repository*, not of any one
 // function: they are broken by a line in a workflow file, a cosign flag in a
 // script, or a key label in a Kubernetes manifest. A rule that only a
@@ -38,7 +38,7 @@ import (
 var caKeyLabel = regexp.MustCompile(`ca-(root|intermediate)-key-v[0-9]+`)
 
 // signingKeyLabel matches a supply-chain signing key label under the
-// versioned scheme (CLAUDE.md §3.7).
+// versioned scheme.
 var signingKeyLabel = regexp.MustCompile(`(image|artifact|audit|inventory)-signing-key-v[0-9]+`)
 
 // InventorySigningKeyLabel is the label prefix of the key that signs the
@@ -80,8 +80,8 @@ var skippedDirs = map[string]bool{
 //
 // The inventory is read from docs/keys/key-inventory.json. A repository with
 // no inventory is a finding in itself rather than a pass: "nothing to check
-// against" and "everything checks out" must not look the same (CLAUDE.md
-// §3.4).
+// against" and "everything checks out" must not look the same (the engineering contract
+// failing closed).
 func Audit(root string) ([]Finding, error) {
 	inv, invPath, err := loadInventory(root)
 	if err != nil {
@@ -145,7 +145,7 @@ func Audit(root string) ([]Finding, error) {
 // not wrong either. What is wrong is *both in one place*, because a file
 // that configures supply-chain signing and also names a CA key is one flag
 // away from signing a release with the CA's key, and that is the blast
-// radius CLAUDE.md §3.6 exists to bound.
+// radius purpose separation exists to bound.
 //
 // So the check is directional and needs no exemption list. An earlier
 // version flagged every CA label anywhere and had to carve out the ceremony
@@ -173,7 +173,7 @@ func auditFile(rel, content string, listed map[string]bool) []Finding {
 					Path: rel, Line: lineNo,
 					Rule: fmt.Sprintf("configures supply-chain signing and also names the CA hierarchy key %q; "+
 						"a compromised CA key must not be able to sign a release, and the two families meeting in one "+
-						"file is how that stops being true (CLAUDE.md §3.6)", m),
+						"file is how that stops being true", m),
 					Text: line,
 				})
 			}
@@ -189,7 +189,7 @@ func auditFile(rel, content string, listed map[string]bool) []Finding {
 				findings = append(findings, Finding{
 					Path: rel, Line: lineNo,
 					Rule: fmt.Sprintf("references signing key %q, which the published inventory does not list; "+
-						"a verifier consuming the inventory would reject anything this key signs (CLAUDE.md §3.7)", label),
+						"a verifier consuming the inventory would reject anything this key signs", label),
 					Text: line,
 				})
 			}

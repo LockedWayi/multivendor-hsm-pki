@@ -142,7 +142,7 @@ func TestVerifyHSMConnection_WrongPINFails(t *testing.T) {
 	}
 }
 
-// TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails is CLAUDE.md §3.8 on
+// TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails is the identity rule on
 // the service side: a label that matches two tokens identifies neither.
 //
 // PKCS#11 specifies CKA_LABEL as a description and requires no uniqueness,

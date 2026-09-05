@@ -4,7 +4,7 @@
 #
 # Two outputs with different jobs. The scan is a gate: it exits non-zero on
 # any HIGH or CRITICAL finding, so a pipeline that ignores its exit status is
-# the only way to ship a known-vulnerable image (CLAUDE.md §3.4, fail
+# the only way to ship a known-vulnerable image (fail
 # closed). The SBOM is evidence: it says what is in the image at all, which
 # is what lets somebody answer "are we affected" about a CVE published after
 # this build, without still having the image.
@@ -26,7 +26,7 @@ OUT="${HSM_PKI_SCAN_OUT:-$REPO_ROOT/.local/scan}"
 # needing the same one (Phase 5.3). It also became a digest rather than the
 # 0.67.0 tag: a tag is a pointer its publisher can move, so a tag-pinned
 # scanner still changes under you -- the same reasoning ci.yml already
-# applies to its actions and to the gitleaks image (CLAUDE.md §3.8).
+# applies to its actions and to the gitleaks image.
 # shellcheck source=ci/scanner-pins.sh
 . "${SCRIPT_DIR}/scanner-pins.sh"
 
@@ -74,7 +74,7 @@ echo
 if [ "$scan_status" -ne 0 ]; then
     echo "==> FAILED: unresolved HIGH or CRITICAL findings above."
     echo "    Fix them, or record each one with a reason and a re-check date"
-    echo "    in docs/phases/phase-4-container-k8s.md (4.6). Do not silence"
+    echo " in (4.6). Do not silence"
     echo "    this script."
     exit "$scan_status"
 fi

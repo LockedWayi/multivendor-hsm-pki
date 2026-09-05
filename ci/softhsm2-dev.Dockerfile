@@ -1,6 +1,6 @@
 # Dev/test environment for internal/pkcs11: Go plus a real SoftHSM2 module,
 # so `go test ./internal/pkcs11/...` runs against an actual PKCS#11 backend
-# with zero vendor hardware (CLAUDE.md §2, docs/phases/phase-1-pkcs11-core.md).
+# with zero vendor hardware.
 # This is not the shipped service image (see /deploy/docker for that) — it
 # exists purely so the SoftHSM2-backed test suite is reproducible from code,
 # on a laptop or in CI, without every contributor hand-installing softhsm2.

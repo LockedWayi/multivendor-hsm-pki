@@ -1,7 +1,7 @@
 // Package api implements the CA's HTTP surface: certificate issuance,
 // revocation, CRL distribution, and health/readiness endpoints. Routes are
 // added incrementally as the phase that owns them lands (see
-// docs/phases/phase-2-ca-core.md).
+// ).
 package api
 
 import (
@@ -226,7 +226,7 @@ func (s *server) handleRootCert(w http.ResponseWriter, r *http.Request) {
 // It is served verbatim rather than regenerated: producing it requires the
 // root's key, which is offline and unreachable from here by design. Its
 // validity window is set at ceremony time and is deliberately long, so
-// refreshing it means re-running the ceremony (docs/phases/
+// refreshing it means re-running the ceremony (
 // phase-3b-pki-hardening.md, "How the root CRL is produced").
 func (s *server) handleRootCRL(w http.ResponseWriter, r *http.Request) {
 	s.serveDERArtifact(w, r, s.root.CRLDER, ContentTypeCRL, "root CRL")
@@ -244,7 +244,6 @@ func (s *server) handleRootCRL(w http.ResponseWriter, r *http.Request) {
 // point would receive a successful response containing a malformed CRL, and
 // the most likely way it handles that is to treat revocation as unavailable
 // and carry on. A 503 says the artifact is missing, which is the truth
-// (CLAUDE.md §3.4).
 func (s *server) serveDERArtifact(w http.ResponseWriter, r *http.Request, der []byte, contentType, what string) {
 	if len(der) == 0 {
 		loggerFromContext(r.Context()).Error("artifact is not available", "artifact", what)
@@ -275,7 +274,7 @@ func (s *server) writeError(w http.ResponseWriter, status int, msg string) {
 // malformed body, unparseable CSR, a CSR internal/ca.CA.Issue itself
 // rejects, an oversized body — responds before Issue is ever called or
 // before its result is recorded, so a bad request is rejected outright,
-// never partially processed (CLAUDE.md §3.4).
+// never partially processed.
 func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCSRBodyBytes)
 	body, err := io.ReadAll(r.Body)
@@ -301,7 +300,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 		if status >= 500 {
 			// Internal detail stays in the log, not the response — a 500
 			// tells the caller something went wrong on this end, not what
-			// (CLAUDE.md §3.4: never leak internal detail to an untrusted
+			// (failing closed: never leak internal detail to an untrusted
 			// caller).
 			loggerFromContext(r.Context()).Error("certificate issuance failed", "error", err)
 		}
@@ -314,7 +313,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// certificate whose issuance was never recorded — creates one this CA
 	// cannot later revoke, because revocation is addressed by a serial the
 	// store has never heard of. Better to fail an issuance than to issue
-	// something unrevocable (CLAUDE.md §3.4).
+	// something unrevocable.
 	if err := s.store.Record(r.Context(), store.CertRecord{
 		Serial:   cert.SerialNumber,
 		Subject:  cert.Subject,
@@ -406,7 +405,7 @@ func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		// A reason code outside RFC 5280 §5.3.1 is a statement about the
 		// caller's request, not about this server: reject it as a 400
 		// rather than writing an entry no verifier can interpret into the
-		// CRL (CLAUDE.md §3.4).
+		// CRL.
 		if errors.Is(err, store.ErrInvalidRevocationReason) {
 			s.writeError(w, http.StatusBadRequest, "revocation reason is not a valid RFC 5280 CRLReason")
 			return

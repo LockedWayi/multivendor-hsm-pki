@@ -19,11 +19,10 @@ import (
 // token, workspace, or key label. The service holds the intermediate and
 // only the intermediate; the root exists solely inside the offline ceremony
 // (RunCeremony) and is never reachable from a running server's configuration
-// (docs/phases/phase-3b-pki-hardening.md).
 type LoadIntermediateParams struct {
 	// KeyLabel is the CKA_LABEL of the intermediate's key pair on the token
 	// this service authenticates. The ceremony created it under a versioned
-	// label (CLAUDE.md §3.7).
+	// label.
 	KeyLabel string
 	// CertPath is the ceremony-produced intermediate certificate, PEM. It
 	// contains no private key material — the intermediate's private key
@@ -50,7 +49,7 @@ type LoadIntermediateParams struct {
 // service whose compromise yields a root. Provisioning now happens once, out
 // of band, in a ceremony that runs on a token this service never names —
 // so a missing key or certificate here is a configuration error to report,
-// never a state to repair (CLAUDE.md §3.4).
+// never a state to repair.
 //
 // The loaded certificate is checked before the service is allowed to come
 // up, every check fail-closed:
@@ -61,19 +60,21 @@ type LoadIntermediateParams struct {
 //     the operator has pointed the online service at a root, which is the
 //     precise misconfiguration this phase exists to make impossible.
 //   - It must carry pathlen:0. This platform's hierarchy is two tiers
-//     (CLAUDE.md §3.6); an online CA permitted to certify further CAs has a
-//     blast radius the design does not accept.
-//   - It must assert keyCertSign and cRLSign. A compliant verifier enforces
-//     keyUsage independently of basicConstraints, so an intermediate
-//     missing either produces certificates or CRLs that are rejected
-//     everywhere but here.
-//   - It must be inside its own validity window. Nothing an expired issuer
-//     signs can chain.
-//   - Its public key must match the HSM key found under KeyLabel. Without
-//     this check, a certificate and a key label that refer to different key
-//     pairs would load cleanly and then produce signatures that verify
-//     against nothing — a failure that would surface at the relying party
-//     rather than at startup.
+//
+// ; an online CA permitted to certify further CAs has a
+//
+//	  blast radius the design does not accept.
+//	- It must assert keyCertSign and cRLSign. A compliant verifier enforces
+//	  keyUsage independently of basicConstraints, so an intermediate
+//	  missing either produces certificates or CRLs that are rejected
+//	  everywhere but here.
+//	- It must be inside its own validity window. Nothing an expired issuer
+//	  signs can chain.
+//	- Its public key must match the HSM key found under KeyLabel. Without
+//	  this check, a certificate and a key label that refer to different key
+//	  pairs would load cleanly and then produce signatures that verify
+//	  against nothing — a failure that would surface at the relying party
+//	  rather than at startup.
 //
 // params.Distribution is checked too, before anything else, because a CA
 // that cannot name a distribution point issues nothing at all (see Issue).
@@ -81,7 +82,7 @@ func LoadIntermediate(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.W
 	// Checked first, before the token is touched at all: it costs nothing,
 	// and a service that comes up only to reject every issuance with
 	// ErrNoDistributionPoints has failed in the least useful place. Startup
-	// is where an operator is watching (CLAUDE.md §3.4).
+	// is where an operator is watching.
 	if err := params.Distribution.Validate(); err != nil {
 		return nil, fmt.Errorf("ca: leaf distribution: %w", err)
 	}
@@ -134,11 +135,11 @@ func checkIntermediateCert(cert *x509.Certificate, path string) error {
 	// are attacker- or operator-controlled and say nothing about who
 	// actually signed the certificate.
 	if err := cert.CheckSignatureFrom(cert); err == nil {
-		return fmt.Errorf("%w: %s is self-signed, which means it is a root — this service holds the intermediate only, and the root must stay offline (docs/phases/phase-3b-pki-hardening.md)",
+		return fmt.Errorf("%w: %s is self-signed, which means it is a root — this service holds the intermediate only, and the root must stay offline",
 			ErrRootCertificateRejected, path)
 	}
 	if !cert.MaxPathLenZero {
-		return fmt.Errorf("%w: %s does not carry pathlen:0, so it is permitted to certify further CAs; this platform's hierarchy is two tiers (CLAUDE.md §3.6)",
+		return fmt.Errorf("%w: %s does not carry pathlen:0, so it is permitted to certify further CAs; this platform's hierarchy is two tiers",
 			ErrNotAnIntermediate, path)
 	}
 	// keyUsage decides what this certificate is *allowed* to do, and a
@@ -159,7 +160,7 @@ func checkIntermediateCert(cert *x509.Certificate, path string) error {
 	// certificate: RFC 5280 §6.1.3 validates every certificate in the path
 	// against the same instant. Refusing at startup, where an operator is
 	// watching, beats coming up and failing every issuance later
-	// (CLAUDE.md §3.4). Issue re-checks per issuance, because a service
+	//. Issue re-checks per issuance, because a service
 	// that started before the expiry is still running after it.
 	now := time.Now()
 	if now.Before(cert.NotBefore) {
@@ -195,8 +196,8 @@ func checkKeyMatchesCert(signer *Signer, cert *x509.Certificate, keyLabel, certP
 // A file with a second block is rejected rather than silently reduced to
 // its first. The likely way that happens is an operator pasting a whole
 // chain into ca.intermediate_cert_path, and picking the first block would
-// make the choice by file order — which is nobody's decision (CLAUDE.md
-// §3.8, and §3.4 on not degrading to a weaker path).
+// make the choice by file order — which is nobody's decision (the engineering contract
+// the identity rule, and failing closed on not degrading to a weaker path).
 func loadCertPEM(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

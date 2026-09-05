@@ -28,7 +28,7 @@ func repoRoot(t *testing.T) string {
 }
 
 // TestRepository_HonoursItsOwnKeyInventory is the mechanical half of
-// CLAUDE.md §3.6 and §3.7. Purpose separation is broken by a line in a
+// purpose separation and §3.7. Purpose separation is broken by a line in a
 // workflow file rather than by a function, so the check has to look at the
 // repository — a rule only a careful reader enforces lasts until the first
 // hurried afternoon.
@@ -129,7 +129,7 @@ func TestAudit_CatchesAKeyTheInventoryDoesNotList(t *testing.T) {
 }
 
 // TestAudit_RefusesARepositoryWithNoInventory keeps "nothing to check
-// against" from looking like "everything checks out" (CLAUDE.md §3.4).
+// against" from looking like "everything checks out".
 func TestAudit_RefusesARepositoryWithNoInventory(t *testing.T) {
 	if _, err := keyaudit.Audit(t.TempDir()); err == nil {
 		t.Fatal("Audit on a repository with no inventory succeeded, want an error")

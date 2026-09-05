@@ -22,7 +22,7 @@ var ErrAmbiguousLabel = errors.New("pkcs11: label matches more than one object")
 // FindKeyByLabel returns the single object of the given class carrying the
 // given CKA_LABEL in session s, and refuses to guess.
 //
-// The refusal is the point, and it is CLAUDE.md §3.8 in code. PKCS#11
+// The refusal is the point, and it is the identity rule in code. PKCS#11
 // defines CKA_LABEL as a description and nowhere requires it to be unique,
 // so a label search returning several objects is a normal thing for a token
 // to do and never a decidable question for the caller: picking the first
@@ -58,7 +58,7 @@ func FindKeyByLabel(ctx context.Context, adapter VendorAdapter, s *Session, clas
 // Provisioning uses it as a precondition rather than discovering the
 // conflict mid-flight: generating a key pair is irreversible, and finding
 // out afterwards that the label was taken leaves an operator to clean up a
-// token by hand (CLAUDE.md §3.9). An ambiguous label is not free — it is
+// token by hand. An ambiguous label is not free — it is
 // the most taken a label can be.
 func LabelIsFree(ctx context.Context, adapter VendorAdapter, s *Session, class ObjectClass, label string) (bool, error) {
 	_, err := FindKeyByLabel(ctx, adapter, s, class, label)

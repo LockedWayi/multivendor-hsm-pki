@@ -5,7 +5,7 @@
 # revocation -- a certificate revoked during an incident would reappear as
 # valid in the next CRL. That is the exact regression Phase 3b.3 removed,
 # and deploying onto ephemeral storage would reintroduce it from the
-# outside (docs/phases/phase-3b-pki-hardening.md, sub-task 3b.3).
+# outside.
 #
 # ReadWriteOnce is not a limitation to work around: the store is
 # single-writer, and so is the deployment (see deployment.yaml).

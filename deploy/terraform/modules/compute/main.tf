@@ -6,7 +6,7 @@
 # all: it turns an accidental destroy/replace plan into a hard error
 # instead of a live risk. Do not remove it to get past a blocked plan --
 # a plan that wants to destroy or replace this resource means something
-# upstream is wrong and needs investigating (CLAUDE.md, phase-3
+# upstream is wrong and needs investigating (the engineering contract, phase-3
 # "Critical decision notes").
 resource "hostinger_vps" "primary" {
   plan           = var.plan

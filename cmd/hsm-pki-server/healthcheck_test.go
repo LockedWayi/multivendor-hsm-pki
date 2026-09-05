@@ -9,7 +9,7 @@ import (
 )
 
 // These tests touch no token: the health check is pure process-local HTTP,
-// so running them once is running them everywhere (CLAUDE.md §2.4,
+// so running them once is running them everywhere (the every-backend rule,
 // docs/test-matrix.md §4).
 
 func TestProbeAddress(t *testing.T) {

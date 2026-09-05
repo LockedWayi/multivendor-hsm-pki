@@ -1,5 +1,5 @@
 // Command hsm-pki-keytool hosts operator-run, one-time HSM key ceremonies —
-// starting with the root/intermediate CA bootstrap (docs/phases/
+// starting with the root/intermediate CA bootstrap (
 // phase-3b-pki-hardening.md, sub-task 3b.1). It is deliberately a separate
 // binary from cmd/hsm-pki-server: the operations here touch the root key,
 // which the online service's configuration must never reference, and a
@@ -239,7 +239,7 @@ func findWorkspace(ctx context.Context, adapter pk11.VendorAdapter, label, seria
 }
 
 // pinResolver reads the PIN from the named environment variable at the
-// point of use — never cached, never logged (CLAUDE.md §3.1).
+// point of use — never cached, never logged.
 func pinResolver(envVar string) ca.PINResolver {
 	return func() ([]byte, error) {
 		pin := os.Getenv(envVar)

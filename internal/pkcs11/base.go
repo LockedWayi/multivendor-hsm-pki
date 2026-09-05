@@ -29,7 +29,7 @@ const janitorInterval = 30 * time.Second
 // pkcs11Adapter is the standard-PKCS#11 plumbing shared by every
 // VendorAdapter implementation in this package. It is unexported: callers
 // only ever see SoftHSM2Adapter or ProtectServerAdapter, each a thin named
-// type embedding *pkcs11Adapter (docs/phases/phase-1-pkcs11-core.md
+// type embedding *pkcs11Adapter (
 // sub-task 1.8).
 //
 // This type did not exist until the second vendor adapter (ProtectServer)
@@ -134,7 +134,7 @@ func (a *pkcs11Adapter) withStateLock(fn func() error) error {
 // initialized with CKF_OS_LOCKING_OK, which is precisely the flag that is
 // supposed to make that safe. Workspaces was moved to this function on
 // exactly that reasoning and had to be moved back; see its doc comment and
-// docs/pkcs11-vendor-notes.md. The surviving callers here are session
+// . The surviving callers here are session
 // scoped, and a *Session is used by one caller at a time, so they do not
 // exercise the module-global concurrency that broke.
 //
@@ -182,7 +182,7 @@ func checkCtx(ctx context.Context) error {
 // file; it does not reproduce in a freshly started process making only
 // this call, which is why it needs the full conformance suite's
 // accumulated activity ahead of it to show up (see
-// docs/pkcs11-vendor-notes.md for the full write-up).
+// for the full write-up).
 //
 // So the exclusive lock stays. The cost is real and worth naming: a vendor
 // module that stalls inside C_GetSlotList — plausible on a netHSM client
@@ -274,7 +274,7 @@ func (a *pkcs11Adapter) OpenSession(ctx context.Context, ws Workspace, opts Sess
 //
 // The session is marked unusable immediately and unconditionally — whatever
 // the token reports next, no caller gets to keep using it (fail closed,
-// CLAUDE.md §3.4). But it is only removed from the adapter's session map
+// failing closed). But it is only removed from the adapter's session map
 // once the token has actually released the handle. Dropping the entry
 // before knowing that would leave a session open on the token that nothing
 // can ever reclaim: the janitor sweeps the map, and Close force-closes the
@@ -326,7 +326,7 @@ func isSessionHandleInvalid(err error) bool {
 // caller back a still-readable PIN sitting in the Go heap, where this
 // package can no longer deterministically wipe it. Making the wipe
 // unconditional is what turns "pin is consumed" from a contract that holds
-// on the success path into one that holds always (CLAUDE.md §3.1).
+// on the success path into one that holds always.
 // zeroizeBytes is idempotent, so the double wipe on the normal path costs
 // a second pass over a handful of bytes and nothing else.
 func (a *pkcs11Adapter) Login(ctx context.Context, s *Session, pin []byte, role Role) error {
@@ -426,7 +426,7 @@ func (a *pkcs11Adapter) GenerateKeyPair(ctx context.Context, s *Session, req Key
 		// disclose the scalar anyway (CKR_ATTRIBUTE_SENSITIVE), while
 		// ProtectToolkit 7.3.3 returned all 32 bytes of the private key to
 		// any authenticated session. The CI backend hid it; the real vendor
-		// did not. See docs/pkcs11-vendor-notes.md.
+		// did not. See.
 		//
 		// So this is not a default a caller may override: for the keys this
 		// platform creates there is no legitimate use for a readable
@@ -469,7 +469,7 @@ func (a *pkcs11Adapter) GenerateSecretKey(ctx context.Context, s *Session, req S
 	// CKA_VALUE_LEN, which some tokens will happily create as a
 	// non-standard AES key rather than reject. A negative KeyBits is worse
 	// still. Rejecting the input outright is the fail-closed reading of an
-	// ambiguous security parameter (CLAUDE.md §3.4), and it puts the error
+	// ambiguous security parameter, and it puts the error
 	// at the caller's mistake instead of several layers down inside a
 	// vendor module.
 	switch bits {
@@ -539,7 +539,7 @@ func (a *pkcs11Adapter) GenerateRandom(ctx context.Context, s *Session, n int) (
 //
 // Needed for two things this platform has been putting off: a key lifecycle
 // that can actually retire a version rather than only adding new ones
-// (CLAUDE.md §3.7 — "retire it by destroying it on the token"), and tests
+// , and tests
 // that clean up after themselves. The second turned urgent when every
 // token-touching test began running against every backend: on a vendor
 // whose tokens persist, the object count grows with the size of the suite,
@@ -949,7 +949,7 @@ func toP11Attributes(attrs []Attribute) []*p11.Attribute {
 // idempotent. This is a best-effort wipe of a Go-heap buffer: the runtime
 // may already have copied the bytes elsewhere (that is precisely why
 // SecurePIN keeps the authoritative copy in the C heap — see
-// docs/phases/phase-1-pkcs11-core.md, "PIN zeroize method"). It removes the
+// , "PIN zeroize method"). It removes the
 // copy we can actually reach, which is strictly better than leaving it.
 func zeroizeBytes(b []byte) {
 	for i := range b {

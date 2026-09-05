@@ -71,7 +71,7 @@ spec:
           # Overlays set the image. It is a tag here and must become a
           # digest once a registry exists: a tag is a mutable pointer, so
           # deploying one means deploying whatever it points at today, and a
-          # signature over a tag attests to nothing durable (CLAUDE.md §3.8,
+          # signature over a tag attests to nothing durable (the identity rule,
           # sub-task 4.10).
           image: hsm-pki-server:local
           imagePullPolicy: IfNotPresent

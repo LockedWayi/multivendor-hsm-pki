@@ -10,7 +10,7 @@ variable, supplied by that environment's `.tfvars`.
 
 Modules land in this directory as sub-tasks 3.2+ give them real content.
 The first is `compute/`, wrapping the imported `hostinger_vps` (see
-`docs/phases/phase-3-infrastructure.md`, sub-task 3.2, and the
+, and the
 "Provider and blast-radius control" decision for why this resource is
 imported rather than created, and why it carries
 `lifecycle { prevent_destroy = true }`).

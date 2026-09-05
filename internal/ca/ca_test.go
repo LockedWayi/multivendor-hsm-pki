@@ -395,7 +395,7 @@ func TestIssue_SetsDistributionPoints(t *testing.T) {
 // A certificate's extensions are fixed by its signature, so a leaf issued
 // without a CRL distribution point can never gain one — it can only be
 // revoked into a CRL nobody has been told to fetch. Refusing to issue is
-// therefore the only fail-closed answer available (CLAUDE.md §3.4). No HSM
+// therefore the only fail-closed answer available. No HSM
 // is needed: the check runs before anything is signed, which is itself part
 // of what this asserts.
 func TestIssue_FailsClosedWithoutDistributionPoints(t *testing.T) {

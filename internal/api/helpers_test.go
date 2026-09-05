@@ -1,9 +1,9 @@
 package api_test
 
 // Every test in this package runs against every backend the environment
-// provides, through internal/hsmtest (CLAUDE.md §2.4). Phase 2 ran them
+// provides, through internal/hsmtest. Phase 2 ran them
 // against SoftHSM2 alone; that decision is superseded — see the banner on
-// docs/phases/phase-2-ca-core.md.
+//
 
 import (
 	"context"
@@ -47,7 +47,7 @@ const testBaseURL = "https://pki.example.test"
 // server republishes.
 //
 // The tokens come from internal/hsmtest, so every test in this package runs
-// against every configured vendor (CLAUDE.md §2.4). This helper used to
+// against every configured vendor. This helper used to
 // provision SoftHSM2 tokens inline, which is why the whole HTTP surface was
 // only ever exercised against one implementation.
 func newTestCAAt(t *testing.T, b *hsmtest.Backend, baseURL string) (*ca.CA, pk11.VendorAdapter, pk11.Workspace, api.RootArtifacts) {

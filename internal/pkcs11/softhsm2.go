@@ -2,7 +2,7 @@ package pkcs11
 
 // SoftHSM2Adapter implements VendorAdapter against SoftHSM2's PKCS#11
 // module. It is the only backend Phase 1 requires actually running in CI
-// (docs/phases/phase-1-pkcs11-core.md); ProtectServer (this file's sibling,
+// ; ProtectServer (this file's sibling,
 // protectserver.go) runs the same interface against a real vendor, locally.
 //
 // SoftHSM2Adapter is a thin named type over the shared pkcs11Adapter

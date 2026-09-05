@@ -1,6 +1,6 @@
 # OpenTofu state backend: self-hosted MinIO
 
-Sub-task 3.4 of `docs/phases/phase-3-infrastructure.md`. This document is
+Sub-task 3.4 of. This document is
 the maintainer's setup guide for the real MinIO instance the S3 backend
 in `deploy/terraform/environments/*/backend.tf` talks to. Provisioning it
 is a step only the maintainer can do (it touches the real VPS); this file
@@ -10,15 +10,14 @@ knowledge.
 ## Why MinIO, self-hosted, on the same VPS
 
 Decided 2026-08-26. State needs a remote backend with locking and
-encryption at rest (CLAUDE.md-adjacent acceptance criteria, phase-3
+encryption at rest (the engineering contract-adjacent acceptance criteria, phase-3
 sub-task 3.4). The options considered:
 
 - **Self-hosted MinIO on the existing Hostinger VPS (chosen).** S3-
   compatible, so OpenTofu's mature `s3` backend works against it
   unmodified. No new commercial account -- consistent with this
   project's existing "the maintainer's own, already-owned infrastructure"
-  posture (see `docs/phases/phase-3-infrastructure.md`, "Provider and
-  blast-radius control"). Tradeoff accepted: one more service to run and
+  posture . Tradeoff accepted: one more service to run and
   secure on that VPS.
 - **Cloudflare R2** -- rejected: zero-ops, but adds a second external
   commercial account for a single-VPS project that otherwise has exactly
@@ -122,9 +121,9 @@ stays plan-only for this phase, its state will simply hold nothing beyond
 plan-time provider negotiation; no separate MinIO setup is needed for it.
 
 This whole document is **maintainer-verified, not CI-verified**
-(CLAUDE.md §2.3): CI has no path to the maintainer's real VPS, and
+: CI has no path to the maintainer's real VPS, and
 building the S3 backend + locking + client-side encryption mechanics
 themselves were verified locally against a throwaway MinIO container
-(`docs/phases/phase-3-infrastructure.md`, sub-task 3.4) -- that proves the
+-- that proves the
 *mechanism*, not that this specific production instance is correctly
 provisioned. The maintainer confirms the real instance separately.

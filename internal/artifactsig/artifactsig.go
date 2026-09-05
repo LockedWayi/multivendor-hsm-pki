@@ -6,8 +6,8 @@
 // Phase 4.9 signs the release binary with cosign over an HSM-held key. A
 // verifier who reads that signature back with cosign learns only that
 // cosign agrees with itself — the same closed loop that shipped a CRL Go
-// could read and OpenSSL could not (docs/lessons.md §2), and a conformance
-// suite that normalised away the property it tested (§3). CLAUDE.md §3.10
+// could read and OpenSSL could not, and a conformance
+// suite that normalised away the property it tested (§3). independent verification
 // is the rule that came out of both: what another implementation has to
 // read is verified against another implementation.
 //
@@ -45,7 +45,6 @@
 // The keyless arms are refused rather than ignored. Their trust model is a
 // Fulcio root and a transparency log; verifying the signature and
 // discarding the identity material would answer a question nobody asked
-// (CLAUDE.md §3.4).
 package artifactsig
 
 import (

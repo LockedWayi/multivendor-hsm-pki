@@ -205,7 +205,7 @@ func TestCheckIntermediateCert_RejectsStructuralFaults(t *testing.T) {
 // TestLoadCertPEM_RejectsMoreThanOneBlock pins that a chain pasted into
 // ca.intermediate_cert_path is refused rather than silently reduced to its
 // first certificate. Picking the first would let file order decide which
-// certificate the CA runs as (CLAUDE.md §3.8).
+// certificate the CA runs as.
 func TestLoadCertPEM_RejectsMoreThanOneBlock(t *testing.T) {
 	cert := buildIntermediate(t, intermediateOpts{})
 	single := pemBlock(t, cert.Raw)

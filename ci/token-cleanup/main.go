@@ -23,7 +23,7 @@
 // which defaults to the run-scoped prefix hsmtest gives every object it
 // creates. An empty prefix is refused rather than treated as "everything":
 // "delete all test objects" and "delete every key on this token" must not be
-// one keystroke apart (CLAUDE.md §3.4, §3.9).
+// one keystroke apart.
 //
 // Usage:
 //
@@ -218,7 +218,7 @@ func newAdapter(adapterName, modulePath string) (pk11.VendorAdapter, error) {
 
 // findWorkspace resolves a token by label, refusing to guess when the label
 // matches more than one — the same rule the rest of the platform applies
-// (CLAUDE.md §3.8). It matters more here than usual: picking the wrong
+// . It matters more here than usual: picking the wrong
 // token would mean destroying objects on it.
 func findWorkspace(ctx context.Context, adapter pk11.VendorAdapter, label, serial string) (pk11.Workspace, error) {
 	workspaces, err := adapter.Workspaces(ctx)

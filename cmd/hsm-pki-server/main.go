@@ -77,7 +77,7 @@ func run(configPath string, logger *slog.Logger) error {
 		return err
 	}
 	// No secret material in this line by construction: ws.Label is an
-	// operator-assigned token label, never the PIN (CLAUDE.md §3.1).
+	// operator-assigned token label, never the PIN.
 	logger.Info("connected to HSM",
 		"adapter", cfg.PKCS11.Adapter,
 		"workspace", ws.Label,
@@ -92,7 +92,7 @@ func run(configPath string, logger *slog.Logger) error {
 	// The service loads a ceremony-produced intermediate and never creates a
 	// CA of its own. A configuration pointing it at a self-signed (root)
 	// certificate fails here rather than starting in a degraded posture
-	// (CLAUDE.md §3.4, docs/phases/phase-3b-pki-hardening.md).
+	//
 	caInstance, err := ca.LoadIntermediate(ctx, adapter, ws, cfg.PKCS11.SessionOptions, cfg.ResolvePIN, ca.LoadIntermediateParams{
 		KeyLabel:     cfg.CA.IntermediateKeyLabel,
 		CertPath:     cfg.CA.IntermediateCertPath,
@@ -107,7 +107,7 @@ func run(configPath string, logger *slog.Logger) error {
 	// certificate an operator cannot fix afterward: every leaf signed by
 	// this process will carry them verbatim. Seeing them at startup is the
 	// last cheap chance to notice a wrong base URL. Both are public
-	// endpoints, so nothing here is sensitive (CLAUDE.md §3.1).
+	// endpoints, so nothing here is sensitive.
 	logger.Info("intermediate CA ready",
 		"subject", caInstance.Certificate().Subject.String(),
 		"serial", caInstance.Certificate().SerialNumber.String(),
@@ -124,7 +124,7 @@ func run(configPath string, logger *slog.Logger) error {
 	// The store outlives the process it is opened in — that is its whole
 	// purpose. Revocations recorded here are still revoked after a restart,
 	// which the in-memory registry this replaced could not promise
-	// (docs/phases/phase-3b-pki-hardening.md, sub-task 3b.3).
+	//
 	records, err := store.OpenSQLite(ctx, cfg.CA.StorePath, logger, cfg.CA.CRLFloor())
 	if err != nil {
 		return err
@@ -186,7 +186,7 @@ func run(configPath string, logger *slog.Logger) error {
 // verifyHSMConnection resolves the configured workspace and establishes the
 // token login, before the service accepts any traffic. A wrong PIN or an
 // unreachable module fails the process at startup rather than surfacing as
-// a 500 on the first request (CLAUDE.md §3.4, fail closed).
+// a 500 on the first request (fail closed).
 //
 // The login it establishes is not torn down here — it is the service's
 // anchor login, held by the adapter for the process's lifetime and released
@@ -207,7 +207,7 @@ func verifyHSMConnection(ctx context.Context, cfg *config.Config, adapter pkcs11
 	}
 	// A label match that is not unique is ambiguous, and this refuses to
 	// choose rather than taking the first hit. PKCS#11 places no uniqueness
-	// constraint on CKA_LABEL (CLAUDE.md §3.8), so "first match" means the
+	// constraint on CKA_LABEL, so "first match" means the
 	// service authenticates whichever token the driver happened to
 	// enumerate first — and on the next boot, possibly the other one. That
 	// is a decision nobody made, about which token holds the CA's key.
@@ -259,7 +259,7 @@ func verifyHSMConnection(ctx context.Context, cfg *config.Config, adapter pkcs11
 // blindly: serving a truncated or wrong-typed file at a CRL distribution
 // point produces a relying party that cannot check the intermediate's
 // revocation status, and it should fail at startup where an operator sees
-// it, not silently at a verifier somewhere else (CLAUDE.md §3.4).
+// it, not silently at a verifier somewhere else.
 func loadRootArtifacts(cfg *config.Config) (api.RootArtifacts, error) {
 	certDER, err := readPEMFile(cfg.CA.RootCertPath, "CERTIFICATE")
 	if err != nil {
@@ -288,7 +288,7 @@ func loadRootArtifacts(cfg *config.Config) (api.RootArtifacts, error) {
 // that happens is an operator pasting a whole chain into root_cert_path,
 // and quietly serving only the first certificate of a bundle the operator
 // believed was complete is exactly the kind of half-correct behaviour that
-// surfaces at a relying party instead of at startup (CLAUDE.md §3.4).
+// surfaces at a relying party instead of at startup.
 func readPEMFile(path, wantType string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
