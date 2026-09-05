@@ -197,12 +197,17 @@ This is the incident the two-tier hierarchy exists to make cheap. The root
 is untouched; every certificate the root ever signed, including the old
 intermediate, is still valid until explicitly revoked. The recovery is:
 
-1. Revoke the old intermediate on the root's CRL — which, per §2.4, means
+1. ~~Revoke the old intermediate on the root's CRL — which, per §2.4, means
    running the ceremony again, since the root is offline. The new run
    signs a *new* intermediate under a *new* root key, because `RunCeremony`
    generates both tiers together (see the gap noted in §4.1.1 below) — so
    today this path is mechanically identical to §4.2's "lose the root"
-   path, even though the root itself was never touched.
+   path, even though the root itself was never touched.~~
+   **Corrected 2026-09-05:** the root is no longer regenerated for this.
+   Bring the root out, run `hsm-pki-keytool reissue-intermediate` to sign
+   a new intermediate under the existing root key, and re-run the ceremony
+   only to publish an updated root CRL revoking the old intermediate. See
+   §4.1.2.
 2. Re-issue every leaf that was still validly issued under the old
    intermediate, under the new one. The service cannot do this
    automatically: a leaf's issuer is fixed at signature time (CLAUDE.md
@@ -216,7 +221,23 @@ intermediate, is still valid until explicitly revoked. The recovery is:
    mismatched pairing fails loudly at startup rather than issuing
    certificates nothing can verify.
 
-#### 4.1.1 The gap: there is no "re-issue the intermediate alone" path yet
+#### 4.1.1 ~~The gap: there is no "re-issue the intermediate alone" path yet~~ — CLOSED 2026-09-05
+
+> **Superseded by the `reissue-intermediate` work (Phase 4, 2026-09-05).**
+> The gap this section describes is closed: `ca.ReissueIntermediate`
+> (`internal/ca/reissue.go`) and `hsm-pki-keytool reissue-intermediate`
+> sign a new intermediate under the **existing** root, and the command
+> cannot generate a root at all — a missing root key is a hard
+> `ErrKeyNotFound`, verified by a test that asserts no key was created
+> after the failure.
+>
+> So §4.1's step 1 above no longer requires a full ceremony, and losing
+> only the intermediate is no longer mechanically identical to §4.2.
+> The corrected procedure is §4.1.2 below.
+>
+> The analysis that follows is left exactly as written: it is the
+> reasoning that produced the command, and rewriting it would make this
+> document look as though the gap had never existed.
 
 CLAUDE.md §3.7 describes the intermediate rotating by "re-issuing the
 intermediate (routine)" — implying the root key is *reused*, not
@@ -230,6 +251,72 @@ intermediate token is handled exactly like §4.2 — which is safe (nothing
 about re-running the full ceremony is incorrect) but more expensive than it
 needs to be: every relying party that pinned the old root now has to trust
 a new one, for an incident that never touched the root at all.
+
+#### 4.1.2 Routine intermediate rotation, as it works now
+
+Added 2026-09-05, when `reissue-intermediate` landed. This is the procedure
+CLAUDE.md §3.7 calls "re-issuing the intermediate (routine)" — for a planned
+rotation, or for the loss of the intermediate token alone.
+
+The root still has to come out of storage: it holds the only key that can
+sign an intermediate. What changed is that it is *used* rather than
+*replaced*, so every relying party keeps the root it already trusts.
+
+```sh
+# The root token is attached; the new intermediate key is generated on the
+# intermediate's own token, which is never the root's (checked by serial,
+# and then confirmed empirically by an object search — CLAUDE.md §3.8).
+hsm-pki-keytool reissue-intermediate \
+  -module "$PKCS11_MODULE" \
+  -root-workspace hsm-pki-root -root-pin-env ROOT_PIN \
+  -root-key-label ca-root-key-v1 \
+  -root-cert /secure/root.pem \
+  -root-crl-url  http://pki.example.test/root.crl \
+  -root-cert-url http://pki.example.test/root.crt \
+  -intermediate-workspace hsm-pki-dev -intermediate-pin-env INTER_PIN \
+  -intermediate-key-label ca-intermediate-key-v2 \
+  -intermediate-cert-out /secure/intermediate-v2.pem
+```
+
+Four things this does *not* do, each deliberate:
+
+- **It does not generate a root key.** A root key that cannot be found is
+  `ErrKeyNotFound`, never a fresh key pair. A typo in `-root-key-label`
+  that silently minted a second root would produce an intermediate
+  verifying against a root nobody trusts — a failure that appears at every
+  relying party at once, long after the HSM went back in the safe.
+- **It does not overwrite the previous intermediate's key label.** `-v2`
+  is provisioned alongside `-v1`, per CLAUDE.md §3.7. The old key keeps
+  working, which is what makes the next step a transition rather than an
+  outage.
+- **It does not revoke the old intermediate.** Overlap is the point.
+  Revoking is a separate, explicit act at the end of the transition
+  window, and it means publishing an updated root CRL — still a
+  root-online operation.
+- **It does not write private key material anywhere.** Both key pairs stay
+  on their tokens (CLAUDE.md §3.1).
+
+Then, in order:
+
+1. Point the service at the new certificate and key label
+   (`ca.intermediate_cert_path`, `ca.intermediate_key_label`) and restart.
+   `ca.LoadIntermediate`'s startup checks refuse to come up on a mismatched
+   pairing, so a wrong pairing fails loudly instead of issuing
+   certificates nothing can verify.
+2. Re-issue leaves under the new intermediate over the transition window.
+   A leaf's issuer is fixed at signature time, so this is a campaign, not
+   a configuration change.
+3. At the end of the window, revoke the old intermediate and publish an
+   updated root CRL — the root comes out once more for this.
+4. Retire the old key by destroying it on the token, per CLAUDE.md §3.7's
+   provision → verify-only → retire lifecycle.
+
+Verified on SoftHSM2, 2026-09-05: after a ceremony and a re-issue,
+`openssl verify -CAfile root.pem` accepts **both** `intermediate-v1.pem`
+and `intermediate-v2.pem`, the two carry different public keys, and the v2
+certificate carries `CA:TRUE, pathlen:0` with the root's CDP and AIA. The
+ProtectServer half of that claim is not yet made — see
+`docs/phases/phase-4-container-k8s.md` 4.11.
 
 ### 4.2 Losing the root token — the exceptional case
 
@@ -451,19 +538,24 @@ rotation framing specifically:
 
 - **Intermediate re-issue (routine).** A new intermediate key pair, signed
   under the *existing, unchanged* root, on a schedule the operator picks —
-  not in response to any incident. Blocked today on the same gap §4.1.1
+  not in response to any incident. ~~Blocked today on the same gap §4.1.1
   names: no code path signs a fresh intermediate under an existing root
-  without also regenerating the root.
+  without also regenerating the root.~~ **Implemented 2026-09-05**:
+  `hsm-pki-keytool reissue-intermediate`, procedure in §4.1.2.
 - **Root roll-over with cross-signing (exceptional).** A new root, with the
   *existing* intermediate cross-signed under it during a transition
   window so relying parties are not forced to update atomically. Blocked
   today on the gap §4.2 names: no code path signs an existing intermediate
   public key under a newly generated root.
 
-Neither gap is scoped to a phase file yet; both are natural extensions of
+~~Neither gap is scoped to a phase file yet; both are natural extensions of
 the `hsm-pki-keytool` work Phase 4.8 already does for the image/artifact
 signing keys; §4.1.1 and this section are the record that they are needed,
-for whoever picks them up. The *signing keys'* (image, artifact) own
+for whoever picks them up.~~ **Updated 2026-09-05:** the routine one is
+built (§4.1.2). Cross-signing remains open and unscoped — it is the harder
+of the two, because it signs a public key that arrives from outside the
+run rather than one just generated, and that is a different trust question
+than anything this codebase does today. The *signing keys'* (image, artifact) own
 rotation — distinct from the CA hierarchy this section covers — is
 implemented in Phases 4.8 and 5.9 per CLAUDE.md §3.7, with a mechanical
 rotation drill in CI (`docs/phases/phase-5-cicd.md`, 5.9).
