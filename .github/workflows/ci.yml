@@ -6,6 +6,7 @@
 #   deps      dependency vulnerabilities: trivy fs + govulncheck  (Phase 5.3)
 #   image     the service image: trivy image + SBOM      (Phase 5.3)
 #   terraform fmt, validate, trivy config + secrets      (Phase 5.4)
+#   publish   build, scan, push and sign the image        (Phase 5.6)
 #
 # Phase 5.1 and 5.2's gitleaks gate were pulled forward on 2026-09-04; the
 # scanning jobs arrived with 5.3 and 5.2's Semgrep gate on 2026-09-05.
@@ -39,12 +40,22 @@
 # repository applies to its base images and to cosign (the identity rule:
 #     a tag is a pointer somebody can move).
 #
-# "Blocks merge" needs one repository setting this file cannot make: mark
-# these checks required under branch protection. Measured 2026-09-05, that
-# setting is unavailable on a private repository on the free plan (403,
-#), so every job here reports rather than
-# blocks. The scripts fail closed regardless; what is missing is GitHub
-# refusing the merge button, and no file in this repository can supply it.
+# "Blocks merge" needs one repository setting this file cannot make: the six
+# gate jobs marked required under branch protection. That setting was
+# measured unavailable while this project lived in a private repository on
+# the free plan (403) -- which is one of the reasons it is published here.
+# It is now in force: six required contexts, enforce_admins on, force-pushes
+# and deletions refused. A gate the owner can wave through is a report, not
+# a gate, so the owner is not exempt.
+#
+# The `publish` job below is the first that writes anything anywhere, and it
+# is downstream of all six in the same workflow run. That ordering is the
+# point: nothing reaches the registry that the gates did not examine on the
+# way past. Because the interaction between `needs:` and `if:` is easy to
+# read wrongly -- and the way it goes wrong is a publish step that runs
+# anyway -- the six results are also passed into ci/assert-publishable.sh
+# and compared there, and that script is exercised in both directions by
+# ci/assert-publishable-selftest.sh inside the `suite` gate.
 name: ci
 
 on:
@@ -115,6 +126,13 @@ jobs:
               exit 1
             fi
             go vet ./...'
+
+      # The publish guard, exercised in both directions. It lives in this
+      # job rather than in `publish` because `publish` runs only on a push
+      # to main -- a guard whose test never runs on the pull request that
+      # changes it is a guard nobody is checking.
+      - name: Publish-guard selftest
+        run: ci/assert-publishable-selftest.sh
 
       # -p 1 matches the documented invocation everywhere this suite runs.
       # SoftHSM2 gets a fresh temp token store per test, so parallel package
@@ -290,3 +308,100 @@ jobs:
       # passes because it did nothing.
       - name: Format, validate and scan the OpenTofu tree
         run: ci/terraform-scan.sh
+
+  # --------------------------------------------------------------------
+  # Everything above this line is a gate. This is the first job that writes
+  # anything anywhere, and the only one holding a credential that can.
+  publish:
+    name: publish signed image (GHCR)
+    needs: [suite, sast, gitleaks, deps, image, terraform]
+    # A pull request never publishes -- from a fork or from a branch here.
+    # `needs` already requires all six to have succeeded; this narrows it
+    # further to the event and branch, and ci/assert-publishable.sh re-checks
+    # both plus the six results at run time. Three layers because the
+    # interaction between `needs` and `if` is subtle enough to get wrong
+    # while reading it, and the way it goes wrong is a publish that happens.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      # Scoped to this job alone. Every other job in this workflow runs with
+      # the read-only default at the top of the file, so a compromise of a
+      # scanner cannot push an image.
+      packages: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Tags, not just the tip. `git describe --exact-match` decides
+          # whether this commit gets a semver tag, and the default shallow
+          # fetch brings no tags at all -- so without this the release tag
+          # is silently never applied and the step still reports success.
+          fetch-depth: 0
+
+      - name: Refuse to publish unless every gate passed
+        env:
+          PUBLISH_EVENT: ${{ github.event_name }}
+          PUBLISH_REF: ${{ github.ref }}
+          PUBLISH_GATES: >-
+            suite=${{ needs.suite.result }}
+            sast=${{ needs.sast.result }}
+            gitleaks=${{ needs.gitleaks.result }}
+            deps=${{ needs.deps.result }}
+            image=${{ needs.image.result }}
+            terraform=${{ needs.terraform.result }}
+        run: ci/assert-publishable.sh
+
+      # The ephemeral trust root (5.9's decision, applied here). A fresh
+      # SoftHSM2 token and fresh signing keys, provisioned per run, so the
+      # pipeline needs no hardware and commits no key material. The public
+      # halves go to .local/ci-keys and NOT to docs/keys: those are the
+      # committed, durable keys consumers verify against, and overwriting
+      # them with a set that dies with the build is the one thing this
+      # separation exists to prevent.
+      - name: Provision this run's signing keys
+        run: |
+          HSM_PKI_SIGNING_STATE="$PWD/.local/ci-signing" \
+          HSM_PKI_KEYS_DIR="$PWD/.local/ci-keys" \
+            deploy/docker/provision-signing-keys.sh
+
+      - name: Fetch and verify cosign
+        run: HSM_PKI_COSIGN_VERSION=v2 ci/cosign.sh fetch
+
+      # The credential is the runner's own GITHUB_TOKEN, minted for this run
+      # and expiring with it. That is why no registry password is stored as
+      # a repository secret: a long-lived credential in a repository whose
+      # subject is supply-chain custody is the thing to avoid, and a fork's
+      # pull_request run receives a read-only one by construction.
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build, scan, push and sign
+        env:
+          # The PIN reaches cosign as an environment variable and never
+          # inside a PKCS#11 URI (CLAUDE.md 3.1). It is the throwaway PIN of
+          # a token created minutes ago and destroyed with the runner, which
+          # is why it is not a secret -- but the mechanism is the one a real
+          # deployment uses, so it is wired the same way.
+          COSIGN_PKCS11_PIN: "1234"
+        run: |
+          HSM_PKI_SIGNING_STATE="$PWD/.local/ci-signing" \
+          HSM_PKI_KEYS_DIR="$PWD/.local/ci-keys" \
+          HSM_PKI_DOCKER_CONFIG="$HOME/.docker" \
+            ci/publish-image.sh "ghcr.io/${GITHUB_REPOSITORY,,}"
+
+      # Without this the signature on the published image is unverifiable by
+      # anyone: it was made by a key that existed only during this run. The
+      # public half and the run's signed inventory are kept so the claim can
+      # be checked at all -- and so that what the CI signature does and does
+      # not prove stays inspectable rather than asserted (CLAUDE.md 2.3).
+      - name: Keep this run's public keys and inventory
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ephemeral-signing-keys-${{ github.sha }}
+          path: .local/ci-keys/
+          if-no-files-found: error
