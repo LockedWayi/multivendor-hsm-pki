@@ -34,6 +34,13 @@ func NewSecurePIN(pin []byte) *SecurePIN {
 	var buf unsafe.Pointer
 	if n > 0 {
 		buf = C.malloc(n)
+		// The unsafe block is the point of this type, not an optimization
+		// in it. A PIN held in a Go []byte can be copied by the garbage
+		// collector on a stack or heap move, leaving a copy this package
+		// cannot find to overwrite; a C-heap buffer does not move, so
+		// Zeroize can guarantee the bytes it wrote over are the only ones
+		// that existed (CLAUDE.md §3.1).
+		// nosemgrep: go.lang.security.audit.unsafe.use-of-unsafe-block
 		C.memcpy(buf, unsafe.Pointer(&pin[0]), n)
 	}
 	for i := range pin {
@@ -50,6 +57,11 @@ func (p *SecurePIN) withGoString(fn func(string) error) error {
 	if p.n == 0 {
 		return fn("")
 	}
+	// Aliasing rather than copying, for the same reason: the alternative
+	// is string(C.GoBytes(...)), which allocates a second, Go-heap-owned
+	// copy of the PIN that Zeroize could never reach. The lifetime rule
+	// this depends on is stated on the method.
+	// nosemgrep: go.lang.security.audit.unsafe.use-of-unsafe-block
 	s := unsafe.String((*byte)(p.buf), int(p.n))
 	return fn(s)
 }

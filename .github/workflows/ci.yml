@@ -1,22 +1,29 @@
 # CI — the security gates, as jobs.
 #
 #   suite     build, vet, race suite and the coverage floor, against SoftHSM2
+#   sast      Semgrep over this repository's own Go code  (Phase 5.2)
 #   gitleaks  secret scan over the full history          (Phase 5.2)
 #   deps      dependency vulnerabilities: trivy fs + govulncheck  (Phase 5.3)
 #   image     the service image: trivy image + SBOM      (Phase 5.3)
 #
 # Phase 5.1 and 5.2's gitleaks gate were pulled forward on 2026-09-04; the
-# scanning jobs arrived with 5.3 on 2026-09-05.
+# scanning jobs arrived with 5.3 and 5.2's Semgrep gate on 2026-09-05.
+#
+# The four scanners are not four opinions about one thing. Each reads a
+# different artifact, and a finding from one is invisible to the others:
+# Semgrep reads the code written here, gitleaks reads what was committed,
+# trivy fs and govulncheck read what was imported, trivy image reads what
+# was assembled.
 #
 # Everything here ran locally before it ran here: each step below is the
 # same command a contributor runs from CONTRIBUTING.md, wrapped in the same
 # dev container. That is the point of this workflow's shape — CI is not a
 # second environment to keep in sync, it is the first environment made
 # unforgettable. Every job below is one script a contributor can run —
-# ci/coverage.sh, ci/scan-deps.sh, ci/scan-image.sh — so a red check is
-# reproducible without pushing again. The rest of Phase 5 (Semgrep, signing
-# as a gate, SLSA provenance, the rotation drill) lands on top of this
-# file, not instead of it.
+# ci/coverage.sh, ci/scan-code.sh, ci/scan-deps.sh, ci/scan-image.sh — so a
+# red check is reproducible without pushing again. The rest of Phase 5
+# (Terraform scanning, signing as a gate, SLSA provenance, the rotation
+# drill) lands on top of this file, not instead of it.
 #
 # Two decisions worth naming:
 #
@@ -101,6 +108,22 @@ jobs:
           docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev sh -c '
             git config --global --add safe.directory /repo
             bash ci/coverage.sh -race -p 1'
+
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      # p/golang and p/security-audit, blocking on any finding. Exceptions
+      # are `nosemgrep` comments pinned to the exact line, each with its
+      # reason beside it — never a disabled ruleset, and never a path
+      # exclusion, which would also exempt the finding nobody has written
+      # yet in the two files where one would matter most.
+      - name: Semgrep
+        run: ci/scan-code.sh
 
   gitleaks:
     name: secret scan (full history)
