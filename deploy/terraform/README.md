@@ -189,8 +189,8 @@ schemas, and directly on-topic for the no-secrets rule. Two commits show it
 working end-to-end on a realistic mistake: a hardcoded-looking token left
 in a variable's `default`.
 
-- [`2f37c6f`](https://github.com/LockedWayi/hsm-pki-platform/commit/2f37c6f) — introduces the mistake; `ci/terraform-scan.sh` exits 1, Trivy flags it `CRITICAL` (`github-pat`)
-- [`357496c`](https://github.com/LockedWayi/hsm-pki-platform/commit/357496c) — reverts it; `ci/terraform-scan.sh` exits 0 again
+- [`2f37c6f`](https://github.com/LockedWayi/multivendor-hsm-pki/commit/2f37c6f) — introduces the mistake; `ci/terraform-scan.sh` exits 1, Trivy flags it `CRITICAL` (`github-pat`)
+- [`357496c`](https://github.com/LockedWayi/multivendor-hsm-pki/commit/357496c) — reverts it; `ci/terraform-scan.sh` exits 0 again
 
 ## Provider verification (sub-task 3.1)
 

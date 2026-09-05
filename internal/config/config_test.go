@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 func writeConfig(t *testing.T, body string) string {

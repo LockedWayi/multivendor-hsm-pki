@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/api"
-	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
-	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // newTestCA provisions two SoftHSM2 tokens, runs a real root ceremony over

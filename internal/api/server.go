@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
-	"github.com/LockedWayi/hsm-pki-platform/internal/store"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
 const (

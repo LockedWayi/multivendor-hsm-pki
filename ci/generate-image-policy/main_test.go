@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/inventory"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
 )
 
 // A rendering against the repository's own inventory proves the generator

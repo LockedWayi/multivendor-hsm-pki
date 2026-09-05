@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/store"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
 // backend names one implementation and how to build it. reopen returns a

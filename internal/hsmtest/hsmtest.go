@@ -42,7 +42,7 @@ import (
 	"testing"
 	"time"
 
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // Backend is one vendor's adapter together with the tokens a test needs.
