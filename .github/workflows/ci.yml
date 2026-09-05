@@ -6,6 +6,7 @@
 #   deps      dependency vulnerabilities: trivy fs + govulncheck  (Phase 5.3)
 #   image     the service image: trivy image + SBOM      (Phase 5.3)
 #   terraform fmt, validate, trivy config + secrets      (Phase 5.4)
+#   trustchain the key inventory against an out-of-band anchor (Phase 5.9)
 #   publish   build, scan, push and sign the image        (Phase 5.6)
 #
 # Phase 5.1 and 5.2's gitleaks gate were pulled forward on 2026-09-04; the
@@ -309,12 +310,54 @@ jobs:
       - name: Format, validate and scan the OpenTofu tree
         run: ci/terraform-scan.sh
 
+  # The independent half of the signing story (Phase 5.9). It holds no token,
+  # no PIN and no private key of any kind, and that is enforced by the code
+  # path rather than by this job being careful: ci/cosign.sh decides from the
+  # subcommand, so there is no argument to it that both verifies and reaches
+  # a private key.
+  #
+  # What it asserts is the link that is NOT self-referential. The inventory,
+  # its signature and the key that verifies it would all three live in this
+  # tree, and checking them against each other proves only that the three
+  # agree -- which they would also do if somebody who can push here rewrote
+  # all three in one commit. So the anchor is fetched from a separately
+  # protected repository, pinned by commit and digest, and the inventory is
+  # checked against THAT, by openssl rather than by code shipped here.
+  #
+  # Deliberately --inventory-only. An ordinary `main` build carries only the
+  # pipeline's ephemeral signature by design, so demanding a release
+  # signature on every commit would leave this red for the normal case, and a
+  # check that is red normally is a check people learn to ignore. A specific
+  # release is verified by passing its digest.
+  trustchain:
+    name: verify trust chain (public keys only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Anchor, inventory and listed keys
+        run: ci/verify-release.sh --inventory-only
+
+      # The claim above is "a verifier cannot reach a private key". Asserted
+      # rather than stated: a guard nobody has watched refuse is
+      # indistinguishable from one that accepts everything.
+      - name: A verify invocation must refuse a PKCS#11 key
+        run: |
+          if ci/cosign.sh verify --key "pkcs11:token=x;object=y" scratch 2>/dev/null; then
+            echo "cosign.sh accepted a PKCS#11 key in verify mode -- the" >&2
+            echo "verifier is not independent." >&2
+            exit 1
+          fi
+          echo "refused, as it must"
+
   # --------------------------------------------------------------------
   # Everything above this line is a gate. This is the first job that writes
   # anything anywhere, and the only one holding a credential that can.
   publish:
     name: publish signed image (GHCR)
-    needs: [suite, sast, gitleaks, deps, image, terraform]
+    needs: [suite, sast, gitleaks, deps, image, terraform, trustchain]
     # A pull request never publishes -- from a fork or from a branch here.
     # `needs` already requires all six to have succeeded; this narrows it
     # further to the event and branch, and ci/assert-publishable.sh re-checks
@@ -351,6 +394,7 @@ jobs:
             deps=${{ needs.deps.result }}
             image=${{ needs.image.result }}
             terraform=${{ needs.terraform.result }}
+            trustchain=${{ needs.trustchain.result }}
         run: ci/assert-publishable.sh
 
       # The ephemeral trust root (5.9's decision, applied here). A fresh

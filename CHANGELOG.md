@@ -7,6 +7,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **A published image anyone can verify, without trusting this repository**
+  (Phase 5.9). `ci/verify-release.sh` walks a chain whose root is deliberately
+  not in this tree: the anchor is fetched from `LockedWayi/hsm-pki-trust-anchor`
+  (pinned by commit *and* content digest, failing closed rather than falling
+  back to `docs/keys/`), the inventory is verified against it **by openssl**
+  rather than by code shipped here, and the image key is read *out of* the
+  verified inventory instead of being hardcoded — so a rotation keeps old
+  signatures verifiable through the `verify-only` state.
+
+  This exists because the obvious thing proves nothing. An inventory, its
+  signature and the key that verifies it all living in one repository means
+  a check that they agree with each other, which they would also do if
+  whoever can push here rewrote all three. Measured: adding an attacker's key
+  to `docs/keys/key-inventory.json` is refused at the anchor step, because
+  re-signing the inventory needs an offline token in another repository.
+- **The two signatures are now distinguished, and only one is for consumers.**
+  Every published image carries the pipeline's *ephemeral* signature, which
+  proves the PKCS#11 mechanism end to end and nothing about custody — the key
+  came from the same build as the artifact. `ci/verify-release.sh` refuses an
+  image carrying only that, as admission does. A release gets a durable
+  counter-signature from the maintainer's own token
+  (`ci/countersign-release.sh <digest>`), whose success criterion is not that
+  cosign exited 0 but that the independent verification passes afterwards and
+  failed before.
+- **`ci/cosign.sh` cannot reach a private key from a verify invocation.** The
+  decision is taken from the subcommand rather than a caller-supplied flag, so
+  the code path that mounts the token is unreachable from `verify`,
+  `verify-blob` and `verify-attestation`; a `pkcs11:` key there is refused
+  outright. A verifier that could sign is not independent, whatever the job is
+  called.
 - **The service image is built, scanned, pushed and signed on every green
   merge to `main`** (Phase 5.6), to `ghcr.io/lockedwayi/multivendor-hsm-pki`,
   with a signed CycloneDX SBOM attestation bound to the digest. Tagged

@@ -390,6 +390,58 @@ run() {
     [ -x "$COSIGN_BIN" ] || die "no cosign at $COSIGN_BIN. Run: ci/cosign.sh fetch"
     verify_pinned_digest
 
+    # Verification mounts no token, and that is structural rather than
+    # polite.
+    #
+    # This group's whole claim is that verification happens somewhere that
+    # holds only public keys -- "a signer that verifies its own work proves
+    # less than an independent verifier does". A verifier that could sign is
+    # not independent, whatever the job is called. So the decision is taken
+    # from the subcommand rather than from a flag the caller passes: there
+    # is no argument to ci/cosign.sh that both verifies and reaches a
+    # private key, because the code path that mounts the token is not
+    # reachable from a verify.
+    #
+    # Consequence worth stating: `verify --key pkcs11:...` cannot work here.
+    # That is refused loudly below rather than left to fail as a confusing
+    # module error, and it is not a limitation anybody should route around
+    # -- a published key is what a verifier is supposed to hold.
+    local verify_only=0
+    case "${1:-}" in
+        verify|verify-blob|verify-attestation) verify_only=1 ;;
+    esac
+
+    if [ "$verify_only" = "1" ]; then
+        for arg in "$@"; do
+            case "$arg" in
+                pkcs11:*) die \
+                    "refusing to verify with a PKCS#11 key.
+Verification here runs with no token mounted, deliberately: a verifier that
+can reach a private key is not the independent verifier this pipeline
+claims to have. Pass a published public key instead." ;;
+            esac
+        done
+        ensure_runner_image
+
+        local vnet_args=()
+        [ -n "${HSM_PKI_COSIGN_NETWORK:-}" ] && vnet_args=(--network "$HSM_PKI_COSIGN_NETWORK")
+        local vcred_args=()
+        if [ -n "${HSM_PKI_DOCKER_CONFIG:-}" ]; then
+            vcred_args=(-v "${HSM_PKI_DOCKER_CONFIG}":/dockerconfig:ro
+                        -e DOCKER_CONFIG=/dockerconfig)
+        fi
+
+        # No token store, no module, no SOFTHSM2_CONF, no PIN. Compare this
+        # invocation with the signing one below: the difference is the point.
+        docker run --rm -i \
+            "${vnet_args[@]}" \
+            "${vcred_args[@]}" \
+            -v "$COSIGN_BIN":/usr/local/bin/cosign:ro \
+            -v "$REPO_ROOT":/repo -w /repo \
+            "$RUNNER_IMAGE" "$@"
+        return
+    fi
+
     # Checked here rather than left to docker, which would create each
     # missing path on the host as a root-owned directory. That is not just
     # untidy: provision-signing-keys.sh refuses to run when its state

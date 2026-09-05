@@ -136,46 +136,79 @@ findings live in **one** reviewed allowlist and must carry a written reason
 and an expiry date — an exception nobody has to renew is a forgotten risk,
 not an accepted one.
 
-## The published image, and what its signature means
+## The published image, and how to verify it
 
 A push to `main` that clears all six gates publishes the service image to
-`ghcr.io/lockedwayi/multivendor-hsm-pki`, signed with cosign over PKCS#11
-and carrying a signed CycloneDX SBOM attestation.
+`ghcr.io/lockedwayi/multivendor-hsm-pki` with a signed CycloneDX SBOM
+attestation. Two tags are written and no more: `sha-<commit>`, and
+`v<x.y.z>` when the commit carries that release tag. There is deliberately
+no `latest` and no moving `main` — both are pointers somebody can move, and
+the argument this repository makes about identity is that a name is not one.
+**The digest is the identity.** Pull the digest form.
 
-Two tags are written and no more: `sha-<commit>`, and `v<x.y.z>` when the
-commit carries that release tag. There is deliberately no `latest` and no
-moving `main` — both are pointers somebody can move, and the argument this
-repository makes about identity is that a name is not one. **The digest is
-the identity.** Pull the digest form.
+### Verifying a release
 
 ```sh
-# what the pipeline signed
-cosign verify --key <the run's image-signing-key-v1.pub> \
-    --insecure-ignore-tlog=true \
-    ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
 ```
 
-**Read the key in that command literally, because it is the honest part.**
-A pipeline run provisions its own SoftHSM2 token and its own signing keys
-and destroys them with the runner (the ephemeral trust root — it means the
-pipeline needs no hardware and commits no key material, and anyone can
-reproduce it). So the published image is signed by a key that is *not* the
-committed `docs/keys/image-signing-key-v1.pub`, and:
+That script exists because the obvious thing would prove nothing. If a
+project publishes an inventory, a signature over it, and the public key that
+verifies that signature, all in one repository, then checking them against
+each other only establishes that the three files agree — and whoever can
+write to the repository can change all three in one commit. A verification
+recipe pointing at `docs/keys/` alone is theatre.
 
-- `cosign verify` against the committed key **fails**, correctly — it is a
-  different key, and that is measured, not assumed;
-- the Kyverno policy in `deploy/k8s/policy/` **refuses** the CI-signed
-  image, because that policy names the durable key from the signed
-  inventory.
+So the chain starts somewhere else:
 
-That is the design working rather than failing. An image whose only
-signature comes from a trust root that died with the build should not be
-deployable anywhere. What the CI signature proves is the *mechanism*, end
-to end, over a real PKCS#11 token — and nothing at all about custody. The
-run's public keys and its signed inventory are attached to the run as the
-`ephemeral-signing-keys-<sha>` artifact, so the claim can be checked rather
-than taken on trust. Durable-key signing is maintainer-verified and stated
-separately below; the two are never averaged into one sentence.
+| # | Link | Why it is where it is |
+|---|---|---|
+| 1 | **anchor** | fetched from `LockedWayi/hsm-pki-trust-anchor`, a separate repository with its own protection, pinned by commit *and* content digest. An unreachable anchor **refuses** — it never falls back to the copy in this tree, because that copy is what the step exists to stop trusting. |
+| 2 | **inventory** | `docs/keys/key-inventory.json` verified against that anchor **by openssl** — an implementation that is not this project's code and did not produce the signature. |
+| 3 | **the key** | read *out of* the verified inventory, never hardcoded. This is what makes rotation work: a signature from a previous key version keeps verifying while that version is listed `verify-only`. |
+| 4 | **the image** | verified by digest, with no token mounted anywhere. |
+
+Forging that chain needs a compromise of two separately protected
+repositories **and** an offline token that is in neither of them. That is the
+property being bought — not that the pins are unreachable, but that one push
+is not enough.
+
+You can also do it by hand; it is four commands and worth reading once:
+
+```sh
+curl -fsSL "https://raw.githubusercontent.com/LockedWayi/hsm-pki-trust-anchor/<pinned-commit>/inventory-signing-key-v1.pub" -o anchor.pub
+sha256sum anchor.pub                       # compare with ci/scanner-pins.sh
+openssl dgst -sha256 -verify anchor.pub \
+    -signature docs/keys/key-inventory.json.sig docs/keys/key-inventory.json
+cosign verify --key <the image key listed in that inventory> \
+    --insecure-ignore-tlog=true ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+```
+
+### The two signatures, and why only one is for you
+
+Every published image carries a **pipeline signature**, made with a SoftHSM2
+token and keys that the run provisions for itself and destroys with the
+runner. It proves the signing mechanism works end to end over a real PKCS#11
+token — which is worth proving — and it proves *nothing whatever* about
+custody, because the key came from the same build that produced the artifact.
+**Do not verify against it.** `ci/verify-release.sh` deliberately refuses an
+image that carries only this signature, and the Kyverno policy in
+`deploy/k8s/policy/` refuses to admit one. An image whose only signature
+comes from a trust root that died with the build should not be deployable
+anywhere, including here.
+
+A **release signature** is added deliberately, by the maintainer, with
+`image-signing-key-v1` on their own token
+(`ci/countersign-release.sh <digest>`). That key is listed in the inventory,
+which is signed by an offline token, whose public half lives in the other
+repository. It is the signature the table above verifies and the one
+admission enforces.
+
+CI cannot hold that key without either committing key material or exposing
+the development machine to pipeline execution, and both were rejected with
+reasons. So ordinary `main` builds are development artifacts, and releases
+are the digests a consumer is meant to pull — which is what an
+offline-ish signing key is for, rather than a gap in the automation.
 
 ## What is verified, and how
 
