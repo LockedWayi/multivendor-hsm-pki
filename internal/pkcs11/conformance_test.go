@@ -36,11 +36,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
 	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
 )
 
@@ -77,17 +79,59 @@ func (b *conformanceBackend) label(suffix string) string {
 	return fmt.Sprintf("conf-%s-%s", b.runID, suffix)
 }
 
+// conformanceBackends is this suite's own vendor list, deliberately separate
+// from internal/hsmtest's registry.
+//
+// The separation is not drift. This suite needs a backend shape the harness
+// does not provide — a deliberately *wrong* PIN, and tolerance for the
+// adapter being closed part-way through, because
+// AdapterClose_RejectsFurtherUse is one of the behaviours it pins. Folding
+// that into the shared harness would push this suite's needs onto every
+// other suite that uses it. docs/test-matrix.md records the duplication as
+// accepted, with that reasoning.
+//
+// What must never happen is the two lists disagreeing about *which vendors
+// exist*, which is what TestConformanceCoversEveryRegisteredVendor below
+// enforces.
+var conformanceBackends = []struct {
+	name  string
+	setup func(t *testing.T) *conformanceBackend
+}{
+	{"SoftHSM2", setupSoftHSM2Backend},
+	{"ProtectServer", setupProtectServerBackend},
+}
+
+// TestConformanceCoversEveryRegisteredVendor fails when a vendor is added to
+// internal/hsmtest's registry and not to this suite.
+//
+// Without it, that omission is invisible in the worst possible way: the new
+// vendor runs in every suite *except* the conformance one — the suite whose
+// entire purpose is to catch vendor divergence. Everything stays green, and
+// the backend nobody checked for conformance is the one nobody checked.
+//
+// The check is by name and in order, so a rename or a reordering is caught
+// too. It compares only names because the setup functions genuinely differ
+// (see conformanceBackends' comment); requiring identical constructors would
+// be requiring the merge this repository has decided not to make yet.
+func TestConformanceCoversEveryRegisteredVendor(t *testing.T) {
+	var covered []string
+	for _, be := range conformanceBackends {
+		covered = append(covered, be.name)
+	}
+	registered := hsmtest.Vendors()
+	if !slices.Equal(covered, registered) {
+		t.Fatalf("conformance suite covers %v but internal/hsmtest registers %v.\n"+
+			"Adding a vendor means an entry in BOTH lists until they are unified "+
+			"(docs/test-matrix.md, backlog item 9). A vendor missing here runs "+
+			"everywhere except the suite that exists to find its divergence.",
+			covered, registered)
+	}
+}
+
 // TestConformance runs the full behavioral suite against every available
 // backend. See the package-level doc comment above for why.
 func TestConformance(t *testing.T) {
-	backends := []struct {
-		name  string
-		setup func(t *testing.T) *conformanceBackend
-	}{
-		{"SoftHSM2", setupSoftHSM2Backend},
-		{"ProtectServer", setupProtectServerBackend},
-	}
-	for _, be := range backends {
+	for _, be := range conformanceBackends {
 		be := be
 		t.Run(be.name, func(t *testing.T) {
 			b := be.setup(t)
