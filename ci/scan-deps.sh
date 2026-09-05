@@ -59,7 +59,47 @@ docker run --rm \
     "${GO_IMAGE}" sh -c "
         set -e
         git config --global --add safe.directory /repo
-        go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+
+        # Retry the steps that reach the network, and only those. A module
+        # proxy reset is not a finding: on 2026-09-05 one turned main red
+        # with 'read: connection reset by peer' while fetching
+        # modernc.org/sqlite, on a tree whose pull-request run had been
+        # green ninety seconds earlier. A pipeline that reports the network
+        # as a vulnerability teaches its readers to re-run red checks, and
+        # that is the habit which later waves a real finding through.
+        #
+        # The scan itself is deliberately NOT retried. Retrying an answer
+        # until it changes is how a gate becomes a suggestion.
+        retry() {
+            attempt=1
+            while true; do
+                if \"\$@\"; then return 0; fi
+                if [ \"\$attempt\" -ge 3 ]; then
+                    echo \"scan-deps: '\$*' failed after \$attempt attempts\" >&2
+                    return 1
+                fi
+                echo \"scan-deps: '\$*' failed, retrying (\$attempt/3)\" >&2
+                sleep \$((attempt * 5))
+                attempt=\$((attempt + 1))
+            done
+        }
+
+        retry go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
+
+        # Pre-populate the module cache before the analysis starts, so a
+        # transient proxy failure surfaces here -- where it is retried --
+        # instead of inside govulncheck's package loader, which has no
+        # retry and reports it as 'could not import ... (invalid package
+        # name)': a message that reads like a broken dependency rather
+        # than a broken connection, and cost an hour on 2026-09-05.
+        #
+        # 'go mod download', not 'go mod download all'. The 'all' pattern
+        # reaches the test dependencies of dependencies, which this scan
+        # never loads, and writes their checksums into go.sum -- measured,
+        # thirty lines -- so the gate would leave the checkout dirty and
+        # the diff would invite somebody to commit them.
+        retry go mod download
+
         # -format json rather than text because text cannot be filtered
         # against the allowlist. Test files are deliberately out of scope:
         # the question is what the shipped binary can reach.
