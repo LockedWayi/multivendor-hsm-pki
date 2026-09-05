@@ -6,7 +6,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-Nothing yet. Phase 5 (CI/CD security gates) is next.
+### Fixed
+- **`reissue-intermediate` checked the root's authority at the wrong
+  instant.** `checkRootMaySign` ran only inside `validate()`, against its
+  own `time.Now()`, while the certificate's `NotAfter` is computed later
+  from a different one — with an HSM key generation, a token login and an
+  object search in between. The lifetime approved was therefore measured
+  from an instant strictly earlier than the one the certificate carries, so
+  a root close to its own expiry could produce an intermediate that
+  outlives it. CLAUDE.md §3.11 says the check belongs at the point of use
+  as well, and `ca.checkIssuerCanCover` already did exactly this one tier
+  down at leaf issuance. Present in v0.1.0; the window is the elapsed time
+  between the two calls, so it bites only a root within seconds of its
+  boundary.
+- **`ReissueIntermediateParams` accepted an empty intermediate subject**,
+  so the library API could mint a CA certificate with no subject.
+  `validateCSR` already applies that test to a leaf. Rejected before the
+  first key exists, per §3.9. Present in v0.1.0; unreachable through
+  `hsm-pki-keytool`, whose `-intermediate-cn` defaults to a non-empty
+  value.
+
+### Changed
+- **`docs/pkcs11-vendor-notes.md` names the trigger** behind the recurring
+  ProtectServer leftovers, which the previous entry recorded as
+  un-isolated. `TestConformance` intermittently hangs on that backend (the
+  documented `C_GetSlotList` deadlock needs the process to have done real
+  work first, which a conformance run has); Go's test timeout kills the
+  process, a killed process runs no `t.Cleanup`, and the objects survive to
+  fail a *different* package's next run through the deterministic RNG.
+
+Phase 5 (CI/CD security gates) is next.
 
 ## [0.1.0] — 2026-09-05
 
