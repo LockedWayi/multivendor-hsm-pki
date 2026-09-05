@@ -27,6 +27,16 @@ TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:22cb52f6c5bf5c72a48a8f56d993d8df3e9
 # repository that has a rule against them.
 TOFU_CLEANUP_IMAGE="alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
 
+# The key-inventory trust anchor, published apart from the inventory it
+# authenticates so that changing what a verifier trusts takes a compromise of
+# two separately protected repositories rather than one edit to this tree.
+# Pinned by commit -- a branch is a pointer somebody can move -- and by
+# content digest, which is the check that survives a substituted response.
+TRUST_ANCHOR_REPO="LockedWayi/hsm-pki-trust-anchor"
+TRUST_ANCHOR_COMMIT="13a8d605df7379f247ab3643b769552a206c6d22"
+TRUST_ANCHOR_FILE="inventory-signing-key-v1.pub"
+TRUST_ANCHOR_SHA256="afc3febd028c566b30a04e2dfd38f4a8740ca2dada5bdb12e2eb5e701913d888"
+
 # golang.org/x/vuln/cmd/govulncheck. A module version rather than an image:
 # the Go module proxy's checksum database makes a released version
 # immutable in the same way a digest does.
