@@ -1,0 +1,61 @@
+# Dependabot: the half of dependency security that scanning cannot do.
+#
+# ci/scan-deps.sh answers "is anything we depend on vulnerable today". It
+# cannot answer "and who is going to notice next month". A scanner without
+# an update mechanism produces a red pipeline that stays red, because the
+# work of raising the upgrade is still manual and still nobody's job. This
+# file is that mechanism: Dependabot opens the PR, and the PR goes through
+# the same gates as any other change — which is the point, because an
+# automated dependency bump is exactly the change most likely to be merged
+# without being read.
+version: 2
+updates:
+  # Go modules. Grouped rather than one PR per module: this repository has a
+  # deliberately small dependency set (four direct, ten indirect), so
+  # separate PRs would be noise without being more reviewable.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      go-modules:
+        patterns: ["*"]
+    commit-message:
+      # CLAUDE.md §5.1 requires Conventional Commits. Dependabot cannot
+      # write the trailer block, so these commits carry a prefix and no
+      # Phase: trailer; the merge commit for the PR is where that lands.
+      prefix: chore
+      include: scope
+
+  # The workflow's own actions. These are pinned by commit SHA (ci.yml), and
+  # a SHA pin is exactly the kind that rots silently: it never breaks, it
+  # just quietly stops receiving the fixes the tag would have brought.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  # Base images, digest-pinned in both Dockerfiles for the reason CLAUDE.md
+  # §3.8 gives. Same rot, higher stakes: the runtime base is where a distro
+  # CVE arrives, and trivy will start failing the image scan on a base
+  # nobody is bumping.
+  - package-ecosystem: docker
+    directory: /deploy/docker
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+  - package-ecosystem: docker
+    directory: /ci
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
