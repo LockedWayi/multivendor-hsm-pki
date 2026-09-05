@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/artifactsig"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/artifactsig"
 )
 
 // The fixture is a real cosign v3.1.3 signature, made over the HSM with

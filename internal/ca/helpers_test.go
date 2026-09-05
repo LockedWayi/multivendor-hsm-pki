@@ -10,9 +10,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
-	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 func requireSoftHSM2(t *testing.T) string {

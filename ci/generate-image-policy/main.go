@@ -72,7 +72,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/inventory"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
 )
 
 func main() {

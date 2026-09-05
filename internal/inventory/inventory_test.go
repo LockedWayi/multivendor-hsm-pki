@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/inventory"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
 )
 
 // These tests touch no token — an inventory is a document, and the key that

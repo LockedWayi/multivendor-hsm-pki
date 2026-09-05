@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
-	"github.com/LockedWayi/hsm-pki-platform/internal/config"
-	"github.com/LockedWayi/hsm-pki-platform/internal/inventory"
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
-	"github.com/LockedWayi/hsm-pki-platform/internal/signingkey"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
 )
 
 // keySpec is one `purpose:label:status` triple from the command line.

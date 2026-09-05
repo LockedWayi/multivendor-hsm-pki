@@ -1,4 +1,4 @@
-module github.com/LockedWayi/hsm-pki-platform
+module github.com/LockedWayi/multivendor-hsm-pki
 
 go 1.27.0
 
