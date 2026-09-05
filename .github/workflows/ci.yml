@@ -230,6 +230,35 @@ jobs:
       - name: Vulnerabilities and SBOM
         run: ci/scan-image.sh hsm-pki-server:ci
 
+      # The signing environment, built because nothing else here builds it.
+      # Found by a base-image bump (debian 12-slim -> 13-slim) that arrived
+      # with six green checks, none of which had compiled the file it
+      # changed: a green check that examined nothing is indistinguishable
+      # from one that examined everything and approved.
+      #
+      # What is asserted is what this image exists to provide. It ships no
+      # cosign binary -- that is fetched, verified and mounted at run time --
+      # so the failure a base bump actually causes is a renamed or dropped
+      # library, and the binary then dies at exec with an unresolved
+      # DT_NEEDED. Checking the sonames resolve catches exactly that, and
+      # costs a container start rather than a 140 MB download. Running the
+      # real binary against a real token stays the maintainer-verified step.
+      - name: Build the cosign image and check its runtime libraries
+        run: |
+          docker build -f ci/cosign.Dockerfile -t hsm-pki-cosign:ci .
+          docker run --rm --entrypoint sh hsm-pki-cosign:ci -c '
+            missing=0
+            for lib in libpcsclite.so.1 libssl.so.3 libstdc++.so.6 \
+                       libgcc_s.so.1 libcrypto.so.3; do
+              if ldconfig -p | grep -q "$lib"; then
+                echo "ok       $lib"
+              else
+                echo "MISSING  $lib" >&2
+                missing=1
+              fi
+            done
+            exit "$missing"'
+
       # The SBOM answers "were we affected" about a CVE published after this
       # build, which it can only do if it outlives the job that made it.
       # Attaching it to the image itself is 5.6.
