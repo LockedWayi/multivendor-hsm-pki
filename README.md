@@ -136,6 +136,47 @@ findings live in **one** reviewed allowlist and must carry a written reason
 and an expiry date — an exception nobody has to renew is a forgotten risk,
 not an accepted one.
 
+## The published image, and what its signature means
+
+A push to `main` that clears all six gates publishes the service image to
+`ghcr.io/lockedwayi/multivendor-hsm-pki`, signed with cosign over PKCS#11
+and carrying a signed CycloneDX SBOM attestation.
+
+Two tags are written and no more: `sha-<commit>`, and `v<x.y.z>` when the
+commit carries that release tag. There is deliberately no `latest` and no
+moving `main` — both are pointers somebody can move, and the argument this
+repository makes about identity is that a name is not one. **The digest is
+the identity.** Pull the digest form.
+
+```sh
+# what the pipeline signed
+cosign verify --key <the run's image-signing-key-v1.pub> \
+    --insecure-ignore-tlog=true \
+    ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+```
+
+**Read the key in that command literally, because it is the honest part.**
+A pipeline run provisions its own SoftHSM2 token and its own signing keys
+and destroys them with the runner (the ephemeral trust root — it means the
+pipeline needs no hardware and commits no key material, and anyone can
+reproduce it). So the published image is signed by a key that is *not* the
+committed `docs/keys/image-signing-key-v1.pub`, and:
+
+- `cosign verify` against the committed key **fails**, correctly — it is a
+  different key, and that is measured, not assumed;
+- the Kyverno policy in `deploy/k8s/policy/` **refuses** the CI-signed
+  image, because that policy names the durable key from the signed
+  inventory.
+
+That is the design working rather than failing. An image whose only
+signature comes from a trust root that died with the build should not be
+deployable anywhere. What the CI signature proves is the *mechanism*, end
+to end, over a real PKCS#11 token — and nothing at all about custody. The
+run's public keys and its signed inventory are attached to the run as the
+`ephemeral-signing-keys-<sha>` artifact, so the claim can be checked rather
+than taken on trust. Durable-key signing is maintainer-verified and stated
+separately below; the two are never averaged into one sentence.
+
 ## What is verified, and how
 
 This project makes claims automation cannot check, so the two are labelled

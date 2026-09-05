@@ -427,8 +427,29 @@ Provision the keys first:  deploy/docker/provision-signing-keys.sh
         net_args=(--network "$HSM_PKI_COSIGN_NETWORK")
     fi
 
+    # Registry credentials, for the invocations that reach an authenticated
+    # registry. cosign reads them from a docker config directory, and the
+    # caller's lives outside the repository -- so with nothing mounted here
+    # cosign is simply anonymous, and against a private registry that
+    # surfaces as an authentication error from a step whose subject is
+    # signing, which sends the reader to the key.
+    #
+    # Opt-in per invocation for the same reason the network is: a blob
+    # signing run has no registry to reach, and a container that cannot
+    # read a credential cannot leak one. Read-only, and the directory
+    # rather than the file, because that is what DOCKER_CONFIG names.
+    local cred_args=()
+    if [ -n "${HSM_PKI_DOCKER_CONFIG:-}" ]; then
+        [ -d "${HSM_PKI_DOCKER_CONFIG}" ] || die \
+            "HSM_PKI_DOCKER_CONFIG=${HSM_PKI_DOCKER_CONFIG} is not a directory.
+DOCKER_CONFIG names the directory holding config.json, not the file."
+        cred_args=(-v "${HSM_PKI_DOCKER_CONFIG}":/dockerconfig:ro
+                   -e DOCKER_CONFIG=/dockerconfig)
+    fi
+
     docker run --rm -i \
         "${net_args[@]}" \
+        "${cred_args[@]}" \
         -v "$COSIGN_BIN":/usr/local/bin/cosign:ro \
         -v "$REPO_ROOT":/repo -w /repo \
         -v "$STATE/tokens":/var/lib/softhsm/tokens \
