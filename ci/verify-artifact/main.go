@@ -37,7 +37,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/artifactsig"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/artifactsig"
 )
 
 func main() {

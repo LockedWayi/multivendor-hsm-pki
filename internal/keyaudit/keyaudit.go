@@ -31,7 +31,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/inventory"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
 )
 
 // caKeyLabel matches the CA hierarchy's key labels.

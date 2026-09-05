@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/config"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
 )
 
 // requireSoftHSM2 skips the test when no SoftHSM2 module is present, the

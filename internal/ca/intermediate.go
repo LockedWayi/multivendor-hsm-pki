@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // LoadIntermediateParams configures LoadIntermediate.

@@ -14,7 +14,7 @@ import (
 	"io"
 	"math/big"
 
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // PINResolver returns the token's login PIN, read at the point of use (see

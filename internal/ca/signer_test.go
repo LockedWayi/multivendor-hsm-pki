@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // newTestSigner generates an EC P-256 key pair on the backend's primary

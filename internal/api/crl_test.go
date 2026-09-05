@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/api"
-	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
-	"github.com/LockedWayi/hsm-pki-platform/internal/store"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
 // issueTestCert issues a certificate against srv and returns it, parsed.

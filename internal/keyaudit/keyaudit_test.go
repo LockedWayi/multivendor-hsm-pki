@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/keyaudit"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/keyaudit"
 )
 
 // repoRoot walks up from the test's package directory to the module root.

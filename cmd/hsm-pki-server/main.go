@@ -17,11 +17,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/api"
-	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
-	"github.com/LockedWayi/hsm-pki-platform/internal/config"
-	pkcs11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
-	"github.com/LockedWayi/hsm-pki-platform/internal/store"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
+	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
 // shutdownGrace bounds how long the server waits for in-flight requests to
