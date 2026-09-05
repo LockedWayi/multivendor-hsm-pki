@@ -7,6 +7,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Semgrep as a blocking SAST gate** (Phase 5.2), `ci/scan-code.sh` with
+  `p/golang` and `p/security-audit`. It reads what was *written* here, which
+  is the one question none of the other scanners ask. The three pre-existing
+  findings were legitimate and already explained in the code — RFC 5280
+  §4.2.1.2's SHA-1 subject key identifier, and the two `unsafe` blocks that
+  keep a PIN in C-heap memory the collector cannot copy — and are suppressed
+  per rule and per line, never by ruleset or path.
 - **Dependency, reachability and image scanning as pipeline gates**
   (Phase 5.3). `ci/scan-deps.sh` runs `trivy fs` and `govulncheck`;
   `ci/scan-image.sh` (which already existed) is wired into the workflow for
