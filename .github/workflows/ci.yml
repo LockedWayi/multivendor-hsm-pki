@@ -1,12 +1,22 @@
-# Minimal CI — Phase 5.1 (and 5.2's gitleaks gate) pulled forward, 2026-09-04.
+# CI — the security gates, as jobs.
+#
+#   suite     build, vet, race suite and the coverage floor, against SoftHSM2
+#   gitleaks  secret scan over the full history          (Phase 5.2)
+#   deps      dependency vulnerabilities: trivy fs + govulncheck  (Phase 5.3)
+#   image     the service image: trivy image + SBOM      (Phase 5.3)
+#
+# Phase 5.1 and 5.2's gitleaks gate were pulled forward on 2026-09-04; the
+# scanning jobs arrived with 5.3 on 2026-09-05.
 #
 # Everything here ran locally before it ran here: each step below is the
 # same command a contributor runs from CONTRIBUTING.md, wrapped in the same
 # dev container. That is the point of this workflow's shape — CI is not a
 # second environment to keep in sync, it is the first environment made
-# unforgettable. The rest of Phase 5 (Semgrep, trivy, signing as a gate,
-# SLSA provenance, the rotation drill) lands on top of this file, not
-# instead of it.
+# unforgettable. Every job below is one script a contributor can run —
+# ci/coverage.sh, ci/scan-deps.sh, ci/scan-image.sh — so a red check is
+# reproducible without pushing again. The rest of Phase 5 (Semgrep, signing
+# as a gate, SLSA provenance, the rotation drill) lands on top of this
+# file, not instead of it.
 #
 # Two decisions worth naming:
 #
@@ -22,8 +32,11 @@
 #     a tag is a pointer somebody can move).
 #
 # "Blocks merge" needs one repository setting this file cannot make: mark
-# both checks required under branch protection. Until then a red run is
-# loud but advisory.
+# these checks required under branch protection. Measured 2026-09-05, that
+# setting is unavailable on a private repository on the free plan (403,
+# docs/phases/phase-5-cicd.md), so every job here reports rather than
+# blocks. The scripts fail closed regardless; what is missing is GitHub
+# refusing the merge button, and no file in this repository can supply it.
 name: ci
 
 on:
@@ -118,3 +131,53 @@ jobs:
             -e GIT_CONFIG_VALUE_0='*' \
             zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             git . --config .gitleaks.toml
+
+  deps:
+    name: dependency scan (trivy fs, govulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      # One script, the same one a contributor runs. It asks the two
+      # different questions — "is a vulnerable version present" (trivy fs)
+      # and "does this code reach it" (govulncheck) — and grants exceptions
+      # only from ci/vuln-allowlist.yaml, which ci/vuln-gate validates
+      # before either scanner is believed.
+      #
+      # govulncheck runs inside the digest-pinned builder image from
+      # deploy/docker/Dockerfile, not on the runner's Go: part of its answer
+      # is about the standard library, and that is a property of the
+      # toolchain that compiles the shipped binary.
+      - name: Dependencies and reachable vulnerabilities
+        run: ci/scan-deps.sh
+
+  image:
+    name: image scan (trivy image + SBOM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      # Built here rather than pulled: the image this job scans has to be
+      # the image this commit produces, and a registry tag is a pointer to
+      # whatever was pushed last (CLAUDE.md §3.8). Publishing is 5.6's job;
+      # this one only needs the artifact to exist locally.
+      - name: Build the service image
+        run: docker build -f deploy/docker/Dockerfile -t hsm-pki-server:ci .
+
+      - name: Vulnerabilities and SBOM
+        run: ci/scan-image.sh hsm-pki-server:ci
+
+      # The SBOM answers "were we affected" about a CVE published after this
+      # build, which it can only do if it outlives the job that made it.
+      # Attaching it to the image itself is 5.6.
+      - name: Keep the SBOM
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-${{ github.sha }}
+          path: .local/scan/sbom.cdx.json
+          if-no-files-found: error

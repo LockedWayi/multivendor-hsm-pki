@@ -19,11 +19,22 @@
 set -euo pipefail
 
 IMAGE="${1:-hsm-pki-server:local}"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUT="${HSM_PKI_SCAN_OUT:-$REPO_ROOT/.local/scan}"
-# Pinned rather than :latest -- a scanner that changes under you turns "the
-# findings changed" into two questions instead of one.
-TRIVY_IMAGE="aquasec/trivy:0.67.0"
+# The scanner pin moved to ci/scanner-pins.sh when ci/scan-deps.sh started
+# needing the same one (Phase 5.3). It also became a digest rather than the
+# 0.67.0 tag: a tag is a pointer its publisher can move, so a tag-pinned
+# scanner still changes under you -- the same reasoning ci.yml already
+# applies to its actions and to the gitleaks image (CLAUDE.md §3.8).
+# shellcheck source=ci/scanner-pins.sh
+. "${SCRIPT_DIR}/scanner-pins.sh"
+
+# Accepted findings come from the one reviewed allowlist the dependency
+# scan uses, not a second file: an exception granted for a Go module is the
+# same decision whether the scanner met it in go.mod or in the image built
+# from it (ci/vuln-allowlist.yaml).
+ALLOWLIST="$REPO_ROOT/ci/vuln-allowlist.yaml"
 
 mkdir -p "$OUT" "$OUT/cache"
 
@@ -31,6 +42,7 @@ trivy() {
     docker run --rm \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$OUT":/out \
+        -v "$ALLOWLIST":/vuln-allowlist.yaml:ro \
         "$TRIVY_IMAGE" --cache-dir /out/cache "$@"
 }
 
@@ -41,7 +53,7 @@ echo "==> scanning $IMAGE for HIGH and CRITICAL vulnerabilities"
 # never made by anyone.
 set +e
 trivy image --quiet --scanners vuln --severity HIGH,CRITICAL \
-    --exit-code 1 "$IMAGE"
+    --ignorefile /vuln-allowlist.yaml --exit-code 1 "$IMAGE"
 scan_status=$?
 set -e
 
