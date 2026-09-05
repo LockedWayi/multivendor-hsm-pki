@@ -17,9 +17,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cannot generate a root at all: a root key it cannot find is a hard
   error, never a fresh key pair. The previous intermediate stays valid —
   the overlap is the transition window, not an oversight. Verified on
-  SoftHSM2 with `openssl verify` accepting both intermediates against the
-  one root; the ProtectServer half is tracked, not claimed
-  (`docs/phases/phase-4-container-k8s.md` 4.11).
+  **both backends** — SoftHSM2 with `openssl verify` accepting both
+  intermediates against the one root, and ProtectServer with all five
+  rotation subtests passing and no divergence in the label-lookup path
+  (`docs/phases/phase-4-container-k8s.md` 4.11). Per CLAUDE.md §2.3 the
+  ProtectServer half is maintainer-verified, never CI-verified.
 - **The service image** (`deploy/docker/Dockerfile`): multi-stage, cgo-enabled
   build onto a digest-pinned `distroless/cc` base — 53.8 MB, no shell, no
   package manager, non-root UID 65532, read-only-root-filesystem compatible.
