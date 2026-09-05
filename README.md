@@ -110,6 +110,13 @@ verification.
   for *does this code actually reach it*. The image is scanned too, and an
   accepted finding needs a written reason and an expiry date in one reviewed
   allowlist — `ci/vuln-allowlist.yaml`, empty today.
+- **The `ghp_…` token in commit `2f37c6f` is deliberate, fake, and
+  worthless.** Sub-task 3.6 planted a realistic-looking credential to
+  demonstrate that the scanner actually catches one, and the next commit
+  removed it; it survives in history by design, allowlisted by a single
+  commit-pinned fingerprint in `.gitleaksignore` rather than by a rule or
+  path exemption. It authenticates nothing. Removing it would require
+  rewriting history, which costs more than the string is worth.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - ECDSA P-256 default curve.
 - Fail-closed on every ambiguous security decision; all enforcement server-side.
