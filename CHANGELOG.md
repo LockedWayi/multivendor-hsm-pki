@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+Nothing yet. Phase 5 (CI/CD security gates) is next.
+
+## [0.1.0] — 2026-09-05
+
+First tagged release: Phases 1–4. A vendor-agnostic PKCS#11 layer with two
+backends behind one interface, a two-tier CA whose root is structurally
+unreachable from the online service, purpose-separated supply-chain signing
+keys under a signed inventory, and a container the cluster refuses to run
+unsigned.
+
+Everything below was already written as it landed; this release only draws
+the line. See the annotated tag for the CI-verified / locally-verified split
+that CLAUDE.md §2.3 requires and §5.2 formats.
+
 ### Added
 - **Routine CA rotation exists in code, not only in prose**
   (`internal/ca/reissue.go`, `hsm-pki-keytool reissue-intermediate`).
@@ -519,6 +534,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Phase 3.
 
 <!--
-Tag v0.1.0 once Phase 1 (PKCS#11 core) lands. Each phase producing a user-visible
-capability bumps at least the minor version.
+v0.1.0 was cut at the end of Phase 4 rather than after Phase 1: the convention
+below stands, but the first four phases landed before the first tag, so they
+share one release. Each phase producing a user-visible capability bumps at
+least the minor version from here.
 -->
