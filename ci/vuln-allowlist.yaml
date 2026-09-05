@@ -1,0 +1,34 @@
+# The single reviewed allowlist for dependency, image and source
+# vulnerability findings (docs/phases/phase-5-cicd.md, 5.3).
+#
+# One file, three readers, on purpose. `trivy fs` and `trivy image` consume
+# it natively as an --ignorefile, which is why the schema below is trivy's
+# and not something nicer-looking of our own; `ci/vuln-gate` applies the
+# same entries to govulncheck, whose findings trivy never sees, and
+# validates the file for all three. Splitting it per scanner would mean
+# three places to grant an exception and three chances for them to disagree
+# about what was accepted.
+#
+# Every entry must carry:
+#
+#   id          the CVE, GHSA or GO- identifier. govulncheck names findings
+#               GO-YYYY-NNNN and trivy names them CVE-YYYY-NNNNN; vuln-gate
+#               matches an entry against a finding's identifier *and* its
+#               aliases, so either spelling works and only one is needed.
+#   statement   why this finding is accepted. Not "false positive" — what
+#               makes it one here: the code path is unreachable, the
+#               affected feature is not built, the fix is not released yet.
+#   expired_at  the date the exception dies (YYYY-MM-DD), at most 180 days
+#               out. Trivy honours an entry with no expiry forever and will
+#               not complain; vuln-gate refuses to run against one, because
+#               an exception nobody has to renew is not an accepted risk,
+#               it is a forgotten one.
+#
+# Adding an entry is a review, not a fix. The finding comes back by itself
+# on the expiry date, and that is the intended behaviour: at that point
+# somebody looks again, and either upgrades or writes a new reason.
+#
+# There are no accepted findings today. `trivy fs`, `trivy image` and
+# `govulncheck` are all clean against this tree (measured 2026-09-05), so
+# the honest content of this file is an empty list.
+vulnerabilities: []
