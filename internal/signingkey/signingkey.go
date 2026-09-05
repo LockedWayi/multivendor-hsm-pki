@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"regexp"
 
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // labelPattern constrains a signing key's label to a versioned form:

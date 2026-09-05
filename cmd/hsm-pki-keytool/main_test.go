@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 )
 
 func requireSoftHSM2(t *testing.T) string {

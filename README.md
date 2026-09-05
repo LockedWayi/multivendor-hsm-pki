@@ -119,7 +119,19 @@ different artifact, and a finding from one is invisible to the others:
 | `trivy config` + OpenTofu | what would be provisioned | is the infrastructure misconfigured? |
 
 Every check is a script in `ci/`, run the same way locally and in the
-pipeline, so a red check is reproducible without pushing again. Accepted
+pipeline, so a red check is reproducible without pushing again. All six are
+**required** on `main`, including for the repository owner — a gate the
+owner can wave through is a report, not a gate.
+
+That is demonstrated rather than asserted:
+**[PR #4](https://github.com/LockedWayi/multivendor-hsm-pki/pull/4)**
+deliberately swaps `crypto/rand` for `math/rand` in the request-id
+generator, with the reasoning someone would genuinely have. Semgrep turns
+red, the merge is refused (`the base branch policy prohibits the merge`),
+and a second commit on the same branch turns it green. The detail worth
+reading is which checks *passed*: build, vet, tests and coverage were all
+green throughout. The test suite cannot see that defect, which is the
+entire argument for having a scanner as well as tests. Accepted
 findings live in **one** reviewed allowlist and must carry a written reason
 and an expiry date — an exception nobody has to renew is a forgotten risk,
 not an accepted one.

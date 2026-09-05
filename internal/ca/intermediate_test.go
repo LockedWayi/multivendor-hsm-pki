@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // runCeremonyForLoad runs a ceremony and writes its intermediate certificate

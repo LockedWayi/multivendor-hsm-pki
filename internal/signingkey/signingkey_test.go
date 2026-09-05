@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/hsmtest"
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
-	"github.com/LockedWayi/hsm-pki-platform/internal/signingkey"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
 )
 
 // These tests reach a token, so every one of them runs against every

@@ -14,8 +14,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/LockedWayi/hsm-pki-platform/internal/ca"
-	pkcs11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // Adapter names accepted by pkcs11.adapter in the config file.

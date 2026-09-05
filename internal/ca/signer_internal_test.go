@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	pk11 "github.com/LockedWayi/hsm-pki-platform/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 func requireSoftHSM2Internal(t *testing.T) string {
