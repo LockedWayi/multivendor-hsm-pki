@@ -70,6 +70,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the README but not here.
 
 ### Fixed
+- **The dependency gate could be turned red by the network rather than by a
+  vulnerability** (Phase 5.3). `ci/scan-deps.sh` reaches out twice before it
+  analyses anything — once for `govulncheck` itself, once for the module
+  graph — and neither call was retried. A module-proxy reset took `main` red
+  on a tree whose PR run had been green ninety seconds earlier. Its message
+  is the interesting part: govulncheck's package loader has no retry, so a
+  dropped connection is reported as `could not import modernc.org/sqlite
+  (invalid package name: "")`, which reads like a broken dependency rather
+  than a broken socket. The two network steps now retry with backoff and the
+  module cache is populated in its own step; the scan itself is deliberately
+  not retried, because retrying an answer until it changes is how a gate
+  becomes a suggestion.
 - **`reissue-intermediate` checked the root's authority at the wrong
   instant.** `checkRootMaySign` ran only inside `validate()`, against its
   own `time.Now()`, while the certificate's `NotAfter` is computed later
