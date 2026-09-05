@@ -26,6 +26,21 @@
 # missing feature; it is what an offline-ish signing key is for. Ordinary
 # `main` builds stay development artifacts, and the README says so.
 #
+# # Where the durable token actually is
+#
+# HSM_PKI_SIGNING_STATE defaults to .local/signing inside this checkout, which
+# is right for whoever provisioned the keys here. It is worth saying out loud
+# that a fresh clone has no such directory -- the token is wherever
+# deploy/docker/provision-signing-keys.sh was first run, which is not
+# necessarily this working copy:
+#
+#   HSM_PKI_SIGNING_STATE=/path/to/that/checkout/.local/signing \
+#   COSIGN_PKCS11_PIN=... ci/countersign-release.sh <digest>
+#
+# Getting this wrong fails closed rather than quietly: ci/cosign.sh refuses
+# a missing store by name instead of inventing one, and the key check below
+# refuses a keys directory that is not docs/keys.
+#
 # # What "done" means here
 #
 # Not "cosign exited 0". This script's success criterion is that
@@ -52,6 +67,25 @@ esac
 [ -n "${COSIGN_PKCS11_PIN:-}" ] || die \
     "set COSIGN_PKCS11_PIN. The PIN reaches cosign as an environment
 variable and never inside a PKCS#11 URI (CLAUDE.md 3.1)."
+
+# Writing a signature is a registry PUSH, so cosign needs the operator's
+# credentials -- and it runs in a container that mounts only what it is told
+# to. Left unset, cosign is silently anonymous and the push fails with an
+# authentication error from a step whose subject is signing, which sends the
+# reader to the key and the token. Defaulted here to the place `docker login`
+# actually writes, so the ordinary case works without anybody having to know
+# this paragraph exists.
+if [ -z "${HSM_PKI_DOCKER_CONFIG:-}" ] && [ -d "$HOME/.docker" ]; then
+    export HSM_PKI_DOCKER_CONFIG="$HOME/.docker"
+fi
+[ -n "${HSM_PKI_DOCKER_CONFIG:-}" ] || die \
+    "no registry credentials to sign with.
+Counter-signing pushes a signature to the registry, so it needs a login:
+
+    docker login ghcr.io -u <you>       # a token with write:packages
+
+Then re-run. (Or point HSM_PKI_DOCKER_CONFIG at a directory holding a
+config.json, which is what DOCKER_CONFIG names.)"
 
 # The durable state, explicitly. Defaulting to it would be enough, but this
 # script must never silently counter-sign with whatever token happens to be
