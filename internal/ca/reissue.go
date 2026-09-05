@@ -114,7 +114,20 @@ func (p *ReissueIntermediateParams) validate() error {
 	if p.RootCert == nil {
 		return fmt.Errorf("ca: reissue-intermediate requires the existing root certificate")
 	}
-	return checkRootMaySign(p.RootCert, p.IntermediateValidity)
+	// The same emptiness test validateCSR applies to a leaf's subject, for
+	// the same reason and with more at stake: this one names a CA. An empty
+	// subject is checkable without touching the HSM, so it is rejected
+	// before the first key exists rather than after (CLAUDE.md §3.9) — the
+	// alternative is an operator discovering it from `openssl x509 -text`
+	// with the new label already taken.
+	if p.IntermediateSubject.CommonName == "" && len(p.IntermediateSubject.Organization) == 0 {
+		return fmt.Errorf("%w: reissue-intermediate needs an intermediate subject carrying at least a common name or an organization",
+			ErrEmptySubject)
+	}
+	// Early rejection only. The authoritative check runs again at the point
+	// of signature — see checkRootMaySign's doc comment for why one is not
+	// enough.
+	return checkRootMaySign(p.RootCert, p.IntermediateValidity, time.Now())
 }
 
 // checkRootMaySign is CLAUDE.md §3.11 applied to the offline root: before
@@ -123,7 +136,30 @@ func (p *ReissueIntermediateParams) validate() error {
 // defect surfaces at a relying party, months later, by which time the root
 // is back in its safe and the certificates under the new intermediate are
 // already deployed.
-func checkRootMaySign(root *x509.Certificate, interValidity time.Duration) error {
+//
+// # Why now is a parameter, and why this runs twice
+//
+// §3.11 is explicit that startup validation does not discharge the check:
+// it belongs at the point of use as well. Here "startup" is validate(),
+// which runs before any key exists, and "point of use" is the moment the
+// certificate template is built. They are not the same instant — an HSM key
+// generation, a token login and an object search happen in between, and on
+// hardware that is not instant.
+//
+// Taking the time as a parameter is what makes the second call meaningful.
+// An earlier version computed time.Now() internally and was only called
+// from validate(), so the lifetime it approved was measured from a moment
+// strictly before the one the certificate ends up carrying: the template's
+// NotAfter is signing-time now plus the validity, while the approval said
+// validate-time now plus the validity fits inside the root. The difference
+// is small, and it is exactly the wrong thing to leave to chance on a
+// certificate the offline root signs once — a root within seconds of the
+// boundary would hand back an intermediate that outlives it, which is the
+// case §3.11 exists to prevent and the one no relying party forgives.
+//
+// ca.checkIssuerCanCover makes the same call at leaf issuance, for the same
+// reason, and this is that pattern applied one tier up.
+func checkRootMaySign(root *x509.Certificate, interValidity time.Duration, now time.Time) error {
 	if !root.BasicConstraintsValid {
 		return fmt.Errorf("%w: the supplied root certificate carries no basicConstraints extension, so it asserts no CA status at all (RFC 5280 §4.2.1.9)",
 			ErrNotAnIntermediate)
@@ -173,7 +209,6 @@ func checkRootMaySign(root *x509.Certificate, interValidity time.Duration) error
 		return fmt.Errorf("%w: the supplied root certificate carries pathlen:0, so no CA may be certified beneath it and the intermediate this would produce could sign nothing",
 			ErrNotAnIntermediate)
 	}
-	now := time.Now()
 	if now.Before(root.NotBefore) {
 		return fmt.Errorf("%w: the supplied root certificate is not valid until %s", ErrIssuerNotValid, root.NotBefore.Format(time.RFC3339))
 	}
@@ -185,6 +220,15 @@ func checkRootMaySign(root *x509.Certificate, interValidity time.Duration) error
 	// ceremony rejects it: clamping hands the operator a certificate whose
 	// lifetime differs from the one they asked for, discovered long after
 	// the offline root went back into storage (CLAUDE.md §3.4, §3.11).
+	//
+	// The zero-default looks redundant, because ReissueIntermediate applies
+	// the same one before validate() ever runs. It is kept because dropping
+	// it makes the check below *weaker* rather than merely shorter: a zero
+	// duration turns now.Add(interValidity) into now, which is inside any
+	// unexpired root, so a caller reaching this function directly with an
+	// un-normalized value would silently receive a pass on the one question
+	// it is here to ask. A guard that only fires for a caller who made a
+	// mistake is still the guard doing its job.
 	if interValidity == 0 {
 		interValidity = DefaultIntermediateValidity
 	}
@@ -297,7 +341,16 @@ func signIntermediateUnderExistingRoot(ctx context.Context, adapter pk11.VendorA
 		return nil, err
 	}
 
+	// The authoritative §3.11 check, against the instant this certificate
+	// will actually carry rather than the one validate() saw. Everything
+	// between the two — the new key pair, the root login, the separation
+	// search — takes time, and the template below is what a relying party
+	// ends up holding.
 	now := time.Now()
+	if err := checkRootMaySign(params.RootCert, params.IntermediateValidity, now); err != nil {
+		return nil, fmt.Errorf("ca: reissue-intermediate: the root may no longer sign this: %w", err)
+	}
+
 	interTemplate := &x509.Certificate{
 		SerialNumber:          interSerial,
 		Subject:               params.IntermediateSubject,
