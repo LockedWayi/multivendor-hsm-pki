@@ -53,6 +53,12 @@ suite, the coverage floor, and a full-history secret scan, all on every PR).
 Clone it, run `go test ./...` in the provided dev container, and everything CI
 checks runs on your machine too.
 
+Those checks currently **report rather than block**. Marking them *required*
+needs branch protection, which GitHub does not offer on a private repository
+on the free plan — so a red run here is loud, and advisory. Saying so is
+cheaper than the alternative: a reader who assumes a gate exists and finds
+out otherwise has learned something worse than the gap itself.
+
 The whole platform runs the same way, not just its tests:
 
 ```sh
@@ -89,7 +95,8 @@ verification.
 ## Security posture
 
 - Private keys and PINs never touch plaintext disk or logs.
-- No secrets in the repo or its history (`gitleaks`-enforced).
+- No secrets in the repo or its history — `gitleaks` scans the full history
+  on every PR and push (advisory today, see above).
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - ECDSA P-256 default curve.
 - Fail-closed on every ambiguous security decision; all enforcement server-side.
