@@ -195,7 +195,6 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 // adapter having been closed — the same failure mode as a service mid-
 // shutdown or an HSM connection drop) must surface as a 500 whose body
 // never contains internal error detail, only a fixed generic message
-// (CLAUDE.md §3.4).
 func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)

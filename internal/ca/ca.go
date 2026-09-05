@@ -15,7 +15,7 @@ import (
 
 // minRSAKeyBits is the smallest RSA modulus this CA will sign a CSR for.
 // 2048 bits is the floor NIST and the CA/Browser Forum both still treat as
-// acceptable; the CA's own key is ECDSA (CLAUDE.md §3.3), but clients are
+// acceptable; the CA's own key is ECDSA, but clients are
 // not required to match that choice.
 const minRSAKeyBits = 2048
 
@@ -91,7 +91,7 @@ func ValidateDistributionURL(field, raw string) error {
 
 // CA issues, and will (sub-task 2.5) revoke, X.509 certificates under one
 // issuer certificate, signing through an HSM-backed crypto.Signer. It never
-// holds the issuer's private key itself (docs/phases/phase-2-ca-core.md).
+// holds the issuer's private key itself.
 type CA struct {
 	cert    *x509.Certificate
 	signer  crypto.Signer
@@ -124,14 +124,14 @@ func (c *CA) Certificate() *x509.Certificate {
 
 // Issue validates csr and, if it passes, signs a new leaf certificate under
 // the CA's issuer certificate. A malformed, unparseable, or badly-signed
-// CSR is rejected rather than partially processed (CLAUDE.md §3.4).
+// CSR is rejected rather than partially processed.
 func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 	// Checked before the CSR, because this is a statement about this CA
 	// rather than about the request: a CA with nowhere to publish
 	// revocation for what it signs does not issue at all. The alternative —
 	// sign it and omit the extension — produces a certificate whose
 	// revocation no relying party can ever discover, and there is no later
-	// point at which that can be repaired (CLAUDE.md §3.4).
+	// point at which that can be repaired.
 	if err := c.dist.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoDistributionPoints, err)
 	}
@@ -192,7 +192,7 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 // checkIssuerCanCover refuses to sign anything the issuing certificate
 // cannot actually vouch for at the moment of issuance.
 //
-// Two distinct failures, both fail-closed (CLAUDE.md §3.4):
+// Two distinct failures, both fail-closed:
 //
 //   - The issuer is outside its own validity window. RFC 5280 §6.1.3
 //     validates every certificate in a path against the same instant, so a
@@ -216,7 +216,7 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 // before its intermediate expires, rather than quietly issuing
 // ever-shorter certificates as that date approaches. The remedy is the one
 // the platform already has — re-issue the intermediate from the root
-// ceremony (CLAUDE.md §3.7) — and a loud, dated refusal is what prompts it.
+// ceremony — and a loud, dated refusal is what prompts it.
 func (c *CA) checkIssuerCanCover(now, notAfter time.Time) error {
 	if now.Before(c.cert.NotBefore) {
 		return fmt.Errorf("%w: issuer %q is not valid until %s",

@@ -1,7 +1,7 @@
 package ca_test
 
 // Shared SoftHSM2 test scaffolding for this package's tests. Sub-task 2.2's
-// "Decide before starting" entry in docs/phases/phase-2-ca-core.md applies
+// "Decide before starting" entry in applies
 // to every test file here: SoftHSM2 only. Phase 1's conformance suite
 // already proved VendorAdapter generalizes across two independent vendors,
 // and the CA layer only ever calls through that interface.

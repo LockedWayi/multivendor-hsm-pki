@@ -22,7 +22,7 @@
 # garbage, silence, a message that changes in some future release -- while
 # the end-to-end evidence stays what it was: the real pkcs11key build is
 # accepted and the real default build is refused, both recorded in
-# docs/phases/phase-4-container-k8s.md 4.9.
+# 4.9.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

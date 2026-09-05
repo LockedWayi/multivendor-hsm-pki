@@ -51,7 +51,7 @@ func loggerFromContext(ctx context.Context) *slog.Logger {
 }
 
 // newRequestID returns a short, unpredictable correlation id. crypto/rand,
-// not math/rand — CLAUDE.md §3.3 states randomness is always crypto/rand
+// not math/rand — the standard-library rule states randomness is always crypto/rand
 // with no exceptions, and a request id is not worth carving one out for.
 //
 // The error is handled rather than discarded. A failed read leaves b as

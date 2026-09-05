@@ -106,7 +106,7 @@ go run ./ci/generate-image-policy -out deploy/k8s/policy/image-signature.yaml
 It renders every key the published inventory calls `active` or
 `verify-only` for the image purpose, so rotation is a regeneration rather
 than a breaking change to the cluster. A key pasted in by hand is exactly
-the hard-coded verifier CLAUDE.md §3.7 forbids.
+the hard-coded verifier the key lifecycle forbids.
 
 Two things it took measurement to get right, both recorded because a reader
 will otherwise assume they were free:
@@ -160,7 +160,7 @@ deciding.
 ## The cost, stated
 
 `failurePolicy: Fail`. If the webhook cannot be reached, pod creation stops
-rather than proceeding unchecked (CLAUDE.md §3.4). That is the right trade
+rather than proceeding unchecked. That is the right trade
 for a cluster whose job is custody of signing keys, and it is a real
 availability cost on a single-node cluster where Kyverno and the workload
 share a node.

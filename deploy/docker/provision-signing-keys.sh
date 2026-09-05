@@ -29,7 +29,7 @@
 #
 #   3. Every published artifact here is public. Three public keys, one JSON
 #      document, one signature. No private key is written anywhere at any
-#      point (CLAUDE.md 3.1).
+# point.
 #
 # Usage:
 #   deploy/docker/provision-signing-keys.sh          provision (first run)
@@ -38,7 +38,7 @@
 #
 # Re-running without --reset is refused: the labels are taken, and
 # regenerating a key under a published label would strand every signature
-# made with the old one (CLAUDE.md 3.7 -- rotation provisions the next
+# made with the old one (the key lifecycle -- rotation provisions the next
 # version, it does not overwrite).
 set -euo pipefail
 
@@ -83,7 +83,7 @@ if [[ -d "$STATE" ]]; then
     echo "signing state already exists at $STATE." >&2
     echo "Re-run with --reset to discard it, or leave it alone: the key labels" >&2
     echo "are already taken, and rotation means provisioning -v2 rather than" >&2
-    echo "regenerating -v1 (CLAUDE.md 3.7)." >&2
+    echo "regenerating -v1." >&2
     exit 1
 fi
 
@@ -154,7 +154,7 @@ log "3/6  provisioning $ARTIFACT_KEY_LABEL"
 # key it just generated against the others on the token and refuses a
 # repeat, because a token whose RNG restarts per C_Initialize hands out the
 # same key to each process -- measured on ProtectToolkit's software
-# emulator, docs/lessons.md 8.
+# emulator 8.
 keytool provision-signing-key \
     -module /pkcs11/libsofthsm2.so \
     -workspace "'$SUPPLY_TOKEN_LABEL'" \
@@ -186,7 +186,7 @@ keytool generate-inventory \
 log "verifying the inventory the way a stranger would"
 # openssl, not this repository's code. A signature checked only by the
 # library that produced it proves the code agrees with itself, which it
-# would do just as convincingly if the format were wrong (CLAUDE.md 3.10).
+# would do just as convincingly if the format were wrong.
 docker run --rm -v "$REPO_ROOT/docs/keys":/keys:ro "$DEV_IMAGE" \
     openssl dgst -sha256 \
         -verify "/keys/$INVENTORY_KEY_LABEL.pub" \
@@ -198,7 +198,7 @@ log "6/6  taking the inventory token offline"
 # directory by the label stored in it, refuse to act on anything but exactly
 # one match, and move it out of the store. Resolving an ambiguous match to
 # the first hit would let enumeration order decide which token goes in the
-# safe, which is nobody's decision (CLAUDE.md 3.8).
+# safe, which is nobody's decision.
 #
 # In a container because SoftHSM2's token directories are 0700 owned by the
 # user that initialized them, so a host-side search reads none of them and

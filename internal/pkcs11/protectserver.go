@@ -6,7 +6,7 @@ package pkcs11
 // This is the second, independently-verified vendor backend — the proof
 // that VendorAdapter is a real abstraction and not a SoftHSM2-shaped guess
 // (see "Why two adapters rather than one" in
-// docs/phases/phase-1-pkcs11-core.md). Like SoftHSM2Adapter, it is now a
+// ). Like SoftHSM2Adapter, it is now a
 // thin named type over the shared pkcs11Adapter (base.go): sub-task 1.8
 // extracted that base only after this adapter had been run against real
 // hardware and shown to need no vendor-specific override at all — see
@@ -17,7 +17,7 @@ package pkcs11
 // # Verified environment
 //
 // Confirmed against the maintainer's own ProtectToolkit installation;
-// docs/protectserver-setup.md carries the setup steps.
+// carries the setup steps.
 //
 //   - Product: Thales ProtectToolkit-C 7.3.3, software emulation mode
 //     (token model "SW:SWEMUL"). ProtectServer is the HSM family;
@@ -28,7 +28,8 @@ package pkcs11
 //     only against libdl/libpthread/libc.
 //   - Slots: slot 1 holds "AdminToken (0000)"; slot 0 is the working user
 //     token, labelled and PIN-initialized by the operator steps in
-//     docs/protectserver-setup.md before this adapter can find it.
+//
+// before this adapter can find it.
 //
 // # Divergences from SoftHSM2
 //

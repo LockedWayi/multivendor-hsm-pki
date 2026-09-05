@@ -127,7 +127,7 @@ kubectl apply -k "$REPO_ROOT/deploy/k8s/overlays/dev" >/dev/null
 # The manifest carries a tag, and the deployment runs a digest. That is not
 # a contradiction to tidy away: a digest is build output and changes with
 # every build, so it cannot be a committed value, while a tag is a mutable
-# pointer and so cannot be what is deployed (CLAUDE.md §3.8). The reference
+# pointer and so cannot be what is deployed. The reference
 # is therefore resolved here, at deploy time, from the registry.
 #
 # The tag in the manifest is a placeholder that is never pulled, and the

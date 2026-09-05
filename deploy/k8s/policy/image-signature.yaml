@@ -4,7 +4,7 @@
 #
 # Rendered from docs/keys/key-inventory.json (version 1) by
 # ci/generate-image-policy. Edit the inventory and regenerate; a key pasted
-# in here by hand is exactly the hard-coded verifier CLAUDE.md 3.7 forbids,
+# in here by hand is exactly the hard-coded verifier the key lifecycle forbids,
 # and it would make the next rotation a breaking change to the cluster.
 #
 # The inventory's signature was verified against
@@ -30,7 +30,7 @@ metadata:
 spec:
   # Fail, not Ignore: an image whose signature could not be checked -- an
   # unreachable registry, a policy that will not compile -- must not run
-  # (CLAUDE.md 3.4).
+  #
   failurePolicy: Fail
   validationActions:
     - Deny

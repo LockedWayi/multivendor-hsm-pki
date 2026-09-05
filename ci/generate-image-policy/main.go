@@ -3,7 +3,7 @@
 //
 // # Why this is generated and not written
 //
-// CLAUDE.md §3.7 says verifiers consume the inventory, never a hard-coded
+// the key lifecycle says verifiers consume the inventory, never a hard-coded
 // key. An admission policy with a public key pasted into it is exactly the
 // hard-coded verifier that rule forbids, and the failure it produces is the
 // expensive kind: on the day `image-signing-key-v1` is rotated, images
@@ -26,7 +26,7 @@
 //
 // The second is not a nicety. A signature is over a digest, so a tag-named
 // image is a pointer that can be repointed after admission has approved it
-// (CLAUDE.md §3.8). Kyverno would resolve the tag and verify whatever it
+// . Kyverno would resolve the tag and verify whatever it
 // resolved to, which answers a question about this instant rather than
 // about the thing that will run.
 //
@@ -42,7 +42,7 @@
 // the tool. Found by an independent audit, 2026-09-04.
 //
 // So three refusals now sit in front of the template, each fail-closed
-// (CLAUDE.md §3.4):
+// :
 //
 //   - the detached signature must verify against the anchor
 //     (inventory-signing-key-v1.pub beside the inventory by default;
@@ -172,7 +172,7 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("the inventory's signature does not verify against %s: %w — "+
 			"a policy rendered from an unverified inventory would let whoever edited the "+
 			"file choose which keys the cluster trusts, which is the exact attack the "+
-			"signature exists to refuse (CLAUDE.md §3.4, §3.7)", resolvedAnchor, err)
+			"signature exists to refuse", resolvedAnchor, err)
 	}
 
 	inv, err := inventory.Parse(raw)
@@ -208,7 +208,7 @@ func run(args []string, out io.Writer) error {
 				"refusing the rollback — an older list can resurrect a retired key. If replacing "+
 				"the rendering with an older inventory is genuinely intended, move the existing "+
 				"file aside first, so the decision is somebody's rather than this tool's "+
-				"(CLAUDE.md §3.4)", inv.Version, *outPath, prev)
+				"", inv.Version, *outPath, prev)
 		}
 	}
 
@@ -217,7 +217,7 @@ func run(args []string, out io.Writer) error {
 		// Refused rather than emitted. A policy with no attestors rejects
 		// every image, which is fail-closed and also useless -- it would
 		// stop the cluster and read as a broken policy rather than as an
-		// empty inventory (CLAUDE.md §3.4).
+		// empty inventory.
 		return fmt.Errorf("the inventory lists no active or verify-only key for the image purpose, "+
 			"so there is nothing for the cluster to trust; provision one before generating a policy (%s)", *invPath)
 	}
@@ -299,7 +299,7 @@ var renderedVersionPattern = regexp.MustCompile(`Rendered from .+ \(version ([0-
 // treated as version 0: it means -out points at something this generator
 // did not write, and quietly overwriting it — or quietly exempting it from
 // the rollback check — would each be a decision made by a missing header
-// rather than by a person (CLAUDE.md §3.4, §3.8's "a lookup that cannot
+// rather than by a person (failing closed and the identity rule's "a lookup that cannot
 // identify its subject fails closed" applied to a file).
 func previousRenderedVersion(path string) (int, error) {
 	data, err := os.ReadFile(filepath.Clean(path))

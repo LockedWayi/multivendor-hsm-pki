@@ -27,7 +27,7 @@ import (
 // carrying no transparency log. That is the point of it: a test that signed
 // its own vector with crypto/ecdsa and then verified it would prove this
 // package agrees with itself, which it would do just as convincingly if the
-// bundle format were wrong (CLAUDE.md §3.10, docs/lessons.md §2).
+// bundle format were wrong.
 //
 // It is verified against docs/keys/artifact-signing-key-v1.pub -- the file
 // this repository publishes -- so a published key that stopped matching the
@@ -117,7 +117,7 @@ func TestVerify_RejectsASingleFlippedBit(t *testing.T) {
 
 func TestVerify_RejectsTheOtherPurposesKey(t *testing.T) {
 	// Purpose separation is only real if a verifier can express it. The
-	// image key must not verify an artifact signature (CLAUDE.md §3.6).
+	// image key must not verify an artifact signature.
 	b, artifact := loadFixture(t)
 	err := artifactsig.Verify(b, bytes.NewReader(artifact), loadKey(t, otherPurposeKey))
 	if err == nil {
@@ -424,7 +424,7 @@ func TestVerify_RefusesWithoutAKey(t *testing.T) {
 // ci/cosign.sh.
 //
 // It is here because the synthetic version of this test supplies its own
-// answer (docs/lessons.md §3): a bundle written by the test to carry fields
+// answer: a bundle written by the test to carry fields
 // the test chose proves only that the test agrees with itself. This one was
 // produced by a different toolchain, on a different day, for a different
 // artifact, and it is what a strict-by-default parser would have rejected.

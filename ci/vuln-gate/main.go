@@ -164,7 +164,7 @@ func (a *allowlist) covers(now time.Time, ids ...string) (allowEntry, bool) {
 }
 
 // loadAllowlist reads and validates the file. Validation is fail-closed
-// (CLAUDE.md §3.4): every defect below makes the gate refuse to run rather
+// : every defect below makes the gate refuse to run rather
 // than run with an allowlist it does not fully understand, because the
 // failure mode of a misread allowlist is a suppressed vulnerability.
 //
@@ -221,7 +221,7 @@ func loadAllowlist(path string, now time.Time, maxHorizonDays int) (*allowlist, 
 		if _, dup := a.byID[e.ID]; dup {
 			// Two entries for one id means two different review decisions
 			// are on file and the one that applies is chosen by position
-			// (CLAUDE.md §3.8).
+			//
 			problems = append(problems, fmt.Sprintf("%s: listed twice", where))
 			continue
 		}
@@ -299,7 +299,7 @@ func judgeGovulncheck(r io.Reader, out io.Writer, a *allowlist, now time.Time) e
 	// the scan did not run to completion — a crash, a truncated pipe, an
 	// empty file — and since JSON mode reports a clean run and a dead one
 	// with the same exit status, silence here would otherwise read as "no
-	// vulnerabilities" (CLAUDE.md §3.4).
+	// vulnerabilities".
 	if !sawConfig {
 		return errors.New("govulncheck output carries no config record: the scan did not run to completion, so its silence is not a clean result")
 	}

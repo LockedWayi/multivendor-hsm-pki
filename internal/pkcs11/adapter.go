@@ -9,11 +9,11 @@ import (
 // (SoftHSM2 and ProtectServer today; nShield and Luna later — Phase 7)
 // implements. It is written against the standard PKCS#11 operation set
 // only; a vendor's quirks and extensions are resolved inside that vendor's
-// adapter and never appear here (docs/phases/phase-1-pkcs11-core.md).
+// adapter and never appear here.
 //
 // Every method that operates within a session takes the *Session returned
 // by OpenSession. Implementations must reject the call once that session's
-// idle timeout or max TTL has elapsed (fail closed — CLAUDE.md §3.4).
+// idle timeout or max TTL has elapsed (fail closed — failing closed).
 type VendorAdapter interface {
 	// Workspaces lists the isolated key spaces this adapter can see — see
 	// the Workspace type for what that maps to per vendor.
@@ -71,7 +71,7 @@ type VendorAdapter interface {
 	// calling it again, and it takes a handle rather than a label
 	// deliberately: resolving "which object did you mean" is the caller's
 	// problem, and CKA_LABEL cannot answer it — the standard places no
-	// uniqueness constraint on it (CLAUDE.md §3.8). A caller that destroys
+	// uniqueness constraint on it. A caller that destroys
 	// by label must refuse when the lookup matches more than one object,
 	// the way findKeyByLabel already does.
 	DestroyObject(ctx context.Context, s *Session, obj ObjectHandle) error

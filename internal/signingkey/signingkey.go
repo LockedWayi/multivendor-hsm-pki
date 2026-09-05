@@ -30,7 +30,7 @@ import (
 // a purpose, then "-v" and a version number, e.g. image-signing-key-v1.
 //
 // Enforced rather than documented because the versioning is what makes
-// rotation a lifecycle step instead of a breaking rename (CLAUDE.md §3.7).
+// rotation a lifecycle step instead of a breaking rename.
 // A key provisioned once under a bare label is a key whose rotation
 // requires every consumer — cosign invocations, admission policies, docs —
 // to change on the same day, which in practice means it never rotates. The
@@ -49,7 +49,7 @@ var ErrLabelTaken = errors.New("signingkey: label already in use on this token")
 // restating the pattern: Provision applies exactly this check as its first
 // step, so the CLI and the library cannot disagree about what a valid label
 // is. Duplicating the rule in cmd/hsm-pki-keytool would create a second
-// place for §3.7's versioning to drift out of.
+// place for the key lifecycle's versioning to drift out of.
 func ValidateLabel(label string) error {
 	if !labelPattern.MatchString(label) {
 		return fmt.Errorf("signingkey: label %q is not a versioned label (want e.g. image-signing-key-v1)", label)
@@ -95,7 +95,7 @@ func (k Key) PEM() ([]byte, error) {
 // first, and the label is confirmed free before anything is generated:
 // generation is irreversible, so a validation failure discovered afterwards
 // costs an operator a manual cleanup on a token and turns a typo into an
-// incident (CLAUDE.md §3.9).
+// incident.
 //
 // The generated key is CKA_SIGN, CKA_SENSITIVE and not CKA_EXTRACTABLE, and
 // carries a random CKA_ID distinct from any other key's. The private half
@@ -112,7 +112,7 @@ func (k Key) PEM() ([]byte, error) {
 // already been bitten twice by the difference between a template and a
 // token's behaviour: CKA_SENSITIVE was false on every key ever generated
 // here, and ProtectToolkit ignores CKA_EXTRACTABLE=false on unwrap
-// (docs/lessons.md §1 and §6). A key that is silently extractable is not a
+// . A key that is silently extractable is not a
 // weaker version of the key we asked for; it is a different key with a
 // different threat model, and the build must stop rather than sign with it.
 func Provision(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, p Params) (Key, error) {
@@ -218,12 +218,12 @@ func FindDuplicateKey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.S
 // C_Initialize, so the Nth key pair generated after each library
 // initialisation is byte-for-byte the same key pair, across processes and
 // across days. C_GenerateRandom repeats identically too, so it is the whole
-// RNG rather than key generation alone (docs/pkcs11-vendor-notes.md).
+// RNG rather than key generation alone.
 //
 // That collides head-on with how this platform provisions: one key per
 // keytool invocation, which is one C_Initialize each, which on that backend
 // means image-signing-key-v1 and artifact-signing-key-v1 come out as *one
-// key under two labels* — the precise reuse CLAUDE.md §3.6 forbids,
+// key under two labels* — the precise reuse purpose separation forbids,
 // arriving silently, with every other attribute correct.
 //
 // So the check is empirical rather than theoretical, and it belongs here
@@ -380,7 +380,7 @@ func attrTrue(v []byte) bool {
 //
 // Comparing public keys rather than labels is the whole point: labels are
 // what an operator types and prove nothing about what is on the token, and
-// two labels pointing at one key pair is exactly the reuse CLAUDE.md §3.6
+// two labels pointing at one key pair is exactly the reuse purpose separation
 // forbids and exactly what a label comparison cannot see.
 func SameKey(a, b *ecdsa.PublicKey) bool {
 	if a == nil || b == nil {
@@ -391,7 +391,7 @@ func SameKey(a, b *ecdsa.PublicKey) bool {
 
 // caKeyLabelPattern matches the labels this repository gives the CA
 // hierarchy's key pairs — `ca-root-key-v1`, `ca-intermediate-key-v2`, and
-// so on under the versioned scheme of CLAUDE.md §3.7.
+// so on under the versioned scheme of the key lifecycle.
 //
 // It is deliberately suffix-anchored rather than whole-string-anchored: a
 // deployment (or this repository's own test harness) may carry a prefix on
@@ -420,7 +420,7 @@ var ErrCAHierarchyKeyPresent = errors.New("signingkey: token already holds a CA 
 // moment it is still reversible, before the label is taken.
 //
 // Two limits, stated rather than glossed. This searches by label, and a
-// label is not an identity (CLAUDE.md §3.8) — a CA key provisioned under
+// label is not an identity — a CA key provisioned under
 // some other name is not found here. And it only looks at the token it is
 // pointed at. So this is a guard against the co-location an operator can
 // reach by accident with this repository's own naming, not a proof of

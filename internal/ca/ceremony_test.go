@@ -29,7 +29,7 @@ const (
 	// The leaf-tier equivalents: where a certificate this intermediate
 	// issues tells a relying party to look. Distinct from the two above by
 	// design — the root's CRL covers the intermediate, the intermediate's
-	// covers the leaves (docs/phases/phase-3b-pki-hardening.md, 3b.4).
+	// covers the leaves.
 	testLeafCRLURL    = "http://pki.example.test/crl"
 	testLeafIssuerURL = "http://pki.example.test/intermediate.crt"
 )
@@ -389,8 +389,7 @@ func TestRunCeremony_RefusesToOverwriteExistingKeyLabel(t *testing.T) {
 // CKA_EXTRACTABLE attribute in both directions — asked of the token, not
 // assumed from the request that was sent, the same discipline 3b.7
 // established after CKA_SENSITIVE turned out to be a silent lie on one
-// backend (docs/pkcs11-vendor-notes.md, "A non-sensitive private key really
-// is readable here"). Maintainer decision, 2026-08-31
+// backend . Maintainer decision, 2026-08-31
 // (docs/key-ceremony-and-recovery.md, "Deciding root-key extractability"):
 // whether the root key can ever leave its token wrapped is an operator
 // choice made at ceremony time, not a fixed default baked into RunCeremony —

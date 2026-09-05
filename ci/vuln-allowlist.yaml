@@ -1,5 +1,5 @@
 # The single reviewed allowlist for dependency, image and source
-# vulnerability findings (docs/phases/phase-5-cicd.md, 5.3).
+# vulnerability findings.
 #
 # One file, three readers, on purpose. `trivy fs` and `trivy image` consume
 # it natively as an --ignorefile, which is why the schema below is trivy's

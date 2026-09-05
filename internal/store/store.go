@@ -18,7 +18,7 @@
 // filesystem and no driver. SQLite is what the service runs on, because a
 // restart that erases revocations is a security regression, not a durability
 // inconvenience: a certificate revoked for incident response would reappear
-// as valid in the next CRL (docs/phases/phase-3b-pki-hardening.md).
+// as valid in the next CRL.
 //
 // The interface is also what makes the eventual move to an external database
 // a swap rather than a rewrite, if replicas ever exist. Until then the

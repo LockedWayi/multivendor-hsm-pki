@@ -6,13 +6,13 @@ package pkcs11_test
 // always be present (inside the dev container — see CONTRIBUTING.md) and
 // carries CI. ProtectServer requires a real Thales ProtectToolkit
 // installation and is only exercised when PROTECTSERVER_MODULE is set
-// (docs/protectserver-setup.md); with it unset, that backend's subtests
+//; with it unset, that backend's subtests
 // skip and the suite stays green — the same graceful-skip pattern SoftHSM2
 // itself uses when its module is absent.
 //
 // A single suite run against two independent implementations is the whole
 // point of Phase 1 (see "Why two adapters rather than one" in
-// docs/phases/phase-1-pkcs11-core.md): an abstraction validated once is a
+//): an abstraction validated once is a
 // guess, and a bug that only one backend's adapter has is exactly what a
 // shared test body — not two hand-copies of it — is built to catch.
 //
@@ -20,7 +20,7 @@ package pkcs11_test
 // never an all-zero or empty stand-in. That is not a style preference: an
 // earlier diagnostic used make([]byte, 32) as a digest and produced a false
 // "ProtectServer cannot verify signatures" finding, corrected in
-// docs/pkcs11-vendor-notes.md. Degenerate vectors exercise exactly the
+//. Degenerate vectors exercise exactly the
 // edges where conforming implementations are allowed to disagree, so they
 // manufacture divergences that no real call path ever hits.
 
@@ -232,7 +232,7 @@ func (b *conformanceBackend) registerCleanup(t *testing.T) {
 	// reported "adapter is closed" and returned, and the run's key pairs stayed
 	// on the token. It was found only when a duplicate-key check turned
 	// leftover keys into a hard failure on a backend whose RNG repeats
-	// (docs/lessons.md §8). So this reopens rather than giving up.
+	//. So this reopens rather than giving up.
 	t.Cleanup(func() {
 		ctx := context.Background()
 		adapter := b.adapter
@@ -294,7 +294,7 @@ func setupProtectServerBackend(t *testing.T) *conformanceBackend {
 	t.Helper()
 	modulePath := os.Getenv("PROTECTSERVER_MODULE")
 	if modulePath == "" {
-		t.Skip("PROTECTSERVER_MODULE not set — see docs/protectserver-setup.md " +
+		t.Skip("PROTECTSERVER_MODULE not set " +
 			"(this backend cannot run in public CI: proprietary SDK)")
 	}
 
@@ -304,8 +304,7 @@ func setupProtectServerBackend(t *testing.T) *conformanceBackend {
 	}
 	pin := os.Getenv("PROTECTSERVER_PIN")
 	if pin == "" {
-		t.Fatal("PROTECTSERVER_MODULE is set but PROTECTSERVER_PIN is not " +
-			"— see docs/protectserver-setup.md")
+		t.Fatal("PROTECTSERVER_MODULE is set but PROTECTSERVER_PIN is not")
 	}
 
 	adapter, err := pk11.NewProtectServerAdapter(modulePath)
@@ -435,7 +434,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	// clauses ahead of NewSecurePIN (cancelled context here; an expired
 	// session is the other one) used to return with the caller's PIN still
 	// readable in the Go heap — the one copy this package can
-	// deterministically wipe, left unwiped (CLAUDE.md §3.1).
+	// deterministically wipe, left unwiped.
 	t.Run("Login_ZeroizesCallerPINOnEarlyReturn", func(t *testing.T) {
 		s, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
 		if err != nil {
@@ -475,7 +474,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	// package's own per-package profile and meant no test here pinned
 	// LoginToken's edge cases (a rejected empty PIN, a rejected second
 	// login, idempotent logout) at the layer that actually implements them
-	// (docs/phases/phase-2-ca-core.md, sub-task 2.8).
+	//
 	//
 	// Runs immediately after "Logout" above, which is the one earlier
 	// subtest guaranteed to leave the token de-authenticated — every
@@ -793,7 +792,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		// 7.3.3 did disclose it, all 32 bytes, to any authenticated session.
 		// A test that only checked what we asked for would have passed on
 		// both backends while one of them was handing out the key
-		// (CLAUDE.md §3.10, docs/pkcs11-vendor-notes.md).
+		//
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 		kp, err := b.adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
 			Curve: pk11.P256, Label: b.label("protection"), Sign: true, Verify: true,
@@ -859,7 +858,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 
 	t.Run("DestroyObject_RemovesTheObject", func(t *testing.T) {
 		// The operation the key lifecycle needs to retire a version
-		// (CLAUDE.md §3.7) and the one every test suite needs to not
+		// and the one every test suite needs to not
 		// accumulate keys on a token that persists between runs.
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 		label := b.label("destroy-me")
@@ -970,17 +969,17 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	// without needing a third token in the harness.
 	//
 	// Extractable: true on the EC key pair is the one deliberate exception
-	// to this platform's default (KeyPairRequest's doc comment, CLAUDE.md
-	// §3.1) — it is what makes this key backup-eligible at all.
+	// to this platform's default (KeyPairRequest's doc comment, the engineering contract
+	// the key-and-PIN rule) — it is what makes this key backup-eligible at all.
 	// CKA_SENSITIVE stays forced true regardless (GenerateKeyPair never
 	// takes it as a parameter), so C_WrapKey is the only door this key can
 	// leave through — C_GetAttributeValue still refuses it, per the finding
-	// in docs/pkcs11-vendor-notes.md.
+	// in.
 	//
 	// This test is also where the two backends were found to diverge on
 	// whether a restore honors the restrictive attributes the operator
 	// asked for — see the comment on the final GetAttributes call below,
-	// and docs/pkcs11-vendor-notes.md.
+	// and.
 	t.Run("WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip", func(t *testing.T) {
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 
@@ -1030,7 +1029,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		// rejects an explicit value here with CKR_ATTRIBUTE_READ_ONLY,
 		// because it derives the curve from the wrapped object itself
 		// rather than accepting the caller's assertion of it. Both backends
-		// unwrap correctly without it (docs/pkcs11-vendor-notes.md).
+		// unwrap correctly without it.
 		restored, err := b.adapter.Unwrap(ctx, s, wrappingKey, mech, wrapped, []pk11.Attribute{
 			pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPrivateKey)),
 			pk11.NumericAttribute(pk11.AttrKeyType, uint64(pk11.KeyTypeEC)),
@@ -1061,11 +1060,11 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		// a generic primitive — WrapUnwrap_AESKeyWrapRoundTrip above needs
 		// it to honor Extractable: true for a payload key — so there is no
 		// place to force this attribute the way GenerateKeyPair forces
-		// CKA_SENSITIVE (3b.7). Measured, not assumed (CLAUDE.md §3.10):
+		// CKA_SENSITIVE (3b.7). Measured, not assumed:
 		// SoftHSM2 2.6.1 honors the template's CKA_EXTRACTABLE=false;
 		// ProtectToolkit 7.3.3 does not — the restored key comes back
 		// extractable regardless of what the template asked for
-		// (docs/pkcs11-vendor-notes.md). The operational consequence is in
+		//. The operational consequence is in
 		// docs/key-ceremony-and-recovery.md: a real restore reads this
 		// attribute back off the token before trusting it, on every vendor,
 		// rather than trusting the template it sent.
@@ -1109,7 +1108,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	//   - ProtectToolkit deadlocks inside a concurrently-entered
 	//     C_GetSlotList despite CKF_OS_LOCKING_OK. This is why Workspaces
 	//     holds the exclusive lock; see its doc comment and
-	//     docs/pkcs11-vendor-notes.md.
+	//
 	//   - PKCS#11 login state is per-token, not per-session, on BOTH
 	//     backends, which makes the current open/login/op/logout-per-call
 	//     pattern unsafe under concurrent callers. That is a live defect,

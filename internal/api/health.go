@@ -14,7 +14,6 @@ const readyzProbeTimeout = 3 * time.Second
 // handleHealthz implements GET /healthz: process liveness only. It must
 // never depend on the HSM — a transient HSM blip should not make an
 // orchestrator restart an otherwise-healthy pod
-// (docs/phases/phase-2-ca-core.md).
 func (s *server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))

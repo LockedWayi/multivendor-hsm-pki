@@ -22,11 +22,11 @@ const DefaultRootValidity = 10 * 365 * 24 * time.Hour
 // DefaultIntermediateValidity is how long a freshly ceremony-produced
 // intermediate certificate is valid for. Shorter than DefaultRootValidity —
 // the intermediate is the certificate this platform expects to routinely
-// re-issue (CLAUDE.md §3.7), the root is not.
+// re-issue, the root is not.
 const DefaultIntermediateValidity = 5 * 365 * 24 * time.Hour
 
 // DefaultRootCRLValidity is how long the root's CRL is valid for. Long-lived
-// by design: the root stays offline between ceremonies (docs/phases/
+// by design: the root stays offline between ceremonies (
 // phase-3b-pki-hardening.md, "How the root CRL is produced" decision), so
 // refreshing it means re-running the ceremony, not a recurring online step.
 const DefaultRootCRLValidity = 5 * 365 * 24 * time.Hour
@@ -34,7 +34,7 @@ const DefaultRootCRLValidity = 5 * 365 * 24 * time.Hour
 // CeremonyParams configures RunCeremony. Root and intermediate are
 // configured as two independent tokens — never one — per the "Where the
 // root key lives relative to the intermediate" decision in
-// docs/phases/phase-3b-pki-hardening.md: the whole point is that nothing
+// : the whole point is that nothing
 // downstream of this ceremony ever needs to name the root's token.
 type CeremonyParams struct {
 	RootWorkspace pk11.Workspace
@@ -83,8 +83,7 @@ type CeremonyParams struct {
 	// without it, C_WrapKey has nothing to export and a lost root token has
 	// no recovery but a fresh ceremony and cross-signing. It does not weaken
 	// CKA_SENSITIVE, which GenerateKeyPair still forces true unconditionally
-	// (CLAUDE.md §3.1, docs/pkcs11-vendor-notes.md "A non-sensitive private
-	// key really is readable here") — C_WrapKey is a different door than
+	//  — C_WrapKey is a different door than
 	// C_GetAttributeValue, and only Extractable governs it.
 	RootKeyExtractable bool
 }
@@ -96,7 +95,7 @@ type CeremonyParams struct {
 // overwrite a key label it has already used, so a parameter mistake caught
 // *after* the first key pair exists costs the operator a manual cleanup on
 // the token before they can retry. Everything knowable up front is therefore
-// rejected up front (CLAUDE.md §3.4).
+// rejected up front.
 func (p *CeremonyParams) validate() error {
 	// Serial, not Label and not SlotID, is what identifies a token — see
 	// pkcs11.Workspace's doc comment. Comparing labels would reject two
@@ -130,7 +129,7 @@ func (p *CeremonyParams) validate() error {
 	// Rejected rather than silently clamped to the root's NotAfter —
 	// clamping would hand the operator a certificate whose lifetime differs
 	// from the one they asked for, discovered long after the one-shot
-	// ceremony they cannot easily repeat (CLAUDE.md §3.4).
+	// ceremony they cannot easily repeat.
 	if p.IntermediateValidity > p.RootValidity {
 		return fmt.Errorf("ca: intermediate validity (%s) exceeds root validity (%s) — the intermediate would outlive the root that signed it",
 			p.IntermediateValidity, p.RootValidity)
@@ -141,7 +140,7 @@ func (p *CeremonyParams) validate() error {
 // CeremonyResult is everything RunCeremony hands back: DER-encoded public
 // artifacts only — root certificate, intermediate certificate, and the
 // root's initial CRL. No private key material of any kind is included or
-// ever leaves either token (CLAUDE.md §3.1): both key pairs are generated
+// ever leaves either token: both key pairs are generated
 // on, and never extracted from, the HSM.
 type CeremonyResult struct {
 	RootCertDER         []byte
@@ -150,7 +149,7 @@ type CeremonyResult struct {
 }
 
 // RunCeremony is the one-time, explicitly-run root and intermediate
-// bootstrap for a two-tier CA hierarchy (docs/phases/
+// bootstrap for a two-tier CA hierarchy (
 // phase-3b-pki-hardening.md, sub-task 3b.1). It is not part of the online
 // service's startup path — cmd/hsm-pki-keytool's ceremony command is the
 // only caller this platform ships, and it is meant to be run once, by an
@@ -222,7 +221,7 @@ func RunCeremony(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk
 // generateCeremonyKey logs into ws, generates a fresh EC key pair labeled
 // label, and returns its public key. It refuses to run against a label that
 // already exists on the token — a ceremony never silently overwrites a key
-// (CLAUDE.md §3.4) — and logs the token back out before returning on every
+// — and logs the token back out before returning on every
 // path, including error paths.
 //
 // # Why the existence check is not atomic, and why that is acceptable

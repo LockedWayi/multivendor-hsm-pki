@@ -12,7 +12,7 @@ import (
 // artifactsig package uses -- a bundle produced over the HSM, not one this
 // test made. What is checked here is the *command*: that its exit path is
 // non-nil error for every way verification can fail, since exit status is
-// the whole interface a packaging step reads (CLAUDE.md §3.4).
+// the whole interface a packaging step reads.
 
 const (
 	fixtureDir   = "../../internal/artifactsig/testdata"

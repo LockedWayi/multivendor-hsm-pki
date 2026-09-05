@@ -1,6 +1,6 @@
 // Package inventory is the published statement of which signing keys a
-// verifier is allowed to trust, and for what (CLAUDE.md §3.7,
-// docs/architecture.md "The key inventory: what a verifier is allowed to
+// verifier is allowed to trust, and for what (the key lifecycle,
+// "The key inventory: what a verifier is allowed to
 // trust").
 //
 // # Why a list, and not one key per purpose
@@ -41,9 +41,9 @@
 //	openssl dgst -sha256 -verify inventory-signing-key.pub \
 //	    -signature key-inventory.json.sig key-inventory.json
 //
-// That is deliberate (CLAUDE.md §3.10). A signature over a canonical form
+// That is deliberate. A signature over a canonical form
 // this package computes could only be checked by code that agrees with this
-// package about canonicalization, which is the closed loop §3.10 exists to
+// package about canonicalization, which is the closed loop independent verification exists to
 // forbid. Signing the bytes on disk means any implementation with a SHA-256
 // and an ECDSA verify can check it.
 //
@@ -77,7 +77,7 @@ const Schema = "hsm-pki-platform/key-inventory/v1"
 
 // Purpose is what a key is allowed to sign. A verifier checking an image
 // signature must be able to reject a signature made by the artifact key, or
-// the purpose separation CLAUDE.md §3.6 requires is nominal — it would hold
+// the purpose separation purpose separation requires is nominal — it would hold
 // against a mistake and not against anyone who read the label.
 type Purpose string
 
@@ -112,7 +112,7 @@ const (
 // Entry is one key version.
 type Entry struct {
 	// Label is the versioned CKA_LABEL. Addressing, not identity — what an
-	// operator types and what a PKCS#11 URI carries (CLAUDE.md §3.8).
+	// operator types and what a PKCS#11 URI carries.
 	Label string `json:"label"`
 	// Purpose is what this key may sign.
 	Purpose Purpose `json:"purpose"`
@@ -121,7 +121,7 @@ type Entry struct {
 	Curve string `json:"curve"`
 	// PublicKeyPEM is the identity: PKIX PEM, exactly the bytes a verifier
 	// feeds to cosign or openssl. Two labels carrying one public key is the
-	// key reuse §3.6 forbids, and this is the only field that can see it.
+	// key reuse purpose separation forbids, and this is the only field that can see it.
 	PublicKeyPEM string `json:"public_key"`
 	// ValidFrom is when this key version was provisioned.
 	ValidFrom time.Time `json:"valid_from"`
@@ -154,7 +154,7 @@ var ErrInvalid = errors.New("inventory: invalid")
 // It parses through crypto/x509's generic PKIX path — the same path cosign
 // and openssl use — rather than through anything that knows how this
 // repository wrote it, so a document this accepts is a document a foreign
-// verifier can also read (CLAUDE.md §3.10).
+// verifier can also read.
 func (e Entry) PublicKey() (*ecdsa.PublicKey, error) {
 	block, rest := pem.Decode([]byte(e.PublicKeyPEM))
 	if block == nil || block.Type != "PUBLIC KEY" || len(rest) != 0 {
@@ -173,12 +173,11 @@ func (e Entry) PublicKey() (*ecdsa.PublicKey, error) {
 
 // Validate fails closed on anything that would make the document unsafe to
 // act on, rather than leaving each consumer to notice for itself
-// (CLAUDE.md §3.4).
 //
 // The check worth naming is the duplicate-public-key one. Every other rule
 // here catches a malformed document; that one catches a *correct-looking*
 // document describing key reuse — two purposes resolving to one key pair,
-// which is precisely what §3.6 forbids and precisely what comparing labels
+// which is precisely what purpose separation forbids and precisely what comparing labels
 // cannot see. It is the same reasoning as signingkey.SameKey, applied to
 // the published artifact rather than to the token.
 func (inv Inventory) Validate() error {
@@ -252,7 +251,7 @@ func (inv Inventory) Validate() error {
 		id := keyID{pub.X.String(), pub.Y.String()}
 		if other, dup := seenKey[id]; dup {
 			return fmt.Errorf("%w: %q and %q are the same key pair under two labels — "+
-				"one key serving two purposes is the reuse CLAUDE.md §3.6 forbids, and only the public key can see it",
+				"one key serving two purposes is the reuse purpose separation forbids, and only the public key can see it",
 				ErrInvalid, other, e.Label)
 		}
 		seenKey[id] = e.Label
@@ -322,7 +321,7 @@ func Parse(data []byte) (Inventory, error) {
 	// Unknown fields are a refusal, not a shrug. A document carrying a
 	// field this build does not understand may be saying something about a
 	// key that changes whether it should be trusted, and silently ignoring
-	// it is the fail-open answer (CLAUDE.md §3.4).
+	// it is the fail-open answer.
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&inv); err != nil {
 		return Inventory{}, fmt.Errorf("%w: %v", ErrInvalid, err)
@@ -366,7 +365,7 @@ func Verify(document, signature []byte, pub *ecdsa.PublicKey) error {
 // production signing: the platform's inventory is signed on the offline
 // token through a crypto.Signer that never holds the private key, and a
 // private key that a Go process can hold is one this platform's rules do
-// not permit for a signing purpose (CLAUDE.md §3.1). It is here rather than
+// not permit for a signing purpose. It is here rather than
 // in a test file so that the signing and verifying halves of the format
 // stay defined in one place.
 func SignWith(document []byte, priv *ecdsa.PrivateKey) ([]byte, error) {

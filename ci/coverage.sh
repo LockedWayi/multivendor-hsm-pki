@@ -2,8 +2,8 @@
 # Computes test coverage over CI-reachable code only, and fails if it is
 # below the floor. "CI-reachable" excludes the files listed in
 # coverage-exclude.txt — vendor adapters that need a proprietary SDK or HSM
-# hardware this pipeline does not have (see that file's header, CLAUDE.md
-# §2.3). Those adapters are validated separately, by the conformance suite
+# hardware this pipeline does not have (see that file's header, the engineering contract
+# the verified-claim split). Those adapters are validated separately, by the conformance suite
 # passing against real hardware in the maintainer's own environment; a
 # coverage percentage is not a meaningful gate for code CI cannot execute.
 #
@@ -33,8 +33,8 @@
 #
 # Run it where SoftHSM2 is, which on a developer machine means inside the
 # ci/softhsm2-dev.Dockerfile image and not on the host. A host without
-# SOFTHSM2_MODULE set skips every token-touching test by design (CLAUDE.md
-# §2.4: a missing backend skips, never fails), so the suite stays green
+# SOFTHSM2_MODULE set skips every token-touching test by design (the engineering contract
+# the every-backend rule: a missing backend skips, never fails), so the suite stays green
 # while the coverage it produces collapses — measured 34.2% on such a host
 # against 79.1% in the container. The gate then fails for a reason that has
 # nothing to do with the code being measured, which is the worst kind of

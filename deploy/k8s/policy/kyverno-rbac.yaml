@@ -42,7 +42,7 @@ rules:
   # Read-only, and on one subresource. The reports controller builds
   # reports; it never needs to change a pod, and a grant wider than the
   # thing that asked for it is how a component ends up able to do what
-  # nobody intended (CLAUDE.md §3.4).
+  # nobody intended.
   - apiGroups: [""]
     resources: ["pods/ephemeralcontainers"]
     verbs: ["get", "list", "watch"]

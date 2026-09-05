@@ -15,7 +15,7 @@ import "unsafe"
 // Go string there is no supported way to force the runtime to forget it —
 // the backing bytes may already have been copied, and overwriting them
 // after the fact through unsafe (a common but naive pattern) does not
-// change that. See docs/phases/phase-1-pkcs11-core.md, "PIN zeroize
+// change that. See, "PIN zeroize
 // method", for the full reasoning and the rejected alternative.
 //
 // A C.malloc'd buffer is memory the Go GC never owns, moves, or copies, so
@@ -39,7 +39,7 @@ func NewSecurePIN(pin []byte) *SecurePIN {
 		// collector on a stack or heap move, leaving a copy this package
 		// cannot find to overwrite; a C-heap buffer does not move, so
 		// Zeroize can guarantee the bytes it wrote over are the only ones
-		// that existed (CLAUDE.md §3.1).
+		// that existed.
 		// nosemgrep: go.lang.security.audit.unsafe.use-of-unsafe-block
 		C.memcpy(buf, unsafe.Pointer(&pin[0]), n)
 	}

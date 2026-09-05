@@ -30,7 +30,7 @@ type ReissueIntermediateParams struct {
 	// RootWorkspace and RootPIN reach the offline root token. This is the
 	// only operation besides the ceremony that logs into it, and like the
 	// ceremony it is operator-run: nothing the online service ships can
-	// name this token (docs/phases/phase-3b-pki-hardening.md).
+	// name this token.
 	RootWorkspace pk11.Workspace
 	RootPIN       PINResolver
 	// RootKeyLabel names the EXISTING root key. ReissueIntermediate fails
@@ -52,7 +52,7 @@ type ReissueIntermediateParams struct {
 	IntermediateWorkspace pk11.Workspace
 	IntermediatePIN       PINResolver
 	// IntermediateKeyLabel is the NEW key label — the next version, per
-	// CLAUDE.md §3.7's versioned-label rule. It must be free: rotation
+	// the key lifecycle's versioned-label rule. It must be free: rotation
 	// provisions the next version alongside the previous one, so that the
 	// old intermediate keeps working through its transition window. A
 	// rotation that overwrote the label in place would revoke nothing and
@@ -65,18 +65,18 @@ type ReissueIntermediateParams struct {
 
 	// RootCRLURL and RootCertURL are required for the same irreversibility
 	// reason as in CeremonyParams: they are fixed at signature time and the
-	// root goes back offline afterwards (CLAUDE.md §3.9).
+	// root goes back offline afterwards.
 	RootCRLURL  string
 	RootCertURL string
 }
 
 // ReissueIntermediateResult carries the newly signed intermediate
 // certificate. DER only, and public material only — no private key ever
-// leaves either token (CLAUDE.md §3.1).
+// leaves either token.
 //
 // There is deliberately no root CRL here. Re-issuing an intermediate does
 // not revoke the previous one: the two overlap for a stated transition
-// window (CLAUDE.md §3.7), and revoking the old intermediate is a separate,
+// window, and revoking the old intermediate is a separate,
 // explicit decision made at the end of that window rather than a side
 // effect of minting its successor.
 type ReissueIntermediateResult struct {
@@ -84,7 +84,7 @@ type ReissueIntermediateResult struct {
 }
 
 // validate checks everything checkable without touching an HSM, before
-// ReissueIntermediate generates any key (CLAUDE.md §3.9). A parameter
+// ReissueIntermediate generates any key. A parameter
 // mistake caught after the new key pair exists costs the operator a manual
 // cleanup on the token, because the label is then taken and the next
 // attempt is refused by the overwrite guard.
@@ -94,7 +94,7 @@ func (p *ReissueIntermediateParams) validate() error {
 			p.RootWorkspace.Serial, p.IntermediateWorkspace.Serial)
 	}
 	// Serial, not label and not slot ID, is what identifies a token
-	// (CLAUDE.md §3.8).
+	//
 	if p.RootWorkspace.Serial == p.IntermediateWorkspace.Serial {
 		return fmt.Errorf("ca: reissue-intermediate refuses to run with root and intermediate on the same token (serial %q, labels %q and %q) — the root's isolation is the property this operation must not spend",
 			p.RootWorkspace.Serial, p.RootWorkspace.Label, p.IntermediateWorkspace.Label)
@@ -117,7 +117,7 @@ func (p *ReissueIntermediateParams) validate() error {
 	// The same emptiness test validateCSR applies to a leaf's subject, for
 	// the same reason and with more at stake: this one names a CA. An empty
 	// subject is checkable without touching the HSM, so it is rejected
-	// before the first key exists rather than after (CLAUDE.md §3.9) — the
+	// before the first key exists rather than after — the
 	// alternative is an operator discovering it from `openssl x509 -text`
 	// with the new label already taken.
 	if p.IntermediateSubject.CommonName == "" && len(p.IntermediateSubject.Organization) == 0 {
@@ -130,7 +130,7 @@ func (p *ReissueIntermediateParams) validate() error {
 	return checkRootMaySign(p.RootCert, p.IntermediateValidity, time.Now())
 }
 
-// checkRootMaySign is CLAUDE.md §3.11 applied to the offline root: before
+// checkRootMaySign is the issuer-authority rule applied to the offline root: before
 // signing, the CA checks that *it* may sign. The failure this prevents is
 // the expensive kind — the intermediate is produced successfully and its
 // defect surfaces at a relying party, months later, by which time the root
@@ -139,7 +139,7 @@ func (p *ReissueIntermediateParams) validate() error {
 //
 // # Why now is a parameter, and why this runs twice
 //
-// §3.11 is explicit that startup validation does not discharge the check:
+// the issuer-authority rule is explicit that startup validation does not discharge the check:
 // it belongs at the point of use as well. Here "startup" is validate(),
 // which runs before any key exists, and "point of use" is the moment the
 // certificate template is built. They are not the same instant — an HSM key
@@ -155,7 +155,7 @@ func (p *ReissueIntermediateParams) validate() error {
 // is small, and it is exactly the wrong thing to leave to chance on a
 // certificate the offline root signs once — a root within seconds of the
 // boundary would hand back an intermediate that outlives it, which is the
-// case §3.11 exists to prevent and the one no relying party forgives.
+// case the issuer-authority rule exists to prevent and the one no relying party forgives.
 //
 // ca.checkIssuerCanCover makes the same call at leaf issuance, for the same
 // reason, and this is that pattern applied one tier up.
@@ -219,7 +219,7 @@ func checkRootMaySign(root *x509.Certificate, interValidity time.Duration, now t
 	// Rejected rather than silently clamped, for the same reason the
 	// ceremony rejects it: clamping hands the operator a certificate whose
 	// lifetime differs from the one they asked for, discovered long after
-	// the offline root went back into storage (CLAUDE.md §3.4, §3.11).
+	// the offline root went back into storage.
 	//
 	// The zero-default looks redundant, because ReissueIntermediate applies
 	// the same one before validate() ever runs. It is kept because dropping
@@ -241,7 +241,7 @@ func checkRootMaySign(root *x509.Certificate, interValidity time.Duration, now t
 
 // ReissueIntermediate signs a fresh intermediate certificate, over a NEW
 // intermediate key pair, under the EXISTING offline root — the routine
-// rotation CLAUDE.md §3.7 promises ("the CA hierarchy rotates by re-issuing
+// rotation the key lifecycle promises ("the CA hierarchy rotates by re-issuing
 // the intermediate (routine)"). Until this existed, that sentence described
 // no code path: RunCeremony always generates both tiers in one run, so the
 // only way to obtain a new intermediate was to mint a new root, which is
@@ -261,7 +261,7 @@ func checkRootMaySign(root *x509.Certificate, interValidity time.Duration, now t
 // intermediate chaining to it. That intermediate verifies perfectly against
 // a root nobody trusts, so the failure appears at every relying party at
 // once, long after the operator packed the HSM away. Missing root key is
-// therefore a hard error (CLAUDE.md §3.4).
+// therefore a hard error.
 //
 // # Callers must check the result even when the error is non-nil
 //
@@ -270,7 +270,7 @@ func checkRootMaySign(root *x509.Certificate, interValidity time.Duration, now t
 // returned alongside the error. The new intermediate key label is taken by
 // then, so a second run is refused by the overwrite guard, and discarding
 // the certificate would strand a key that can never be certified without
-// another root ceremony (CLAUDE.md §3.9).
+// another root ceremony.
 func ReissueIntermediate(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk11.SessionOptions, params ReissueIntermediateParams) (*ReissueIntermediateResult, error) {
 	if params.IntermediateValidity == 0 {
 		params.IntermediateValidity = DefaultIntermediateValidity
@@ -287,7 +287,7 @@ func ReissueIntermediate(ctx context.Context, adapter pk11.VendorAdapter, sessio
 	return withTokenLogin(ctx, adapter, params.RootWorkspace, params.RootPIN, func() (*ReissueIntermediateResult, error) {
 		// The same empirical separation check RunCeremony makes, and for
 		// the same reason: a serial number is a claim the driver makes, an
-		// object search is a fact about the token (CLAUDE.md §3.8). If the
+		// object search is a fact about the token. If the
 		// key generated a moment ago on the "intermediate" token is
 		// visible from this session, the two workspaces are one key space
 		// however their serials differ — and this operation would be
@@ -325,7 +325,7 @@ func signIntermediateUnderExistingRoot(ctx context.Context, adapter pk11.VendorA
 	}
 	// The label addressed a key; this confirms it is *the* key — the one
 	// the supplied root certificate attests to. A label is for addressing,
-	// not for identity (CLAUDE.md §3.8), and signing under a key the root
+	// not for identity, and signing under a key the root
 	// certificate does not certify produces an intermediate that verifies
 	// against nothing.
 	if err := checkKeyMatchesCert(rootSigner, params.RootCert, params.RootKeyLabel, "the supplied root certificate"); err != nil {
@@ -341,7 +341,7 @@ func signIntermediateUnderExistingRoot(ctx context.Context, adapter pk11.VendorA
 		return nil, err
 	}
 
-	// The authoritative §3.11 check, against the instant this certificate
+	// The authoritative the issuer-authority rule check, against the instant this certificate
 	// will actually carry rather than the one validate() saw. Everything
 	// between the two — the new key pair, the root login, the separation
 	// search — takes time, and the template below is what a relying party

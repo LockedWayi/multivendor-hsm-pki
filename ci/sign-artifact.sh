@@ -8,7 +8,7 @@
 # The signing key is artifact-signing-key-v1 on the supply-chain token, and
 # it signs release artifacts and nothing else -- images are signed by
 # image-signing-key-v1 and certificates by the CA, because a compromise of
-# one must not be able to do the others' job (CLAUDE.md §3.6).
+# one must not be able to do the others' job.
 #
 # # Two things here are decisions rather than mechanics
 #
@@ -31,7 +31,7 @@
 #
 # **The gate is the independent verifier, not cosign.** cosign verifying its
 # own output proves cosign agrees with itself -- the closed loop that shipped
-# an unreadable CRL here once (docs/lessons.md §2, CLAUDE.md §3.10). So
+# an unreadable CRL here once. So
 # ci/verify-artifact re-derives the answer from the Go standard library, and
 # the bundle is deleted if it disagrees: a signature that has not been
 # checked must not be distinguishable, on disk, from one that has.
@@ -54,7 +54,7 @@ BUNDLE="${2:-$ARTIFACT.bundle}"
     "set COSIGN_PKCS11_PIN. The PIN reaches cosign as an environment
 variable and never as pin-value= in the PKCS#11 URI -- a URI is a command
 line argument, so it reaches ps output, shell history and any log that
-echoes the command (CLAUDE.md §3.1)."
+echoes the command."
 
 # Paths as the runner sees them: ci/cosign.sh mounts the repository at /repo
 # and nothing else, so a path outside the repository cannot be reached from
@@ -118,7 +118,7 @@ if ! go run "$REPO_ROOT/ci/verify-artifact" \
     rm -f "$BUNDLE"
     die "the signature did not verify. The bundle has been removed rather
 than left beside the artifact, because an unverified signature that looks
-like a verified one is worse than none (CLAUDE.md §3.4)."
+like a verified one is worse than none."
 fi
 
 cat <<EOF

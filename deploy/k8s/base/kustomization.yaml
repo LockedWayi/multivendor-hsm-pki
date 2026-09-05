@@ -4,7 +4,7 @@
 #
 # Two resources are deliberately NOT here:
 #   - the Secret holding the token PIN. No secrets in this repository, ever
-#     (CLAUDE.md §3.2); the overlay documents how an operator creates it.
+#; the overlay documents how an operator creates it.
 #   - the ConfigMap named below. It carries the ceremony's output --
 #     intermediate.pem, root.pem, root-crl.pem -- which is produced by an
 #     operator running the ceremony, not by anything checked in.

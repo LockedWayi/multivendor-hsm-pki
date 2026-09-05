@@ -54,7 +54,7 @@ Two assets that are deliberately *not* on this list, because the design
 prevents them from existing: a private key in a file or a backup (keys are
 generated on the token and never extractable), and a PIN in a config file or
 image (config carries the name of an environment variable, never a value —
-CLAUDE.md §3.1, §3.2).
+the key-and-PIN rule and the no-secrets rule).
 
 ---
 
@@ -357,29 +357,29 @@ its place. These came out of writing it.
 
 ### 6.1 A token login authenticates a token, not a key — so purpose-separated keys need separated *tokens*
 
-CLAUDE.md §3.6 separates signing keys by purpose so that "a compromised
+purpose separation separates signing keys by purpose so that "a compromised
 image key must not be able to issue a certificate, a compromised CA key must
 not be able to sign a release." Distinct labels and `CKA_ID`s achieve that
 against *accidental* reuse. They do not achieve it against an attacker,
 because PKCS#11 authentication is per token: any process holding a session
 on a token can find every key on it by label and sign with it.
 
-`docs/architecture.md`'s signing-layer diagram currently places
+'s signing-layer diagram currently places
 `ca-intermediate-key-v1`, `image-signing-key-v1` and `artifact-signing-key-v1`
 on one online token. If that is what Phase 4.8 provisions, then A3 —
 compromise of the CA daemon — also yields image and artifact signing, and
-the blast-radius separation §3.6 describes is only half real: it holds
+the blast-radius separation purpose separation describes is only half real: it holds
 against mistakes and not against the attacker it names.
 
 This is the same reasoning that put the root on its own token in Phase 3b,
 applied one tier down. **Resolved 2026-09-04: the supply-chain keys are
 provisioned on a third, separate token**, so A3 — compromise of the CA
 daemon — yields the intermediate and nothing else. The rejected options and
-their costs are recorded in `docs/phases/phase-4-container-k8s.md` 4.8; the
+their costs are recorded in 4.8; the
 architecture diagram was corrected with the decision rather than after it.
 
 **A fourth token followed, 2026-09-04, for the same reason one tier further
-up.** The key inventory (`CLAUDE.md` §3.7) is the document that tells every
+up.** The key inventory is the document that tells every
 verifier which keys to trust, so whoever can sign it can authorise their own
 signatures. Signing it with a key on the supply-chain token would make the
 list vouch for a token that vouches for itself; signing it with the CA
@@ -425,7 +425,7 @@ not a threat model:
 - **Side-channel resistance.** Delegated to the HSM and to the standard
   library; this platform performs no private-key arithmetic itself.
 - **Multi-tenancy.** There is no tenant model, no per-tenant isolation, and
-  deliberately none (CLAUDE.md §1).
+  deliberately none.
 - **Supply chain of the dependencies themselves.** Scanned (Phase 3), not
   proven.
 - **Protecting against the HSM vendor or the PKCS#11 module.** A malicious
@@ -450,7 +450,7 @@ not a threat model:
 
 - Blast-radius reasoning behind the design: [`architecture.md`](architecture.md),
   "The signing layer" and "Two-tier hierarchy rather than a single online CA"
-- The rules these conclusions are enforced by: [`../CLAUDE.md`](../CLAUDE.md) §3
+- The rules these conclusions are enforced by: [`../the engineering contract](../the engineering contract) §3
 - The hierarchy, the store, and the distribution points as built:
   [`phases/phase-3b-pki-hardening.md`](phases/phase-3b-pki-hardening.md)
 - Ceremony and recovery procedures, including the A7 manifest mitigation

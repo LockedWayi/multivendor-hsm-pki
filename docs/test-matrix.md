@@ -1,7 +1,7 @@
 # Test matrix: what runs where, and what a new backend must provide
 
 Every test that touches a token runs against every backend the environment
-provides (CLAUDE.md §2.4). This document is the inventory behind that rule:
+provides. This document is the inventory behind that rule:
 what is being proved, where it lives, and what a vendor has to supply before
 it can join the rotation.
 
@@ -121,7 +121,7 @@ What a vendor must provide before it can join `hsmtest`'s registry:
    a label and a user PIN. Two, not one: the ceremony refuses to put root
    and intermediate on the same token.
 3. **A token serial number** reported by `C_GetTokenInfo`. The ceremony
-   compares serials, not labels (CLAUDE.md §3.8); a backend that reports no
+   compares serials, not labels; a backend that reports no
    serial cannot run the two-token tests and the harness says so explicitly.
 4. **Environment variables** following the existing shape, so nothing is
    hard-coded: `<VENDOR>_MODULE`, `<VENDOR>_ROOT_WORKSPACE`,
@@ -132,7 +132,7 @@ What a vendor must provide before it can join `hsmtest`'s registry:
    initialization, how to verify the module loads, and how to run the suite
    against it.
 6. **Provenance confirmed** before a single test runs: the entitlement is
-   the maintainer's own, never an employer's (CLAUDE.md §2.1, §2.2). This is
+   the maintainer's own, never an employer's. This is
    a gate, not a formality — it is the reason this repository can be shown
    to anyone.
 
@@ -211,7 +211,7 @@ docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev go test -race ./...
 ```
 
 Inside the container, not on the host — including for `ci/coverage.sh`. A
-host with no SoftHSM2 skips every token-touching test, exactly as §2.4's
+host with no SoftHSM2 skips every token-touching test, exactly as the every-backend rule's
 skip policy intends, and the suite is still green; what changes is that the
 coverage those tests would have produced is gone. Measured 2026-09-04:
 **34.2% on the host against 79.1% in the container**, from the same commit.

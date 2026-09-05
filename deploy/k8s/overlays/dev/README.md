@@ -7,8 +7,8 @@ enforces Pod Security Admission at `restricted`.
 
 Two objects are deliberately absent from the manifests.
 
-**The PIN Secret.** No secret enters this repository, ever (`CLAUDE.md`
-§3.2). `secret.example.yaml` documents the shape:
+**The PIN Secret.** No secret enters this repository, ever (the engineering contract
+the no-secrets rule). `secret.example.yaml` documents the shape:
 
 ```sh
 kubectl -n hsm-pki-dev create secret generic hsm-pki-pin \

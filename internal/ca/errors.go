@@ -12,7 +12,7 @@ var (
 	// certificate it was pointed at is self-signed — a root. The online
 	// service holds the intermediate only; a configuration that would put a
 	// root online is refused rather than warned about
-	// (docs/phases/phase-3b-pki-hardening.md, CLAUDE.md §3.4).
+	//
 	ErrRootCertificateRejected = errors.New("ca: refusing to run an online service on a root certificate")
 
 	// ErrNotAnIntermediate is returned by LoadIntermediate when the

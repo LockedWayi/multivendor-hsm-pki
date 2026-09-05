@@ -17,14 +17,14 @@ and could have been. Mounting both anyway buys three things:
   If SoftHSM2 were baked in and vendors mounted, the backend CI exercises
   would be delivered differently from the backend production uses. The whole
   reason this repository runs every token-touching test against every backend
-  (`CLAUDE.md` §2.4) is that a difference between backends is where defects
+  is that a difference between backends is where defects
   hide. Introducing one in the packaging would be self-defeating.
 - **The published artifact holds no key store.** An image that cannot hold or
   emulate a private key is a smaller claim to defend and a smaller `trivy`
   surface.
 - **Adding a vendor changes a mount and a config value**, not a Dockerfile.
 
-The cost is that the image cannot start on its own. `CLAUDE.md` §1 promises a
+The cost is that the image cannot start on its own. this project’s priority promises a
 reader can reproduce this repository with no hardware and no proprietary SDK,
 so that burden moved to [`run-local.sh`](run-local.sh) rather than
 disappearing.
@@ -68,7 +68,7 @@ code — see "Verifying" below.
 
 The PIN is never in any of these. `config.yaml` carries `pin_env`, the *name*
 of the environment variable the PIN is read from at startup, so a leaked
-config file leaks nothing (`CLAUDE.md` §3.1, §3.2).
+config file leaks nothing.
 
 ### Two traps found while building this
 
@@ -156,4 +156,4 @@ maintainer's emulator store around to get one is not worth it yet.
 It matters because the pod runs as 65532 (Phase 4.5), so it is recorded as an
 item to settle there rather than left as folklore here. It does not affect
 SoftHSM2, which runs happily as 65532 — and SoftHSM2 is what CI runs
-(`CLAUDE.md` §2.3).
+.

@@ -14,7 +14,7 @@
 # a second opinion about the same files with no more coverage.
 #
 # --error is what makes this a gate rather than a report: without it semgrep
-# prints findings and exits 0 (CLAUDE.md §3.4).
+# prints findings and exits 0.
 #
 # Exceptions are per-rule and per-line `nosemgrep` comments in the source
 # itself, each with the reason beside it. Never a disabled ruleset, and

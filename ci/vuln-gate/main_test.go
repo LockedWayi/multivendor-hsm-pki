@@ -144,7 +144,7 @@ func TestExpiryBeyondTheHorizonIsRefused(t *testing.T) {
 }
 
 // Two decisions on file for one vulnerability means the one that applies is
-// picked by position in the file, which is nobody's decision (CLAUDE.md §3.8).
+// picked by position in the file, which is nobody's decision.
 func TestDuplicateEntryIsRefused(t *testing.T) {
 	list := writeAllowlist(t, `vulnerabilities:
   - id: CVE-2021-38561

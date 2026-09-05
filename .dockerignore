@@ -8,7 +8,7 @@
 
 # Local secrets and state. config.yaml is gitignored and may hold a real
 # workspace label; a token store or a database copied into a build context is
-# exactly the kind of accident CLAUDE.md 3.2 exists to prevent.
+# exactly the kind of accident the no-secrets rule exists to prevent.
 config.yaml
 *.db
 *.pem

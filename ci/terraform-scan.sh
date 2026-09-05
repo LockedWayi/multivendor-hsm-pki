@@ -9,7 +9,7 @@
 # A clean `trivy config` run here is a narrower claim than it looks for this
 # repo: Hostinger's `hostinger_vps` is not a resource type Trivy ships
 # rules for (confirmed empirically, not assumed -- see
-# docs/phases/phase-3-infrastructure.md, sub-task 3.5), so a zero-finding
+#), so a zero-finding
 # run proves the tool executed and found nothing to say about *this*
 # provider, not that the configuration is free of every possible
 # misconfiguration class.
@@ -40,7 +40,7 @@ TF_DIR="${REPO_ROOT}/deploy/terraform"
 # Both tools run in pinned containers rather than off the host's PATH. The
 # previous version of this script called whatever `trivy` and `tofu` the
 # developer happened to have installed, which made "it passed locally" a
-# statement about that machine (CLAUDE.md §3.8).
+# statement about that machine.
 tofu() {
     docker run --rm -v "${REPO_ROOT}":/repo -w /repo \
         -e TF_IN_AUTOMATION=1 \
@@ -101,7 +101,7 @@ for dir in "${TF_DIR}"/environments/*/; do
     validated=$((validated + 1))
 done
 
-# Fail closed on an empty loop (CLAUDE.md §3.4). Whatever the cause -- a
+# Fail closed on an empty loop. Whatever the cause -- a
 # moved directory, a glob that stops matching, the quoting bug above -- a
 # check that silently examined nothing must not report success, because
 # nothing distinguishes it from a check that examined everything and

@@ -2,7 +2,7 @@
 
 Infrastructure for this platform, described as OpenTofu (not Terraform —
 see "Terraform vs. OpenTofu" in
-[`docs/phases/phase-3-infrastructure.md`](../../docs/phases/phase-3-infrastructure.md)
+[](../../)
 for why HashiCorp's BSL relicensing is the reason). The directory keeps
 the name `terraform`: it holds HCL infrastructure code, and the tool
 identity is a version/registry detail recorded in `versions.tf`, not
@@ -150,7 +150,7 @@ locked via OpenTofu's native S3 conditional-write locking
 independent of whatever the storage backend can or cannot do). Full
 reasoning, provisioning steps, and why MinIO is bound to `127.0.0.1`
 rather than exposed publicly: `docs/terraform-state-backend-setup.md`.
-Verification record: `docs/phases/phase-3-infrastructure.md`, sub-task
+Verification record:, sub-task
 3.4.
 
 ## Policy scanning
@@ -173,7 +173,7 @@ Hostinger resources produce zero findings regardless of content. So "0
 misconfigurations" here means "Trivy has nothing to say about this
 provider's narrow resource surface," not "this configuration is provably
 free of every misconfiguration class." Full record: sub-task 3.5 in
-`docs/phases/phase-3-infrastructure.md`.
+.
 
 No suppression exists anywhere in this tree — there is nothing to
 document a reason for. If one is ever added, it carries an inline comment
@@ -185,7 +185,7 @@ unexplained suppression is worse than the finding.
 Since `trivy config` has no reachable finding on this provider, the
 demonstration uses Trivy's secret scanner instead — reachable regardless
 of provider, since it pattern-matches file contents rather than resource
-schemas, and directly on-topic for CLAUDE.md §3.2. Two commits show it
+schemas, and directly on-topic for the no-secrets rule. Two commits show it
 working end-to-end on a realistic mistake: a hardcoded-looking token left
 in a variable's `default`.
 

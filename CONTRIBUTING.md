@@ -5,7 +5,8 @@ implementation, but it is built to real contribution standards.
 
 ## Workflow
 1. Create a feature branch off `main` (`feat/...`, `fix/...`, `docs/...`).
-2. Make one focused change. Keep PRs small — one phase may be several PRs.
+2. Make one focused change. Keep PRs small; a single piece of work may be
+   several of them.
 3. Write or update tests. The coverage floor is 70%.
 4. Run the CI gates locally before pushing. Every one of them is a script
    in `ci/`, run the same way here and in the pipeline, so a red check is
@@ -54,7 +55,7 @@ go test ./internal/pkcs11 -run TestConformance -race -v
 
 With only SoftHSM2 available, its subtests run and ProtectServer's skip. If
 you have your own ProtectToolkit entitlement (see
-`docs/protectserver-setup.md`), set `PROTECTSERVER_MODULE` (and
+), set `PROTECTSERVER_MODULE` (and
 `PROTECTSERVER_WORKSPACE`, `PROTECTSERVER_PIN`) to also run that backend's
 subtests — never in CI, always locally, against your own SDK.
 
@@ -69,11 +70,11 @@ go test ./internal/ca -run TestRunCeremony -race -v
 For ProtectServer it takes its own variables —
 `PROTECTSERVER_ROOT_WORKSPACE`, `PROTECTSERVER_INTERMEDIATE_WORKSPACE`, and a
 PIN for each. With any of them unset those subtests skip. Provisioning the
-second token is a one-time manual step; `docs/protectserver-setup.md` §3b has
+second token is a one-time manual step;b has
 the commands.
 
 Both backends can run in one invocation by mounting the ProtectToolkit module
-and its token store into the dev container — see `docs/protectserver-setup.md`
+and its token store into the dev container —
 §5. That is how the Phase 3b results were produced, and it is worth doing
 before opening a PR that touches `internal/pkcs11` or `internal/ca`: the two
 backends have disagreed before, and a green SoftHSM2-only run does not tell
@@ -119,7 +120,7 @@ hardware this pipeline does not have: that adapter's file goes in
 `ci/coverage-exclude.txt`, and its correctness is validated by
 `TestConformance` passing against real hardware in the maintainer's own
 environment instead of by a percentage CI cannot honestly compute for code
-it cannot execute (CLAUDE.md §2.3). A bare `go test -cover` still works for a
+it cannot execute. A bare `go test -cover` still works for a
 quick local read, but the floor itself is `ci/coverage.sh`'s number.
 
 ## Accepting a Semgrep finding
@@ -143,14 +144,14 @@ finding go away.
 ## Non-negotiables
 - No secrets in commits or history. `gitleaks` scans every commit on every
   PR and push, and a finding turns the check red. It does not yet *block*
-  the merge: branch protection is unavailable on a private repository on
-  GitHub's free plan (measured 2026-09-05,
-  `docs/phases/phase-5-cicd.md`), so the checks report rather than gate.
+  the merge — that needs a repository setting no file here can make — so
   Treat a red check as blocking anyway — that is the standard here, and it
   is the only thing making it true today.
 - Private keys and PINs never hit plaintext disk or logs.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
-- Develop and test against SoftHSM2 — never against employer hardware.
+- Develop and test against SoftHSM2. Vendor backends are exercised only
+  against hardware the maintainer owns.
 - All code, comments, and commit messages in English.
 
-See `CLAUDE.md` for the full engineering contract.
+Everything above is enforced by the checks in `ci/`, not by convention alone —
+run them before you push and a review starts from working code.

@@ -20,7 +20,7 @@ import (
 )
 
 // These tests reach a token, so every one of them runs against every
-// backend the environment provides (CLAUDE.md §2.4). The pure-logic ones —
+// backend the environment provides. The pure-logic ones —
 // label shape, public-key comparison — are at the bottom and deliberately
 // do not multiply.
 
@@ -54,7 +54,7 @@ func TestProvision_ProducesAProtectedSigningKey(t *testing.T) {
 
 		// Read off the token, not echoed back from the request. This is the
 		// assertion that would have caught the CKA_SENSITIVE defect
-		// (docs/lessons.md §1).
+		//
 		if !key.Sensitive {
 			t.Error("CKA_SENSITIVE is false on the token; the private key can be read out")
 		}
@@ -92,7 +92,7 @@ func TestProvision_KeyIsUsableForSigningAndVerifiesInTheStandardLibrary(t *testi
 		if err != nil {
 			t.Fatalf("Sign: %v", err)
 		}
-		// PKCS#11 returns raw r||s, not DER (docs/pkcs11-vendor-notes.md).
+		// PKCS#11 returns raw r||s, not DER.
 		if len(sig)%2 != 0 {
 			t.Fatalf("signature length %d is odd; expected r||s", len(sig))
 		}
@@ -144,7 +144,7 @@ func TestProvision_TwoKeysAreGenuinelyDifferentKeys(t *testing.T) {
 		}
 
 		// Distinct labels prove nothing — two labels can name one key pair,
-		// which is the reuse CLAUDE.md §3.6 forbids and the thing a label
+		// which is the reuse purpose separation forbids and the thing a label
 		// comparison cannot see. Compare the public points.
 		if signingkey.SameKey(image.Public, artifact.Public) {
 			t.Error("the image and artifact keys are the same key pair under two labels")
@@ -159,8 +159,8 @@ func TestProvision_RejectsAnUnversionedLabelBeforeTouchingTheToken(t *testing.T)
 
 		// "image-signing-key" with no version. Rejected because rotation
 		// under a bare label is a breaking rename for every consumer
-		// (CLAUDE.md §3.7), and because a parameter error must surface
-		// before an irreversible generation, not after (§3.9).
+		//, and because a parameter error must surface
+		// before an irreversible generation, not after (validating before mutating).
 		bad := b.Label("image-signing-key")
 		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: bad}); err == nil {
 			t.Fatal("Provision accepted an unversioned label")
@@ -222,7 +222,7 @@ func TestKeyPEM_IsReadableByAVerifierWithNoHSM(t *testing.T) {
 		// Parsed back through the standard library's generic PEM/PKIX path,
 		// which is what any verifier — cosign included — will use. Decoding
 		// it with something that knows how we wrote it would prove nothing
-		// (CLAUDE.md §3.10).
+		//
 		block, rest := pem.Decode(out)
 		if block == nil || block.Type != "PUBLIC KEY" || len(rest) != 0 {
 			t.Fatalf("PEM output is not a single PUBLIC KEY block: %q", out)
@@ -325,7 +325,7 @@ func TestSameKey(t *testing.T) {
 
 func TestValidateLabel(t *testing.T) {
 	// Versioning is what makes rotation a lifecycle step rather than a
-	// breaking rename (CLAUDE.md §3.7), so an unversioned label is refused
+	// breaking rename, so an unversioned label is refused
 	// rather than defaulted to -v1: a tool that silently picks a version
 	// for you is a tool that will pick the same one twice.
 	valid := []string{"image-signing-key-v1", "artifact-signing-key-v12", "audit-signing-key-v1"}

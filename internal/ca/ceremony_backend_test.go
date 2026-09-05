@@ -3,7 +3,7 @@ package ca_test
 // Backend scaffolding for this package's HSM-touching tests.
 //
 // Every one of them runs against every backend the environment provides
-// (CLAUDE.md §2.4). The iteration, the skip policy, the token provisioning
+//. The iteration, the skip policy, the token provisioning
 // and the one-C_Initialize-per-process handling all live in
 // internal/hsmtest; this file is the thin naming layer over it, because
 // within the CA the two tokens are "root" and "intermediate" rather than

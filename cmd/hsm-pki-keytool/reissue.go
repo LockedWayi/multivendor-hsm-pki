@@ -1,6 +1,6 @@
 package main
 
-// The routine half of CA-key rotation (CLAUDE.md §3.7,
+// The routine half of CA-key rotation (the key lifecycle,
 // docs/key-ceremony-and-recovery.md §4.1.1): sign a new intermediate under
 // the root that already exists, without touching the root itself.
 //
@@ -84,7 +84,7 @@ func runReissueIntermediateCmd(args []string) error {
 	// Refuse to clobber an existing artifact. A re-run against the previous
 	// intermediate's output path is the mistake this catches, and it is a
 	// costly one: that file is the certificate still serving traffic
-	// through the transition window (CLAUDE.md §3.7).
+	// through the transition window.
 	if _, err := os.Stat(*interCertOut); err == nil {
 		return fmt.Errorf("refusing to overwrite existing file %s", *interCertOut)
 	} else if !os.IsNotExist(err) {
@@ -133,7 +133,7 @@ func runReissueIntermediateCmd(args []string) error {
 	// Written before the error is checked, for the same reason the ceremony
 	// does it: ReissueIntermediate can return a valid certificate alongside
 	// a logout failure, and that certificate cannot be regenerated because
-	// the new key label is now in use (CLAUDE.md §3.9).
+	// the new key label is now in use.
 	if result != nil {
 		if err := writeCertPEM(*interCertOut, result.IntermediateCertDER); err != nil {
 			return err
@@ -141,7 +141,7 @@ func runReissueIntermediateCmd(args []string) error {
 		fmt.Printf("new intermediate certificate written: %s\n", *interCertOut)
 		fmt.Println("no private key material was written anywhere — the new key pair remains on its HSM token")
 		fmt.Printf("the previous intermediate is NOT revoked by this operation: it stays valid until you revoke it\n" +
-			"  and publish a root CRL saying so, which is the transition window (CLAUDE.md §3.7)\n")
+			" and publish a root CRL saying so, which is the transition window\n")
 	}
 	if reissueErr != nil {
 		return fmt.Errorf("reissue-intermediate: %w", reissueErr)
@@ -154,7 +154,7 @@ func runReissueIntermediateCmd(args []string) error {
 // A file carrying a second block is rejected rather than silently reduced
 // to its first: the likely way that happens is an operator passing a chain
 // where a single root was wanted, and picking the first block would make
-// the choice by file order, which is nobody's decision (CLAUDE.md §3.8).
+// the choice by file order, which is nobody's decision.
 func readCertPEM(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

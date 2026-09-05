@@ -10,7 +10,7 @@ import (
 
 // RevokedCert is the minimum a CRL entry needs. It is defined here, not as
 // a reference to internal/api.CertRecord, so this package never imports
-// the HTTP layer built on top of it (CLAUDE.md directory layering: ca is
+// the HTTP layer built on top of it (the engineering contract directory layering: ca is
 // domain logic, api is transport).
 type RevokedCert struct {
 	Serial     *big.Int
@@ -29,7 +29,7 @@ func (c *CA) BuildCRL(revoked []RevokedCert, thisUpdate, nextUpdate time.Time, n
 	// nextUpdate from a misconfigured duration (a zero or negative
 	// crl_validity_hours) would otherwise produce a technically well-formed
 	// CRL that every verifier rejects, and the failure would surface far
-	// from its cause (CLAUDE.md §3.4).
+	// from its cause.
 	if !nextUpdate.After(thisUpdate) {
 		return nil, fmt.Errorf("ca: CRL nextUpdate (%s) must be after thisUpdate (%s)",
 			nextUpdate.Format(time.RFC3339), thisUpdate.Format(time.RFC3339))

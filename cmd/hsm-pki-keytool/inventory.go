@@ -36,7 +36,7 @@ func (k *keySpecs) String() string { return fmt.Sprintf("%d keys", len(*k)) }
 // Set parses `purpose:label:status`. All three are required rather than
 // defaulted: a status this tool guessed would be a lifecycle decision made
 // by a default value, and the lifecycle is the entire point of the
-// document (CLAUDE.md §3.7).
+// document.
 func (k *keySpecs) Set(v string) error {
 	parts := strings.Split(v, ":")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
@@ -51,7 +51,7 @@ func (k *keySpecs) Set(v string) error {
 }
 
 // runGenerateInventoryCmd builds and signs the key inventory from the keys
-// actually on the token (Phase 4.8, docs/architecture.md "The key
+// actually on the token (Phase 4.8 "The key
 // inventory: what a verifier is allowed to trust").
 //
 // # Why this is a command and not a file somebody edits
@@ -72,7 +72,7 @@ func (k *keySpecs) Set(v string) error {
 // exists to prevent.
 //
 // So this refuses to proceed until it has measured that they differ: by
-// serial number, never by label (CLAUDE.md §3.8, docs/lessons.md §5), and
+// serial number, never by label, and
 // then by confirming the inventory signing key is not findable from the
 // supply-chain token — because a serial is a claim the driver makes and an
 // object search is a fact about the token. It is the ceremony's
@@ -189,7 +189,7 @@ func runGenerateInventoryCmd(args []string) error {
 		version = previous.Version + 1
 	}
 	// Marshal validates, so nothing reaches the signing step — or the disk
-	// — that a verifier would refuse (CLAUDE.md §3.4). That includes the
+	// — that a verifier would refuse. That includes the
 	// duplicate-public-key check, which is the one that catches two
 	// purposes resolving to a single key pair.
 	document, err := inventory.Inventory{
@@ -236,7 +236,7 @@ func runGenerateInventoryCmd(args []string) error {
 // document.
 //
 // The asymmetry is the lifecycle rather than a shortcut. A retired key has
-// been destroyed on the token (CLAUDE.md §3.7), so there is nothing left to
+// been destroyed on the token, so there is nothing left to
 // read; its entry survives only so a verifier meeting an old signature
 // learns the key was retired instead of learning nothing. And if such a key
 // *is* still on the token, the document and the token disagree about
@@ -279,7 +279,7 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 	// The serial comparison in the caller says the two tokens are different
 	// objects. This says the signing key is not *also* here — a serial is
 	// what the driver reports, an object search is what the token holds
-	// (CLAUDE.md §3.8).
+	//
 	free, err := pk11.LabelIsFree(ctx, adapter, s, pk11.ClassPrivateKey, invKeyLabel)
 	if err != nil {
 		return nil, fmt.Errorf("checking that %q is absent from the supply-chain token: %w", invKeyLabel, err)
@@ -324,7 +324,7 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 			}
 			if !stillFree {
 				return nil, fmt.Errorf("%q is listed as retired but its private key is still on token %q: "+
-					"retirement means destroyed on the token (CLAUDE.md §3.7), and publishing the claim before "+
+					"retirement means destroyed on the token, and publishing the claim before "+
 					"doing the deed would make this document say something untrue", spec.label, ws.Label)
 			}
 			entry.PublicKeyPEM = previousEntry.PublicKeyPEM
@@ -340,7 +340,7 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 		// Verify rather than Load: reading the key is also the moment to
 		// confirm the token still reports it sensitive and
 		// non-extractable, so a key that has become readable never reaches
-		// the published list (docs/lessons.md §1 and §6).
+		// the published list.
 		key, err := signingkey.Verify(ctx, adapter, s, spec.label, curve)
 		if err != nil {
 			return nil, fmt.Errorf("reading %q off token %q: %w", spec.label, ws.Label, err)

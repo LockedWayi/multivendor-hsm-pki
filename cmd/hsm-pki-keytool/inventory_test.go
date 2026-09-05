@@ -73,7 +73,7 @@ func newInventoryFixture(t *testing.T, b *hsmtest.Backend) inventoryFixture {
 	// that is load-bearing rather than incidental. ProtectToolkit-C 7.3.3 in
 	// software emulation seeds its RNG per C_Initialize, so the first key
 	// generated after each library initialisation is the same key every
-	// time (docs/pkcs11-vendor-notes.md). A fixture that opened a second
+	// time. A fixture that opened a second
 	// adapter to make v2 would get v1's key back, and the failure would
 	// look like a bug in the inventory rather than what it is.
 	provisionOn(t, b, b.Primary, b.PrimaryPIN, f.imageLabel)
@@ -110,7 +110,7 @@ func (f inventoryFixture) signaturePath() string {
 // TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts is the
 // end-to-end claim: a signature made by a key that never left an HSM, over
 // a document a foreign implementation can read and check with the recipe
-// this repository publishes (CLAUDE.md §3.10). Verifying it with our own
+// this repository publishes. Verifying it with our own
 // inventory.Verify would prove only that the package agrees with itself.
 func TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
@@ -175,7 +175,7 @@ func TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts(t *testing.T) {
 // property the whole document rests on. A list of trusted keys signed by a
 // key on the same token authorises whoever holds that token to add their
 // own key — so the two tokens have to actually be two, measured by serial
-// rather than by the label an operator typed (CLAUDE.md §3.8).
+// rather than by the label an operator typed.
 func TestRunGenerateInventoryCmd_RefusesOneTokenForBoth(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		f := newInventoryFixture(t, b)
@@ -223,7 +223,7 @@ func TestRunGenerateInventoryCmd_RefusesToOverwriteWithoutTheCurrentDocument(t *
 }
 
 // TestRunGenerateInventoryCmd_RotationBumpsVersionAndKeepsHistory walks the
-// lifecycle CLAUDE.md §3.7 describes: a new version arrives active, the
+// lifecycle the key lifecycle describes: a new version arrives active, the
 // previous one becomes verify-only, and signatures it already made keep
 // verifying. The version counter has to advance, or a verifier cannot tell
 // a rollback from an update.
@@ -284,7 +284,7 @@ func TestRunGenerateInventoryCmd_RotationBumpsVersionAndKeepsHistory(t *testing.
 
 // TestRunGenerateInventoryCmd_RefusesToCallALiveKeyRetired is the check
 // that keeps the document from asserting something about the token that is
-// not true. "Retired" means destroyed on the token (CLAUDE.md §3.7);
+// not true. "Retired" means destroyed on the token;
 // publishing the claim while the private key is still there would make the
 // inventory a statement nobody measured.
 func TestRunGenerateInventoryCmd_RefusesToCallALiveKeyRetired(t *testing.T) {

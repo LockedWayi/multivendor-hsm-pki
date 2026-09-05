@@ -36,13 +36,13 @@
 #
 #   * Every third-party ref is pinned to an immutable identifier — actions
 #     by commit SHA, the gitleaks image by digest — the same discipline the
-#     repository applies to its base images and to cosign (CLAUDE.md §3.8:
+# repository applies to its base images and to cosign (the identity rule:
 #     a tag is a pointer somebody can move).
 #
 # "Blocks merge" needs one repository setting this file cannot make: mark
 # these checks required under branch protection. Measured 2026-09-05, that
 # setting is unavailable on a private repository on the free plan (403,
-# docs/phases/phase-5-cicd.md), so every job here reports rather than
+#), so every job here reports rather than
 # blocks. The scripts fail closed regardless; what is missing is GitHub
 # refusing the merge button, and no file in this repository can supply it.
 name: ci
@@ -169,7 +169,7 @@ jobs:
       - name: Check out with full history
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          # The scan's subject IS the history (CLAUDE.md §3.2 forbids
+          # The scan's subject IS the history (the no-secrets rule forbids
           # secrets in commits, not just in the tree); a shallow clone
           # would scan only the tip and pass on anything already buried.
           fetch-depth: 0
@@ -222,7 +222,7 @@ jobs:
 
       # Built here rather than pulled: the image this job scans has to be
       # the image this commit produces, and a registry tag is a pointer to
-      # whatever was pushed last (CLAUDE.md §3.8). Publishing is 5.6's job;
+      # whatever was pushed last. Publishing is 5.6's job;
       # this one only needs the artifact to exist locally.
       - name: Build the service image
         run: docker build -f deploy/docker/Dockerfile -t hsm-pki-server:ci .
@@ -257,8 +257,7 @@ jobs:
       #
       # `tofu plan` is deliberately absent. It needs provider credentials
       # and a real deploy target, and which target is still an open
-      # maintainer decision (docs/phases/phase-5-cicd.md, "Where the deploy
-      # target lives"). A plan job wired to nothing would be a check that
+      # maintainer decision . A plan job wired to nothing would be a check that
       # passes because it did nothing.
       - name: Format, validate and scan the OpenTofu tree
         run: ci/terraform-scan.sh

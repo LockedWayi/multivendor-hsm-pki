@@ -1,7 +1,7 @@
 package ca_test
 
 // Sub-task 2.2's tests run against SoftHSM2 only — see the "Decide before
-// starting" entry in docs/phases/phase-2-ca-core.md: Phase 1's conformance
+// starting" entry in: Phase 1's conformance
 // suite already proved VendorAdapter generalizes across two independent
 // vendors, so the CA layer, which only ever calls through that interface,
 // does not need to re-prove it per test.

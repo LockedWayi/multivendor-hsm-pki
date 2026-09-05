@@ -2,7 +2,6 @@
 // revocation, CRL generation — built on the Phase 1 internal/pkcs11 core.
 // The CA never extracts its signing key from the HSM boundary: it asks a
 // Signer to sign, and never holds raw key material itself
-// (docs/phases/phase-2-ca-core.md).
 package ca
 
 import (
@@ -39,7 +38,7 @@ type PINResolver func() ([]byte, error)
 //
 // A session is still not held between calls, deliberately: pkcs11.Session
 // enforces an idle timeout and a maximum TTL and fails closed once either
-// elapses (CLAUDE.md §3.4), so a signer reusing one session forever would
+// elapses, so a signer reusing one session forever would
 // eventually fail every call for a reason unrelated to the request. Those
 // bounds govern a caller's session; the token's authentication is a
 // separate lifetime, held by the adapter's anchor session, which is exactly
@@ -52,7 +51,7 @@ type PINResolver func() ([]byte, error)
 // that obtained it — reusing a handle from the key-generation session in a
 // different one fails CKR_OBJECT_HANDLE_INVALID (observed on SoftHSM2
 // 2.6.1; recorded as a general PKCS#11 trap, not a vendor quirk, in
-// docs/pkcs11-vendor-notes.md, since nothing here is SoftHSM2-specific
+// , since nothing here is SoftHSM2-specific
 // behavior). A label-based re-lookup per session is the fix that generalizes
 // to any vendor.
 type Signer struct {
@@ -124,7 +123,7 @@ func (s *Signer) Public() crypto.PublicKey {
 // paired with this signer's curve (SHA-256 for P-256, and so on) — any
 // other hash function, or a digest of the wrong length for it, is rejected
 // rather than sent to the HSM, so a mismatched caller fails loudly instead
-// of producing a signature over the wrong bytes (CLAUDE.md §3.4).
+// of producing a signature over the wrong bytes.
 //
 // The HSM returns a raw r||s ECDSA signature; Sign converts it to the
 // ASN.1 DER SEQUENCE crypto/x509 expects before returning it.
@@ -167,7 +166,7 @@ func hashForCurve(curve pk11.ECCurve) (crypto.Hash, error) {
 
 // ecdsaASN1Signature is the ASN.1 SEQUENCE crypto/x509 expects an ECDSA
 // signature to be encoded as (RFC 5480 / SEC1); PKCS#11's CKM_ECDSA
-// produces the raw r||s concatenation instead (docs/pkcs11-vendor-notes.md).
+// produces the raw r||s concatenation instead.
 type ecdsaASN1Signature struct {
 	R, S *big.Int
 }

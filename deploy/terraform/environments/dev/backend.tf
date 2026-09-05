@@ -2,13 +2,13 @@
 # VPS this platform runs on. Decided 2026-08-26 by the maintainer -- no
 # new commercial account, consistent with this project's existing
 # provider decisions (see "Provider and blast-radius control" in
-# docs/phases/phase-3-infrastructure.md). Locking uses OpenTofu's native
+#). Locking uses OpenTofu's native
 # S3 conditional-write lock (`use_lockfile`, OpenTofu >= 1.10.0, see
 # versions.tf), not DynamoDB -- MinIO supports the conditional-PUT
 # semantics this depends on. Verified, not assumed: two concurrent
 # `tofu apply` runs against a local MinIO container -- the first
 # succeeded, the second failed with HTTP 412 PreconditionFailed on the
-# lock object instead of racing it (docs/phases/phase-3-infrastructure.md,
+# lock object instead of racing it (,
 # 3.4).
 #
 # `encrypt = false` is deliberate. Self-hosted MinIO has no KMS backend

@@ -12,7 +12,7 @@ import (
 //
 // The PKCS#11 spec says CKA_EC_POINT is a DER-encoded OCTET STRING wrapping
 // the uncompressed point; some tokens return exactly that, others return the
-// bare point with no wrapper (docs/pkcs11-vendor-notes.md). Try the bytes as
+// bare point with no wrapper. Try the bytes as
 // a raw point first, and only attempt an ASN.1 OCTET STRING unwrap if that
 // fails.
 //

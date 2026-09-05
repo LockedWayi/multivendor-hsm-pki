@@ -1,7 +1,7 @@
 # The CA service image.
 #
 # Two properties of this file are decisions rather than conventions, and both
-# are recorded in docs/phases/phase-4-container-k8s.md:
+# are recorded in:
 #
 #  1. No PKCS#11 module ships here -- not the proprietary vendor ones, and not
 #     SoftHSM2 either. Every module arrives as a read-only mount at run time,

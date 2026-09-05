@@ -3,7 +3,7 @@ package ca_test
 // The HSM-backed half of reissue-intermediate: the rotation actually
 // happening on tokens, and the refusals that can only be observed against a
 // real one. Every test here runs as its own subtest per backend
-// (CLAUDE.md §2.4) — the certificate-shape and parameter checks that need
+// — the certificate-shape and parameter checks that need
 // no token live in reissue_internal_test.go.
 
 import (
@@ -46,7 +46,7 @@ func ceremonyThenReissueParams(t *testing.T, b *ceremonyBackend) (*ca.CeremonyRe
 		IntermediateWorkspace: b.interWS,
 		IntermediatePIN:       func() ([]byte, error) { return []byte(b.interPIN), nil },
 		// v2: rotation provisions the NEXT version alongside the previous
-		// one, it never overwrites a label (CLAUDE.md §3.7).
+		// one, it never overwrites a label.
 		IntermediateKeyLabel: b.label("inter-key-v2"),
 		IntermediateSubject:  pkix.Name{CommonName: "test Intermediate CA v2"},
 		IntermediateCurve:    pk11.P256,
@@ -59,7 +59,7 @@ func ceremonyThenReissueParams(t *testing.T, b *ceremonyBackend) (*ca.CeremonyRe
 // The Done-when criterion for this sub-task: a new intermediate, over a new
 // key, signed by the *existing* root — and the previous intermediate still
 // valid, because that overlap is what makes rotation a transition rather
-// than an outage (CLAUDE.md §3.7).
+// than an outage.
 func TestReissueIntermediate_ProducesNewIntermediateUnderExistingRoot(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		ctx := context.Background()
@@ -137,7 +137,7 @@ func TestReissueIntermediate_ProducesNewIntermediateUnderExistingRoot(t *testing
 // The safety property the whole operation turns on: a wrong root label must
 // fail closed, never fall back to generating a root. If it created one, the
 // new intermediate would chain to a root nobody trusts and the failure
-// would surface at every relying party at once (CLAUDE.md §3.4).
+// would surface at every relying party at once.
 func TestReissueIntermediate_FailsClosedWhenRootKeyIsMissing(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		ctx := context.Background()
@@ -168,7 +168,7 @@ func TestReissueIntermediate_FailsClosedWhenRootKeyIsMissing(t *testing.T) {
 	})
 }
 
-// CLAUDE.md §3.7: rotation provisions the next version, it never overwrites
+// the key lifecycle: rotation provisions the next version, it never overwrites
 // a label in place. Overwriting would make rotation a breaking change for
 // everything holding a certificate under the old key.
 func TestReissueIntermediate_RefusesToOverwriteAnExistingIntermediateLabel(t *testing.T) {
@@ -188,7 +188,7 @@ func TestReissueIntermediate_RefusesToOverwriteAnExistingIntermediateLabel(t *te
 	})
 }
 
-// A label addresses a key; it does not identify one (CLAUDE.md §3.8).
+// A label addresses a key; it does not identify one.
 // Signing under a key the supplied root certificate does not attest to
 // would produce an intermediate that verifies against nothing, so the
 // mismatch must be caught before the signature.

@@ -4,9 +4,8 @@
 # proprietary SDK -- one command, from a clean checkout.
 #
 # This script exists because of a decision and its cost. No PKCS#11 module
-# ships in the service image (docs/phases/phase-4-container-k8s.md, "Decide
-# before starting"), which keeps the published artifact free of any key
-# store but also means the image cannot start on its own. CLAUDE.md §1 says
+# ships in the service image , which keeps the published artifact free of any key
+# store but also means the image cannot start on its own. this project’s priority says
 # any reader must be able to reproduce this repository without hardware, so
 # the burden that left the image lands here instead of on the reader.
 #
@@ -38,7 +37,7 @@ PORT="${HSM_PKI_LOCAL_PORT:-8080}"
 
 # Throwaway PINs for a throwaway local token. They are passed to the
 # containers as environment variables and never written into config.yaml,
-# which holds only the NAME of the variable to read (CLAUDE.md §3.1, §3.2).
+# which holds only the NAME of the variable to read.
 # Nothing here is a secret worth protecting; the point is that the
 # mechanism is the same one a real deployment uses.
 ROOT_PIN="1234"
@@ -94,7 +93,7 @@ EOF
     log "initializing two tokens: $ROOT_TOKEN_LABEL and $INTERMEDIATE_TOKEN_LABEL"
     # Two tokens, not two labels on one token. The ceremony refuses to put
     # the root and the intermediate on the same token, and compares serial
-    # numbers rather than labels to decide (CLAUDE.md §3.8).
+    # numbers rather than labels to decide.
     docker run --rm \
         -v "$STATE/tokens":/var/lib/softhsm/tokens \
         -v "$STATE/etc":/conf:ro \
@@ -142,7 +141,7 @@ EOF
     # refuse to act on anything but exactly one match. Resolving an
     # ambiguous match to the first hit would let enumeration order decide
     # which token goes in the safe, which is nobody's decision
-    # (CLAUDE.md §3.8).
+    #
     #
     # This runs in a container rather than on the host because SoftHSM2
     # creates each token directory mode 0700 owned by the user that

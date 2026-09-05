@@ -1,5 +1,5 @@
 # gitleaks configuration for this repository (Phase 5.2's gate, pulled
-# forward with 5.1 — see docs/phases/phase-5-cicd.md).
+# forward with 5.1 —).
 #
 # The escape hatches here are deliberately of two different shapes, because
 # the two kinds of finding they exempt are different in kind:
@@ -24,7 +24,7 @@
 useDefault = true
 
 # Public, published key labels. Matching is anchored to the exact versioned
-# label pattern this platform provisions (CLAUDE.md §3.7) so a genuinely
+# label pattern this platform provisions so a genuinely
 # secret value sitting near the word "key" is still reported.
 [[allowlists]]
 description = "published signing-key labels are public by construction (their public halves live in docs/keys/)"
