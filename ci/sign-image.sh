@@ -22,7 +22,23 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KEY_LABEL="image-signing-key-v1"
 TOKEN_LABEL="${HSM_PKI_SUPPLY_TOKEN:-hsm-pki-local-supply-chain}"
-PUBLIC_KEY="docs/keys/$KEY_LABEL.pub"
+# The published public key, named relative to the repository because that is
+# how the signing container sees it (the repository is mounted at /repo).
+#
+# Overridable for the pipeline, which signs with the ephemeral keys it
+# provisioned for the run rather than the committed, durable ones. Pointing
+# the verification below at docs/keys/ during a CI run would compare a
+# signature made by one key against the public half of a different one, and
+# report a key mismatch as a broken signature.
+KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
+case "$KEYS_DIR" in
+    "$REPO_ROOT"/*) PUBLIC_KEY="${KEYS_DIR#"$REPO_ROOT"/}/$KEY_LABEL.pub" ;;
+    *)
+        echo "sign-image: HSM_PKI_KEYS_DIR must be inside $REPO_ROOT --" >&2
+        echo "the signing container mounts only the repository, so a path" >&2
+        echo "outside it resolves against the container's own filesystem." >&2
+        exit 1 ;;
+esac
 # The local k3d registry speaks HTTP. Set to false against a real registry;
 # it is a flag rather than a constant so that "we allow plaintext" is a
 # decision somebody makes per environment rather than a default nobody sees.
@@ -110,9 +126,25 @@ Signed and verified:
 
   $DIGEST_REF
 
-Admission will accept it wherever deploy/k8s/policy/image-signature.yaml is
-installed, because $KEY_LABEL is listed in docs/keys/key-inventory.json.
-Regenerate that policy after any rotation:
+Verify it with the public key this signature was checked against, which
+needs no HSM and no PIN:
+
+  cosign verify --key $PUBLIC_KEY --insecure-ignore-tlog=true $DIGEST_REF
+
+Admission accepts it wherever deploy/k8s/policy/image-signature.yaml is
+installed *if and only if* the key above is the one that policy names --
+that is, if $PUBLIC_KEY is the committed, durable key listed in
+docs/keys/key-inventory.json.
+
+Read that condition literally when the signature was made in CI. A pipeline
+run provisions its own token and its own keys, so it signs with a key that
+is not in the committed inventory, and admission refuses the result. That
+is the design working rather than failing: an image whose only signature
+comes from a trust root that died with the build should not be deployable.
+It does mean the CI signature proves the mechanism and nothing about
+custody, and the two must never be reported as one thing (CLAUDE.md 2.3).
+
+Regenerate the policy after any rotation:
 
   go run ./ci/generate-image-policy -out deploy/k8s/policy/image-signature.yaml
 EOF

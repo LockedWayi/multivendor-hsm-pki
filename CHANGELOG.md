@@ -7,6 +7,29 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **The service image is built, scanned, pushed and signed on every green
+  merge to `main`** (Phase 5.6), to `ghcr.io/lockedwayi/multivendor-hsm-pki`,
+  with a signed CycloneDX SBOM attestation bound to the digest. Tagged
+  `sha-<commit>` and `v<x.y.z>` only — no `latest`, no moving `main`, because
+  the digest is the identity and a tag is a pointer somebody can move. The
+  registry credential is the run's own `GITHUB_TOKEN`, so no long-lived
+  registry password is stored anywhere.
+  - The publish job is downstream of all six gates *in the same workflow
+    run*, and re-checks their results through `ci/assert-publishable.sh`
+    rather than trusting the `needs:`/`if:` interaction to be read
+    correctly. That guard refuses an unknown gate, a missing gate, a
+    duplicated one and any result that is not `success`;
+    `ci/assert-publishable-selftest.sh` exercises all forty cases inside a
+    required check.
+  - The image is scanned *again* in the publish job, against the exact bytes
+    about to be pushed. A container build is not bit-reproducible, so the
+    image the `image` gate scanned is a sibling of the one published, not
+    the same artifact.
+  - The signature is made with keys provisioned fresh for the run. It proves
+    the mechanism over a real PKCS#11 token and says nothing about custody:
+    the committed public key does not verify it and admission refuses it, by
+    design. See the README section "The published image, and what its
+    signature means".
 - **A coverage badge in the README that CI verifies rather than publishes**
   (Phase 5.1). `docs/coverage.svg` is committed like a lockfile;
   `COVERAGE_BADGE_CHECK=1` recomputes it in CI and fails on a mismatch. The

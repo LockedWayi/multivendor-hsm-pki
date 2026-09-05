@@ -44,7 +44,33 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STATE="${HSM_PKI_SIGNING_STATE:-$REPO_ROOT/.local/signing}"
-KEYS_DIR="$REPO_ROOT/docs/keys"
+# Where the public half of everything provisioned here is written.
+#
+# Overridable for exactly one caller: the pipeline. CI provisions a *fresh*
+# token and fresh keys on every run (the ephemeral trust root of 5.9), and
+# those public keys are not the published ones -- writing them to docs/keys/
+# would overwrite the committed, durable keys that consumers verify against
+# with a set that dies with the run. Different keys, different files.
+KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
+
+# The keytool runs in a container with the repository mounted at /repo, so
+# it needs the same directory named from inside. Derived rather than
+# duplicated: two spellings of one path is how they drift.
+case "$KEYS_DIR" in
+    "$REPO_ROOT"/*)
+        KEYS_DIR_IN_REPO="/repo/${KEYS_DIR#"$REPO_ROOT"/}"
+        # What the closing summary prints. The recipes below are meant to be
+        # copied and run, so they have to name the files this invocation
+        # actually wrote -- a recipe pointing at docs/keys/ after a run that
+        # wrote somewhere else verifies the wrong inventory, and succeeds.
+        KEYS_DIR_REL="${KEYS_DIR#"$REPO_ROOT"/}" ;;
+    *)
+        echo "HSM_PKI_KEYS_DIR must be inside $REPO_ROOT: the provisioning" >&2
+        echo "containers mount only the repository, so a path outside it" >&2
+        echo "resolves against the container's own filesystem and the keys" >&2
+        echo "would be written somewhere the host never sees." >&2
+        exit 1 ;;
+esac
 DEV_IMAGE="hsm-pki-dev:local"
 
 SUPPLY_TOKEN_LABEL="hsm-pki-local-supply-chain"
@@ -147,7 +173,7 @@ keytool provision-signing-key \
     -workspace "'$SUPPLY_TOKEN_LABEL'" \
     -pin-env HSM_PKI_SUPPLY_PIN \
     -key-label "$IMAGE_KEY_LABEL" \
-    -public-key-out "/repo/docs/keys/$IMAGE_KEY_LABEL.pub"
+    -public-key-out "$KEYS_DIR_IN_REPO/$IMAGE_KEY_LABEL.pub"
 
 log "3/6  provisioning $ARTIFACT_KEY_LABEL"
 # A separate invocation, and therefore a separate key. The tool compares the
@@ -160,7 +186,7 @@ keytool provision-signing-key \
     -workspace "'$SUPPLY_TOKEN_LABEL'" \
     -pin-env HSM_PKI_SUPPLY_PIN \
     -key-label "$ARTIFACT_KEY_LABEL" \
-    -public-key-out "/repo/docs/keys/$ARTIFACT_KEY_LABEL.pub"
+    -public-key-out "$KEYS_DIR_IN_REPO/$ARTIFACT_KEY_LABEL.pub"
 
 log "4/6  provisioning $INVENTORY_KEY_LABEL on the offline token"
 keytool provision-signing-key \
@@ -168,7 +194,7 @@ keytool provision-signing-key \
     -workspace "'$INVENTORY_TOKEN_LABEL'" \
     -pin-env HSM_PKI_INVENTORY_PIN \
     -key-label "$INVENTORY_KEY_LABEL" \
-    -public-key-out "/repo/docs/keys/$INVENTORY_KEY_LABEL.pub"
+    -public-key-out "$KEYS_DIR_IN_REPO/$INVENTORY_KEY_LABEL.pub"
 
 log "5/6  generating and signing the key inventory"
 keytool generate-inventory \
@@ -180,14 +206,14 @@ keytool generate-inventory \
     -inventory-key-label "$INVENTORY_KEY_LABEL" \
     -key "image:$IMAGE_KEY_LABEL:active" \
     -key "artifact:$ARTIFACT_KEY_LABEL:active" \
-    -out /repo/docs/keys/key-inventory.json \
-    -signature-out /repo/docs/keys/key-inventory.json.sig
+    -out "$KEYS_DIR_IN_REPO/key-inventory.json" \
+    -signature-out "$KEYS_DIR_IN_REPO/key-inventory.json.sig"
 
 log "verifying the inventory the way a stranger would"
 # openssl, not this repository's code. A signature checked only by the
 # library that produced it proves the code agrees with itself, which it
 # would do just as convincingly if the format were wrong.
-docker run --rm -v "$REPO_ROOT/docs/keys":/keys:ro "$DEV_IMAGE" \
+docker run --rm -v "$KEYS_DIR":/keys:ro "$DEV_IMAGE" \
     openssl dgst -sha256 \
         -verify "/keys/$INVENTORY_KEY_LABEL.pub" \
         -signature /keys/key-inventory.json.sig \
@@ -219,7 +245,7 @@ docker run --rm -v "$STATE":/state -e INVENTORY_LABEL="$INVENTORY_TOKEN_LABEL" "
 
 cat <<EOF
 
-Done. Published to docs/keys/ -- all public, all committable:
+Done. Published to $KEYS_DIR_REL/ -- all public, all committable:
 
   $IMAGE_KEY_LABEL.pub       verifies container image signatures
   $ARTIFACT_KEY_LABEL.pub    verifies release artifact signatures
@@ -235,13 +261,13 @@ deliberately bringing it back.
 
 Anyone can check the inventory with nothing but openssl:
 
-  openssl dgst -sha256 -verify docs/keys/$INVENTORY_KEY_LABEL.pub \\
-      -signature docs/keys/key-inventory.json.sig docs/keys/key-inventory.json
+  openssl dgst -sha256 -verify $KEYS_DIR_REL/$INVENTORY_KEY_LABEL.pub \\
+      -signature $KEYS_DIR_REL/key-inventory.json.sig $KEYS_DIR_REL/key-inventory.json
 
 To rotate a key later, provision the next version and regenerate:
 
   hsm-pki-keytool provision-signing-key ... -key-label image-signing-key-vNEXT
-  hsm-pki-keytool generate-inventory ... -in docs/keys/key-inventory.json \\
+  hsm-pki-keytool generate-inventory ... -in $KEYS_DIR_REL/key-inventory.json \\
       -key image:$IMAGE_KEY_LABEL:verify-only \\
       -key image:image-signing-key-vNEXT:active ...
 
