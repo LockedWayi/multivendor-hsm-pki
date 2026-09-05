@@ -152,6 +152,24 @@ recorded here rather than hidden. Until the two are unified, the "one
 entry" promise above reads as "one entry per registry, of which there are
 two."
 
+**Update (2026-09-05): the duplication is now enforced against drift, not
+merely recorded.** `hsmtest.Vendors()` exports the registry's names and
+`TestConformanceCoversEveryRegisteredVendor` fails when the two lists
+disagree — by name and in order, so a rename or a reorder is caught too.
+The reason this was worth a test rather than another sentence: the way the
+duplication actually bites is silent. A vendor added to the harness and
+forgotten here would run in every suite *except* the conformance one —
+the suite whose entire purpose is finding vendor divergence — and
+everything would stay green. The backend nobody conformance-checked would
+be the one nobody noticed. Verified by adding a third vendor to the
+registry alone and watching the test go red.
+
+The merge itself is still not done, and is deliberately left for the
+vendor that makes it worth doing: Phase 7 adds nShield and Luna, which is
+the first time the two-entry cost is actually paid *and* the first time a
+unified harness could be validated against a backend it was not written
+around.
+
 `internal/signingkey` joined §3 in Phase 4.8 without touching the harness,
 which is the property this section claims: a new suite reaches every
 backend by calling `hsmtest.ForEach`, and a new backend reaches every suite
