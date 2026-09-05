@@ -1,5 +1,11 @@
 # HSM-PKI Platform
 
+![coverage](docs/coverage.svg) — measured by `ci/coverage.sh` over
+CI-reachable code, with vendor adapters that need hardware CI does not have
+excluded and validated separately (CLAUDE.md §2.3). The badge is a committed
+file that CI recomputes and fails on if it is stale, so it cannot quietly
+overstate.
+
 A vendor-agnostic **PKCS#11 abstraction layer** over three HSM families (nShield,
 Luna, ProtectServer), with a **Certificate Authority** built on top, deployed to
 Kubernetes (a security-gated **CI/CD pipeline** lands in Phase 5), and — at the

@@ -64,12 +64,40 @@ jobs:
     name: build, vet, test, coverage (SoftHSM2)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Mounted into every Go container in this job. Kept in one variable so
+      # the three invocations cannot drift into caching different things.
+      # github.workspace, not $PWD: this value is expanded by Actions when
+      # the environment is built, and a shell variable left inside it would
+      # reach `docker run` as the literal four characters -- docker would
+      # then create a directory named $PWD and mount that.
+      CACHE_MOUNTS: >-
+        -v ${{ github.workspace }}/.local/ci-cache/gomod:/go/pkg/mod
+        -v ${{ github.workspace }}/.local/ci-cache/gobuild:/root/.cache/go-build
     steps:
       - name: Check out
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
+      # The Go module and build caches live on the runner and are mounted
+      # into the container, because everything Go runs in the container and
+      # a cache the container cannot see is a cache that does nothing. Keyed
+      # on go.sum so a dependency change starts a fresh one; restore-keys
+      # let an unrelated commit reuse the previous run's build output.
+      - name: Restore the Go module and build caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            .local/ci-cache/gomod
+            .local/ci-cache/gobuild
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+            go-${{ runner.os }}-
+
       - name: Build the dev container
-        run: docker build -f ci/softhsm2-dev.Dockerfile -t hsm-pki-dev .
+        run: |
+          mkdir -p .local/ci-cache/gomod .local/ci-cache/gobuild
+          docker build -f ci/softhsm2-dev.Dockerfile -t hsm-pki-dev .
 
       # The safe.directory line in each step below is not decoration: the
       # checkout is owned by the runner's uid, the container runs as root,
@@ -78,7 +106,7 @@ jobs:
       # git one.
       - name: gofmt and go vet
         run: |
-          docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev sh -c '
+          docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS hsm-pki-dev sh -c '
             git config --global --add safe.directory /repo
             unformatted="$(gofmt -l cmd internal ci)"
             if [ -n "$unformatted" ]; then
@@ -95,7 +123,7 @@ jobs:
       # works on every backend beats two that each work on one.
       - name: Full suite with the race detector
         run: |
-          docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev sh -c '
+          docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS hsm-pki-dev sh -c '
             git config --global --add safe.directory /repo
             go test -race -p 1 ./...'
 
@@ -104,9 +132,16 @@ jobs:
       # failure would otherwise be the only signal for a plain test bug.
       # Merging the two into one instrumented run is a Phase 5 optimization,
       # not a correctness change.
-      - name: Coverage floor
+      # COVERAGE_BADGE_CHECK recomputes docs/coverage.svg and fails if the
+      # committed one disagrees. The badge is checked in like a lockfile
+      # rather than published by CI, so this job needs no `contents: write`
+      # and no token -- see ci/coverage.sh's header for why that mattered
+      # more than the convenience.
+      - name: Coverage floor and badge
         run: |
-          docker run --rm -v "$PWD":/repo -w /repo hsm-pki-dev sh -c '
+          docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS \
+            -e COVERAGE_BADGE=docs/coverage.svg -e COVERAGE_BADGE_CHECK=1 \
+            hsm-pki-dev sh -c '
             git config --global --add safe.directory /repo
             bash ci/coverage.sh -race -p 1'
 
