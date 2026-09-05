@@ -6,6 +6,40 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **Dependency, reachability and image scanning as pipeline gates**
+  (Phase 5.3). `ci/scan-deps.sh` runs `trivy fs` and `govulncheck`;
+  `ci/scan-image.sh` (which already existed) is wired into the workflow for
+  the image and its SBOM. The two dependency scanners are kept because they
+  answer different questions — whether a vulnerable version is present at
+  all, and whether this code reaches it — and a pipeline with only one of
+  them either cries wolf or misses a library until the day somebody calls
+  it.
+- **One reviewed vulnerability allowlist with mandatory expiry dates**,
+  `ci/vuln-allowlist.yaml`, consumed natively by both trivy scans and
+  applied to govulncheck by `ci/vuln-gate`. An entry needs an identifier, a
+  written reason and an `expired_at` at most 180 days out; the finding
+  returns by itself when it lapses.
+- **`ci/vuln-gate`**, which exists because both scanners fail *open* in the
+  configuration this needs: `govulncheck -format json` exits 0 even on a
+  called vulnerability, and trivy honours an ignore entry with no expiry
+  forever. Both measured, both now refused.
+- **`.github/dependabot.yml`** for Go modules, workflow actions and both
+  Dockerfile directories. Dependabot alerts and automated security fixes
+  were also enabled on the repository — unlike branch protection, they are
+  available on a private repository on the free plan.
+
+### Changed
+- **Scanner pins moved to `ci/scanner-pins.sh` and became digests.**
+  `ci/scan-image.sh` pinned trivy by the `0.67.0` tag, which is a pointer
+  its publisher can move (CLAUDE.md §3.8). govulncheck runs inside the
+  digest-pinned builder image from `deploy/docker/Dockerfile` rather than on
+  the runner's Go, because part of its answer is about the standard library
+  and that is a property of the toolchain that ships.
+- **`CONTRIBUTING.md` no longer claims `gitleaks` blocks merge.** It cannot,
+  on this plan; the report-only decision of 2026-09-05 had been applied to
+  the README but not here.
+
 ### Fixed
 - **`reissue-intermediate` checked the root's authority at the wrong
   instant.** `checkRootMaySign` ran only inside `validate()`, against its

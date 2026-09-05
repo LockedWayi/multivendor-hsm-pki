@@ -7,8 +7,20 @@ implementation, but it is built to real contribution standards.
 1. Create a feature branch off `main` (`feat/...`, `fix/...`, `docs/...`).
 2. Make one focused change. Keep PRs small — one phase may be several PRs.
 3. Write or update tests. The coverage floor is 70%.
-4. Ensure all CI gates pass locally where possible (`semgrep`, `trivy`,
-   `gitleaks`, `tfsec`, `go test`).
+4. Run the CI gates locally before pushing. Every one of them is a script
+   in `ci/`, run the same way here and in the pipeline, so a red check is
+   reproducible without pushing again:
+
+   ```sh
+   docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev go test -race -p 1 ./...
+   docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev bash ci/coverage.sh -race -p 1
+   ci/scan-deps.sh                                    # trivy fs + govulncheck
+   docker build -f deploy/docker/Dockerfile -t hsm-pki-server:local .
+   ci/scan-image.sh hsm-pki-server:local              # trivy image + SBOM
+   ci/terraform-scan.sh                               # trivy config + secrets
+   ```
+
+   Semgrep is not in this list yet (Phase 5.2).
 5. Open a PR. In the description, include a short **reasoning note** for any
    architectural decision: what you decided, the alternatives, and why.
 
@@ -110,8 +122,24 @@ environment instead of by a percentage CI cannot honestly compute for code
 it cannot execute (CLAUDE.md §2.3). A bare `go test -cover` still works for a
 quick local read, but the floor itself is `ci/coverage.sh`'s number.
 
+## Accepting a vulnerability finding
+`ci/scan-deps.sh` and `ci/scan-image.sh` fail on any HIGH or CRITICAL. When a
+finding genuinely does not apply, it is *accepted*, not silenced: add an entry
+to `ci/vuln-allowlist.yaml` with the identifier, a statement of why, and an
+`expired_at` date at most 180 days out. `ci/vuln-gate` refuses an entry
+missing any of those — including one with no expiry, which trivy alone would
+honour forever. On the expiry date the finding comes back on its own and
+somebody looks again. Never edit a scanner's severity threshold to make a
+finding go away.
+
 ## Non-negotiables
-- No secrets in commits or history. `gitleaks` blocks merge.
+- No secrets in commits or history. `gitleaks` scans every commit on every
+  PR and push, and a finding turns the check red. It does not yet *block*
+  the merge: branch protection is unavailable on a private repository on
+  GitHub's free plan (measured 2026-09-05,
+  `docs/phases/phase-5-cicd.md`), so the checks report rather than gate.
+  Treat a red check as blocking anyway — that is the standard here, and it
+  is the only thing making it true today.
 - Private keys and PINs never hit plaintext disk or logs.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - Develop and test against SoftHSM2 — never against employer hardware.

@@ -49,7 +49,8 @@ Phase specs live in [`docs/phases/`](docs/phases/).
 The baseline path develops and tests against **SoftHSM2**, so the full suite —
 the capstone auto-unseal mechanism included, once it lands — runs in CI with no
 HSM and no proprietary SDK (`.github/workflows/ci.yml`: the race-detector
-suite, the coverage floor, and a full-history secret scan, all on every PR).
+suite, the coverage floor, a full-history secret scan, dependency and
+reachability scanning, and an image scan with an SBOM — all on every PR).
 Clone it, run `go test ./...` in the provided dev container, and everything CI
 checks runs on your machine too.
 
@@ -97,6 +98,11 @@ verification.
 - Private keys and PINs never touch plaintext disk or logs.
 - No secrets in the repo or its history — `gitleaks` scans the full history
   on every PR and push (advisory today, see above).
+- Dependencies are scanned two ways, because they answer different
+  questions: `trivy fs` for *is a vulnerable version present*, `govulncheck`
+  for *does this code actually reach it*. The image is scanned too, and an
+  accepted finding needs a written reason and an expiry date in one reviewed
+  allowlist — `ci/vuln-allowlist.yaml`, empty today.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - ECDSA P-256 default curve.
 - Fail-closed on every ambiguous security decision; all enforcement server-side.
