@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
-	"math/rand"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,15 +50,28 @@ func loggerFromContext(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
-// newRequestID returns a short correlation id. The id authorizes nothing
-// and is only ever read out of a log line, so this uses math/rand: it
-// needs no entropy pool and cannot fail, which removes the fallback branch
-// that existed only to handle an error crypto/rand could return.
+// newRequestID returns a short, unpredictable correlation id. crypto/rand,
+// not math/rand — the standard-library rule states randomness is always crypto/rand
+// with no exceptions, and a request id is not worth carving one out for.
+//
+// The error is handled rather than discarded. A failed read leaves b as
+// all zeros, which would silently assign every concurrent request the same
+// id "0000000000000000" — the one outcome that defeats the entire purpose
+// of a correlation id, and it would appear exactly when logs matter most.
+// The fallback is monotonic rather than random: it cannot collide, which is
+// the property actually needed here. This is not security-critical (the id
+// authorizes nothing), so degrading to a counter is correct where failing
+// the request would not be.
 func newRequestID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("seq-%016x", requestIDFallback.Add(1))
+	}
 	return hex.EncodeToString(b)
 }
+
+// requestIDFallback backs newRequestID when crypto/rand is unavailable.
+var requestIDFallback atomic.Uint64
 
 // statusRecorder captures the status code a handler wrote, so the logging
 // middleware can report it after the handler has already written the
