@@ -14,13 +14,13 @@ implementation, but it is built to real contribution standards.
    ```sh
    docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev go test -race -p 1 ./...
    docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev bash ci/coverage.sh -race -p 1
+   ci/scan-code.sh                                    # semgrep (SAST)
    ci/scan-deps.sh                                    # trivy fs + govulncheck
    docker build -f deploy/docker/Dockerfile -t hsm-pki-server:local .
    ci/scan-image.sh hsm-pki-server:local              # trivy image + SBOM
    ci/terraform-scan.sh                               # trivy config + secrets
    ```
 
-   Semgrep is not in this list yet (Phase 5.2).
 5. Open a PR. In the description, include a short **reasoning note** for any
    architectural decision: what you decided, the alternatives, and why.
 
@@ -121,6 +121,14 @@ hardware this pipeline does not have: that adapter's file goes in
 environment instead of by a percentage CI cannot honestly compute for code
 it cannot execute (CLAUDE.md §2.3). A bare `go test -cover` still works for a
 quick local read, but the floor itself is `ci/coverage.sh`'s number.
+
+## Accepting a Semgrep finding
+Exceptions are `nosemgrep` comments in the source, pinned to the rule and the
+line, with the reason written beside them — never a disabled ruleset, never a
+path exclusion. Two things to know: the directive must be the **last** comment
+line directly above the match (a reason block between them silently stops it
+suppressing), and the exemption covers that line only, so a second use of the
+same pattern in the same file still fails the scan. That is deliberate.
 
 ## Accepting a vulnerability finding
 `ci/scan-deps.sh` and `ci/scan-image.sh` fail on any HIGH or CRITICAL. When a
