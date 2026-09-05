@@ -327,6 +327,13 @@ func subjectKeyID(pub crypto.PublicKey) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ca: marshaling public key for SubjectKeyId: %w", err)
 	}
+	// The algorithm is named by RFC 5280 §4.2.1.2 method 1, not chosen
+	// here, and the output is an identifier for path building rather than
+	// a security decision: nothing is authenticated by it, and a collision
+	// would produce a hint that fails to narrow a search, not a forged
+	// certificate. Suppressed per rule and per line, so a SHA-1 used for
+	// anything else in this file still fails the scan.
+	// nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-sha1
 	sum := sha1.Sum(der)
 	return sum[:], nil
 }

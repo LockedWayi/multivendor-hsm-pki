@@ -13,6 +13,9 @@
 # aquasec/trivy:0.67.0
 TRIVY_IMAGE="aquasec/trivy@sha256:94711c60051c6cab848a292e3a67f62623fcee361b2bb661f43b17184f4afdac"
 
+# semgrep/semgrep:1.175.1
+SEMGREP_IMAGE="semgrep/semgrep@sha256:51c9f53a4fce0d55e9abd08d7b96968654248a4b1122e77f20e0a49c0072446c"
+
 # golang.org/x/vuln/cmd/govulncheck. A module version rather than an image:
 # the Go module proxy's checksum database makes a released version
 # immutable in the same way a digest does.
