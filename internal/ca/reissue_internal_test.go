@@ -56,7 +56,7 @@ func softRoot(t *testing.T, mutate func(*x509.Certificate)) *x509.Certificate {
 }
 
 func TestCheckRootMaySign_AcceptsACeremonyShapedRoot(t *testing.T) {
-	if err := checkRootMaySign(softRoot(t, nil), 5*365*24*time.Hour); err != nil {
+	if err := checkRootMaySign(softRoot(t, nil), 5*365*24*time.Hour, time.Now()); err != nil {
 		t.Fatalf("checkRootMaySign rejected a well-formed root: %v", err)
 	}
 }
@@ -70,7 +70,7 @@ func TestCheckRootMaySign_AcceptsRootWithNoPathLenConstraint(t *testing.T) {
 	if root.MaxPathLen != -1 {
 		t.Fatalf("precondition: expected an unconstrained root to parse as MaxPathLen -1, got %d", root.MaxPathLen)
 	}
-	if err := checkRootMaySign(root, 5*365*24*time.Hour); err != nil {
+	if err := checkRootMaySign(root, 5*365*24*time.Hour, time.Now()); err != nil {
 		t.Fatalf("checkRootMaySign rejected an unconstrained root: %v", err)
 	}
 }
@@ -136,7 +136,7 @@ func TestCheckRootMaySign_Rejects(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkRootMaySign(tc.root, tc.validity)
+			err := checkRootMaySign(tc.root, tc.validity, time.Now())
 			if err == nil {
 				t.Fatal("checkRootMaySign accepted a root it must reject")
 			}
@@ -209,8 +209,43 @@ func TestCheckRootMaySign_RejectsNonSelfSignedRoot(t *testing.T) {
 		t.Fatalf("fixture is wrong: Subject %q != Issuer %q, so this would not test what it claims",
 			impostor.Subject, impostor.Issuer)
 	}
-	if err := checkRootMaySign(impostor, 365*24*time.Hour); err == nil {
+	if err := checkRootMaySign(impostor, 365*24*time.Hour, time.Now()); err == nil {
 		t.Fatal("checkRootMaySign accepted a certificate whose Subject matches its Issuer but which is not self-signed")
+	}
+}
+
+// checkRootMaySign's verdict depends on the instant it is given, which is
+// the property that makes calling it twice worth anything. Same root, same
+// requested validity, two different clocks: one inside the root's window,
+// one past it.
+//
+// This is the unit-level stand-in for the real hazard. In
+// ReissueIntermediate the two calls are separated by an HSM key generation,
+// a token login and an object search, so the certificate's NotAfter is
+// computed from a strictly later instant than the one validate() approved.
+// Reproducing that window end-to-end would need an injectable clock;
+// pinning the time-dependence here, plus the call at the template site,
+// is what the fix rests on.
+func TestCheckRootMaySign_VerdictDependsOnTheInstantGiven(t *testing.T) {
+	year := 365 * 24 * time.Hour
+	// A root with a little over a year left.
+	root := softRoot(t, func(c *x509.Certificate) {
+		c.NotBefore = time.Now().Add(-time.Hour)
+		c.NotAfter = time.Now().Add(year + time.Hour)
+	})
+
+	if err := checkRootMaySign(root, year, time.Now()); err != nil {
+		t.Fatalf("rejected a one-year intermediate under a root with a year and an hour left: %v", err)
+	}
+	// Two hours later the same request no longer fits, and the answer has
+	// to change with the clock rather than with the parameters.
+	later := time.Now().Add(2 * time.Hour)
+	err := checkRootMaySign(root, year, later)
+	if err == nil {
+		t.Fatal("accepted an intermediate that would outlive the root, given a later instant")
+	}
+	if !errors.Is(err, ErrValidityExceedsIssuer) {
+		t.Fatalf("error = %v, want one wrapping ErrValidityExceedsIssuer", err)
 	}
 }
 
@@ -250,6 +285,13 @@ func TestReissueIntermediateParams_Validate(t *testing.T) {
 		{"missing root CRL URL", func(p *ReissueIntermediateParams) { p.RootCRLURL = "" }},
 		{"missing root cert URL", func(p *ReissueIntermediateParams) { p.RootCertURL = "" }},
 		{"nil root certificate", func(p *ReissueIntermediateParams) { p.RootCert = nil }},
+		// An empty subject is checkable without an HSM, so §3.9 says reject
+		// it before the first key exists. validateCSR applies the same test
+		// to a leaf; this one names a CA.
+		{"empty intermediate subject", func(p *ReissueIntermediateParams) { p.IntermediateSubject = pkix.Name{} }},
+		{"subject with only a country", func(p *ReissueIntermediateParams) {
+			p.IntermediateSubject = pkix.Name{Country: []string{"TR"}}
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
