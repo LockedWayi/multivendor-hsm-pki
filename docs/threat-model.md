@@ -7,12 +7,14 @@ falsifiable: every claim about what an attacker cannot do should be
 traceable to a specific mechanism in the code, and every claim that is not
 yet true is labelled as such rather than described in the present tense.
 
-**Status: written at the end of Phase 3b** (sub-task 3b.5). The platform at
-this point has a two-tier CA with an offline root, durable revocation state,
-and a published CRL. It has **no authentication on the issuance API** —
-that arrives in Phase 5.5 — and no OCSP responder, audit log, or Vault
-custody yet. The analysis below reflects that reality; §8 says what each
-later phase changes.
+**Status: written at the end of Phase 3b** (sub-task 3b.5), **extended at
+the end of Phase 4** with the admission boundary that phase created (B7,
+A9). The platform at this point has a two-tier CA with an offline root,
+durable revocation state, a published CRL, and a containerized deployment
+whose cluster refuses unsigned and unpinned images. It has **no
+authentication on the issuance API** — that arrives in Phase 5.5 — and no
+OCSP responder, audit log, or Vault custody yet. The analysis below reflects
+that reality; §8 says what each later phase changes.
 
 ---
 
@@ -90,6 +92,14 @@ CLAUDE.md §3.1, §3.2).
             │ B6: CI/CD (Phase 5) — builds and signs images    │
             │  and artifacts with its own token session        │
             └──────────────────────────────────────────────────┘
+
+            ┌──────────────────────────────────────────────────┐
+            │ B7: the admission webhook (Phase 4)              │
+            │  Kyverno, cluster-wide. Decides what may run:    │
+            │  signed by an inventory key, named by digest,    │
+            │  hardened. Enforced everywhere EXCEPT the four   │
+            │  namespaces its namespaceSelector excludes.      │
+            └──────────────────────────────────────────────────┘
 ```
 
 The line above B5 is the boundary this whole phase exists to create, and it
@@ -97,6 +107,34 @@ is enforced structurally rather than by policy: `internal/config.CAConfig`
 has no field capable of naming the root's token, workspace, or key label,
 and `TestConfig_NoRootKeyReferences` fails the build if one is added. A
 compromised service process cannot authenticate a token it cannot name.
+
+**B7 is a different kind of boundary from the rest, and the difference
+matters.** B2–B5 are enforced by what a process can *name*: the service
+cannot log into a token whose label its configuration cannot express, so the
+boundary holds even against arbitrary code execution. B7 is enforced by a
+webhook the API server *consults* — an authorization check the cluster
+performs on request, not a structural impossibility. Three consequences
+follow, and each is an attacker capability rather than a caveat:
+
+- **The boundary is scoped by namespace, not by cluster.** Both image
+  policies carry a `namespaceSelector` excluding `kube-system`,
+  `kube-public`, `kube-node-lease` and `kyverno`. Inside those four,
+  nothing checks signatures or digests. See A9.
+- **The boundary can be deleted, and deleting it is a normal-looking
+  action.** `kubectl delete validatingwebhookconfiguration` — or deleting
+  the Kyverno deployment, or its namespace — removes the control for the
+  whole cluster in one request that needs no access to any token, key or
+  PIN. `failurePolicy: Fail` makes Kyverno being *broken* fail closed;
+  nothing makes Kyverno being *absent* fail closed, because a webhook that
+  is not registered is not consulted. The cost of recovery is low (re-apply
+  the policies) but the cost of *noticing* is the real one: after deletion
+  the cluster accepts unsigned images silently, and admission leaves no
+  denial to alert on. Phase 8's audit chain is where this becomes
+  evidenced; today it is not.
+- **The boundary trusts what the registry tells it.** The committed policy
+  speaks HTTPS. The dev overlay renders its own copy with
+  `-allow-insecure-registry` because the k3d registry speaks plaintext
+  HTTP — see A9's note on the concession.
 
 ---
 
@@ -112,6 +150,7 @@ compromised service process cannot authenticate a token it cannot name.
 | **A6** | Thief of storage | Has the token directory, a backup, or the physical HSM media — but not the PIN |
 | **A7** | Malicious operator | Authorized ceremony participant, knows PINs, has physical access |
 | **A8** | Network position | Can intercept or block traffic between a relying party and this service |
+| **A9** | Cluster tenant (Phase 4 onward) | Can create pods in the cluster, with whatever namespaces RBAC grants them |
 
 ---
 
@@ -260,6 +299,55 @@ revoked certificate working.
 signed, and a modified one fails signature verification. The attacker's only
 move against revocation is denial, not falsification.
 
+### A9 — Cluster tenant
+
+**Gets, if RBAC lets them create a pod in `kube-system`, `kube-public`,
+`kube-node-lease` or `kyverno`: a complete bypass of image policy.** Both
+`require-signed-images` and `require-image-digest` carry a
+`namespaceSelector` that excludes exactly those four namespaces, so a pod
+created there runs an image nobody signed, named by a mutable tag, and
+admission raises no objection — not because verification failed, but
+because the policy never matched the request. Pod hardening is excluded in
+the same way. The bypass needs no signing key, no PIN, no token access and
+no defect in Kyverno: it is the policy's stated scope, used as written.
+
+The exclusions are not gratuitous — they are what lets the cluster boot.
+Kyverno cannot verify the signature on its own image before it is running,
+and the control-plane's static pods are not this repository's to sign — so
+the alternative to excluding them is a cluster that deadlocks at startup.
+That makes the exclusion a *deliberate, permanent* hole rather than a
+temporary one, which is precisely why it belongs in this document and not
+only in a comment: **whoever can create pods in those four namespaces is
+outside the image-signing control entirely, and the defence is Kubernetes
+RBAC, not anything this repository enforces.** This platform ships no RBAC
+restricting who may create pods there; the one RBAC file it does ship,
+`deploy/k8s/policy/kyverno-rbac.yaml`, *grants* Kyverno's reports controller
+a permission it needs, which is the opposite kind of object.
+
+**Also gets, in the dev overlay only: whatever the network can impersonate.**
+`deploy/k8s/overlays/dev/k3d-up.sh` renders the image policy with
+`-allow-insecure-registry`, because the local k3d registry speaks plaintext
+HTTP. Over plaintext there is no way to distinguish the registry from anyone
+able to answer on its address, so the signature Kyverno checks is whatever
+that party served — the verification still runs, but against an attacker's
+choice of input. The committed
+`deploy/k8s/policy/image-signature.yaml` deliberately does **not** carry
+this concession, and the generator requires the flag to be passed
+explicitly, so the dev cluster's weaker posture cannot be reached by
+applying anything in this repository. It is a development affordance, and a
+real registry must speak TLS.
+
+**Does not get:** any CA capability. Running an arbitrary image in an
+excluded namespace is A3 at best — it still faces B2–B5, so it does not
+reach the intermediate key without the anchor login, and does not reach the
+root key at all. The image-policy bypass is a supply-chain control failure,
+not a key-custody one, and the two-tier hierarchy is what keeps those
+separate.
+
+**Honest limit:** the platform detects none of this. An unsigned image
+running in `kube-system` produces no admission denial, no audit record and
+no alert — Phase 8's audit chain is where that gap is addressed.
+
 ---
 
 ## 6. Findings this model produced
@@ -350,7 +438,7 @@ not a threat model:
 
 | Phase | Changes for this model |
 |---|---|
-| **4** | Provisions the image/artifact signing keys — must first settle §6.1's token layout. Containerization adds the pod boundary and the volume holding the store. |
+| **4** | *Built.* Provisioned the image/artifact signing keys; containerization added the pod boundary and the volume holding the store. Added **B7** (the admission webhook) and **A9** (cluster tenant): the cluster now refuses unsigned and tag-named images everywhere its policy matches, and the four namespaces it does not match are A9's bypass. |
 | **5** | Authentication on the issuance API closes A1, the largest current gap. CI becomes A5, with real signing capability. |
 | **5b** | Certificate profiles bound what A2 can obtain; OCSP narrows A8's blocking window. |
 | **6** | Vault custody changes where the intermediate lives and what a compromised service can reach. The custody decision must be made against this model, not around it. |
