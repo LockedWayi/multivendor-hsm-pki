@@ -293,6 +293,31 @@ var registry = []descriptor{
 	// a vendor must provide before it can be added.
 }
 
+// Vendors returns the registry's backend names, in registry order.
+//
+// It exists for one purpose: letting a *second* backend list elsewhere in
+// the repository assert that it has not drifted from this one.
+// internal/pkcs11's conformance suite keeps its own list — deliberately,
+// because it needs a shape this harness does not provide (a wrong PIN, and
+// tolerance for the adapter being closed mid-suite, which is one of the
+// behaviours it pins). docs/test-matrix.md records that duplication as
+// accepted rather than hidden.
+//
+// Accepted duplication still has to be *checked*. The promise the test
+// matrix makes — "adding a vendor is one entry in hsmtest's registry" — is
+// today "one entry per registry, of which there are two", and the way that
+// bites is silently: a vendor added here and forgotten there runs in every
+// suite except the conformance one, which is precisely the suite whose job
+// is to find vendor divergence. Exporting the names turns that from a
+// promise into a failing test.
+func Vendors() []string {
+	names := make([]string, len(registry))
+	for i, d := range registry {
+		names[i] = d.name
+	}
+	return names
+}
+
 // ForEach runs fn against every backend the environment provides, each as
 // its own subtest.
 //
