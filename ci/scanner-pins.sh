@@ -16,6 +16,17 @@ TRIVY_IMAGE="aquasec/trivy@sha256:94711c60051c6cab848a292e3a67f62623fcee361b2bb6
 # semgrep/semgrep:1.175.1
 SEMGREP_IMAGE="semgrep/semgrep@sha256:51c9f53a4fce0d55e9abd08d7b96968654248a4b1122e77f20e0a49c0072446c"
 
+# ghcr.io/opentofu/opentofu:1.12.6 -- must stay >= the required_version in
+# deploy/terraform/environments/*/versions.tf, which depends on 1.10.0's
+# native S3 conditional-write locking.
+TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:22cb52f6c5bf5c72a48a8f56d993d8df3e9462b1cdfb5db7e77143c87e8d159f"
+
+# alpine:3 -- used only to delete root-owned files a root container created
+# inside the checkout. Any image with a shell would do; pinned by digest
+# anyway, because "it only runs rm" is how an unpinned image gets into a
+# repository that has a rule against them.
+TOFU_CLEANUP_IMAGE="alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+
 # golang.org/x/vuln/cmd/govulncheck. A module version rather than an image:
 # the Go module proxy's checksum database makes a released version
 # immutable in the same way a digest does.
