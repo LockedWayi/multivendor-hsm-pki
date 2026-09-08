@@ -7,6 +7,33 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **The release binary is signed, and every signature a run makes is
+  re-checked by a job holding no key material** (Phase 5.9). The binary is
+  *extracted from the image that was just signed* rather than rebuilt — a
+  second `go build` would produce a second binary and the signature would
+  cover bytes that are not the ones shipping — and signed with
+  `artifact-signing-key-v1`, never the image key.
+
+  The `verifyrun` job then re-derives every answer with no token, no PIN and
+  no module: the binary through `ci/verify-artifact` (Go standard library,
+  not cosign asking cosign), the image through the token-free cosign path,
+  and both keys read *out of* the run's inventory rather than named in the
+  script. It resolves the published digest from the registry itself rather
+  than being handed it, because a verifier told which digest to check is
+  verifying the signer's claim rather than what a consumer would pull.
+
+  What it proves is bounded and stated: not custody — the inventory it reads
+  was signed by the same run — but the thing a signer cannot prove about
+  itself, that its signatures are checkable by something that did not make
+  them. A wrong key published, a bundle naming a different digest, or a
+  format only cosign's own writer understands each passes in the signing job
+  and fails here.
+- **Three refusals are asserted on every run**, because a verifier shown only
+  valid input is indistinguishable from one that returns success
+  unconditionally: a one-byte-appended binary must fail, the image key must
+  fail to verify a release artifact (CLAUDE.md §3.6's purpose separation,
+  measured rather than labelled), and a PKCS#11 key must be refused in verify
+  mode.
 - **A published image anyone can verify, without trusting this repository**
   (Phase 5.9). `ci/verify-release.sh` walks a chain whose root is deliberately
   not in this tree: the anchor is fetched from `LockedWayi/hsm-pki-trust-anchor`
