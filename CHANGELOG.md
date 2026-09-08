@@ -28,6 +28,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and watching it go red.
 
 ### Added
+- **SLSA v1.0 provenance, signed by the same HSM-held key and checked for
+  what it says** (Phase 5.9). `cosign attest --type slsaprovenance1` over the
+  same PKCS#11 path as the image signature — no new keys, no new
+  infrastructure. `ci/generate-provenance.sh` **refuses to run outside a
+  pipeline** rather than defaulting the fields: provenance is a claim about a
+  build environment, and a predicate invented on a laptop signs exactly as
+  well as a true one while a reader cannot tell them apart.
+
+  The verify job asks two separate questions, because passing the first
+  without the second is how provenance becomes decoration: *does the
+  published key vouch for this statement* (cosign), and *does the statement
+  describe this image and this commit* (the in-toto statement is parsed
+  here, not taken on cosign's word). Measured: an attestation whose recorded
+  source commit does not match is refused **after** its signature verifies —
+  a correctly signed claim about a different artifact is worse than no claim,
+  since it reads as provenance for this one.
 - **The release binary is signed, and every signature a run makes is
   re-checked by a job holding no key material** (Phase 5.9). The binary is
   *extracted from the image that was just signed* rather than rebuilt — a
