@@ -412,8 +412,22 @@ jobs:
           HSM_PKI_KEYS_DIR="$PWD/.local/ci-keys" \
             deploy/docker/provision-signing-keys.sh
 
-      - name: Fetch and verify cosign
-        run: HSM_PKI_COSIGN_VERSION=v2 ci/cosign.sh fetch
+      # Both tracks, because this job signs two different kinds of thing and
+      # they do not agree on a version. v2 signs and attests the image: its
+      # layout is what Kyverno's verifier reads, and v3's OCI-referrers form
+      # reports as "no signatures found" there. v3 signs the release binary:
+      # its bundle is what internal/artifactsig reads, and --signing-config
+      # -- the flag that declares "no transparency log" -- exists only in v3.
+      #
+      # Fetching only v2 is what a previous run did, and the failure was
+      # honest but late: the binary signing step died with "no cosign at
+      # .local/bin/cosign-v3.1.3" after the image had already been pushed
+      # and signed. Each track is pinned and verified independently; neither
+      # is trusted because the other was.
+      - name: Fetch and verify cosign, both tracks
+        run: |
+          HSM_PKI_COSIGN_VERSION=v2 ci/cosign.sh fetch
+          HSM_PKI_COSIGN_VERSION=v3 ci/cosign.sh fetch
 
       # The credential is the runner's own GITHUB_TOKEN, minted for this run
       # and expiring with it. That is why no registry password is stored as
