@@ -121,7 +121,9 @@ docker cp .local/dev/pkcs11/libsofthsm2.so $N:/opt/hsm-pki/pkcs11/
 
 # The token directories are 0700 root-owned, so they are streamed through a
 # container that can read them rather than copied by the CLI, which cannot.
-docker run --rm -v "$PWD/.local/dev/tokens":/t alpine:3 tar -C /t -cf - . \
+docker run --rm -v "$PWD/.local/dev/tokens":/t \
+  alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b \
+  tar -C /t -cf - . \
     | docker exec -i $N tar -C /opt/hsm-pki/tokens -xf -
 docker exec $N sh -c 'chown -R 65532:65532 /opt/hsm-pki/tokens; chmod 0770 /opt/hsm-pki/tokens'
 

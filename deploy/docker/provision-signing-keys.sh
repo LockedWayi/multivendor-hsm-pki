@@ -43,6 +43,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
 STATE="${HSM_PKI_SIGNING_STATE:-$REPO_ROOT/.local/signing}"
 # Where the public half of everything provisioned here is written.
 #
@@ -96,7 +98,7 @@ if [[ "${1:-}" == "--reset" ]]; then
     # directory mode 0700 owned by whoever initialized it, which here is
     # root, so a host-side rm would need sudo from the reader.
     if [[ -d "$STATE" ]]; then
-        docker run --rm -v "$(dirname "$STATE")":/parent alpine:3 \
+        docker run --rm -v "$(dirname "$STATE")":/parent "$ALPINE_IMAGE" \
             rm -rf "/parent/$(basename "$STATE")"
     fi
     rm -f "$KEYS_DIR/$IMAGE_KEY_LABEL.pub" "$KEYS_DIR/$ARTIFACT_KEY_LABEL.pub" \

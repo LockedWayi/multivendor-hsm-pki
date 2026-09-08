@@ -21,11 +21,21 @@ SEMGREP_IMAGE="semgrep/semgrep@sha256:51c9f53a4fce0d55e9abd08d7b96968654248a4b11
 # native S3 conditional-write locking.
 TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:22cb52f6c5bf5c72a48a8f56d993d8df3e9462b1cdfb5db7e77143c87e8d159f"
 
-# alpine:3 -- used only to delete root-owned files a root container created
-# inside the checkout. Any image with a shell would do; pinned by digest
-# anyway, because "it only runs rm" is how an unpinned image gets into a
-# repository that has a rule against them.
-TOFU_CLEANUP_IMAGE="alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+# alpine:3 -- the general-purpose "do one root-owned file operation" image.
+# It chowns a signature bundle, deletes token state a root container created,
+# and tars up a token store. Any image with a shell would do; pinned by
+# digest anyway, because "it only runs rm" is how an unpinned image gets into
+# a repository that has a rule against them.
+#
+# It was named TOFU_CLEANUP_IMAGE for its first caller and five other call
+# sites then reached for a bare `alpine:3` instead of it -- so the rule was
+# written down in this file and not followed in the ones next to it. One
+# name, used everywhere, is what stops that recurring.
+ALPINE_IMAGE="alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+
+# Kept as an alias so the OpenTofu scanner's existing reference still reads
+# naturally at its call site.
+TOFU_CLEANUP_IMAGE="$ALPINE_IMAGE"
 
 # The key-inventory trust anchor, published apart from the inventory it
 # authenticates so that changing what a verifier trusts takes a compromise of
