@@ -40,7 +40,20 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KEY_LABEL="artifact-signing-key-v1"
 TOKEN_LABEL="${HSM_PKI_SUPPLY_TOKEN:-hsm-pki-local-supply-chain}"
-PUBLIC_KEY="docs/keys/$KEY_LABEL.pub"
+# The published public key, named relative to the repository because that is
+# how the signing container sees it. Overridable for the pipeline, which
+# signs with the ephemeral keys it provisioned for the run rather than the
+# committed durable ones -- checking a signature made by one key against the
+# public half of another reports a key mismatch as a broken signature.
+KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
+case "$KEYS_DIR" in
+    "$REPO_ROOT"/*) PUBLIC_KEY="${KEYS_DIR#"$REPO_ROOT"/}/$KEY_LABEL.pub" ;;
+    *)
+        echo "sign-artifact: HSM_PKI_KEYS_DIR must be inside $REPO_ROOT --" >&2
+        echo "the signing container mounts only the repository, so a path" >&2
+        echo "outside it resolves against the container's own filesystem." >&2
+        exit 1 ;;
+esac
 
 die() { echo "sign-artifact: $*" >&2; exit 1; }
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -93,6 +106,29 @@ signing whatever happens to be at that path in the container, or writing a
 bundle the host never receives. Copy the artifact into the repository (or
 into .local/) and sign it there."
 done
+
+# The no-transparency-log behaviour documented above is bought by
+# --signing-config, and that flag exists only in cosign v3. Under v2 it is
+# not an error -- cosign falls through to its default, which uploads to the
+# public Rekor instance, and the only thing between that and a published
+# record is an interactive consent prompt. Measured, by leaking
+# HSM_PKI_COSIGN_VERSION=v2 into this script from a caller: the run hung at
+# that prompt because a container has no stdin, and a hang is not a control.
+#
+# So the version this depends on is asserted rather than assumed. 4.9 decided
+# deliberately that this platform writes no transparency-log entry; a
+# decision that a stray environment variable can reverse was never enforced.
+COSIGN_TRACK="${HSM_PKI_COSIGN_VERSION:-v3}"
+[ "$COSIGN_TRACK" = "v3" ] || die \
+    "refusing to sign under cosign $COSIGN_TRACK.
+
+Release artifacts are signed with v3 because --signing-config, which is how
+this script declares 'no transparency log', exists only there. Under $COSIGN_TRACK
+that flag is ignored and cosign uploads to the public Rekor instance
+instead -- reversing a deliberate architectural decision (phase 4.9) through
+an environment variable.
+
+Unset HSM_PKI_COSIGN_VERSION, or set it to v3."
 
 log "signing $(rel "$ARTIFACT") with $KEY_LABEL on token $TOKEN_LABEL"
 "$REPO_ROOT/ci/cosign.sh" sign-blob \
