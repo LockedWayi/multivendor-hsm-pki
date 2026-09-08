@@ -92,10 +92,10 @@ LOCAL_TAG="hsm-pki-server:publish"
 # HTTP is how this script is exercised without pushing to a public one.
 ALLOW_HTTP="${HSM_PKI_REGISTRY_ALLOW_HTTP:-false}"
 
-log "1/8  building the image this run will publish"
+log "1/9  building the image this run will publish"
 docker build -f "$REPO_ROOT/deploy/docker/Dockerfile" -t "$LOCAL_TAG" "$REPO_ROOT"
 
-log "2/8  scanning the exact bytes about to be pushed"
+log "2/9  scanning the exact bytes about to be pushed"
 # Fail closed: a HIGH or CRITICAL finding here stops the publish. The SBOM
 # it writes on the way through is the one attached below, so the document
 # describes the artifact rather than a rebuild of it.
@@ -104,7 +104,7 @@ log "2/8  scanning the exact bytes about to be pushed"
 SBOM="${HSM_PKI_SCAN_OUT:-$REPO_ROOT/.local/scan}/sbom.cdx.json"
 [ -f "$SBOM" ] || die "ci/scan-image.sh produced no SBOM at $SBOM"
 
-log "3/8  pushing $IMAGE_REPO:$SHA_TAG"
+log "3/9  pushing $IMAGE_REPO:$SHA_TAG"
 docker tag "$LOCAL_TAG" "$IMAGE_REPO:$SHA_TAG"
 docker push "$IMAGE_REPO:$SHA_TAG"
 
@@ -121,20 +121,20 @@ DIGEST_REF="$IMAGE_REPO@$DIGEST"
 echo "    $DIGEST_REF"
 
 if [ -n "$SEMVER_TAG" ]; then
-    log "4/8  pushing the release tag $SEMVER_TAG at the same digest"
+    log "4/9  pushing the release tag $SEMVER_TAG at the same digest"
     docker tag "$LOCAL_TAG" "$IMAGE_REPO:$SEMVER_TAG"
     docker push "$IMAGE_REPO:$SEMVER_TAG"
 else
-    log "4/8  no release tag on this commit -- skipping the semver tag"
+    log "4/9  no release tag on this commit -- skipping the semver tag"
 fi
 
-log "5/8  signing $DIGEST_REF"
+log "5/9  signing $DIGEST_REF"
 # By digest, never by tag. ci/sign-image.sh takes it from here: it signs
 # with image-signing-key-v1 over PKCS#11 and refuses to leave a signature
 # the published public key cannot verify.
 HSM_PKI_REGISTRY_ALLOW_HTTP="$ALLOW_HTTP" "$REPO_ROOT/ci/sign-image.sh" "$DIGEST_REF"
 
-log "6/8  attaching the SBOM as a signed attestation"
+log "6/9  attaching the SBOM as a signed attestation"
 # `cosign attest`, not the older `cosign attach sbom`. attach writes the
 # document beside the image unsigned, which makes it a text file anybody
 # can replace; attest signs a statement about *this digest* with the same
@@ -157,7 +157,27 @@ HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" attest \
     --allow-http-registry="$ALLOW_HTTP" \
     "$DIGEST_REF"
 
-log "7/8  extracting the release binary from the image that was just signed"
+log "7/9  attaching SLSA provenance, signed by the same key"
+# The same image-signing key over the same PKCS#11 path -- no new keys, no
+# new infrastructure. cosign binds the predicate to the image digest as the
+# statement's subject, which is what makes the pair mean anything: a
+# provenance document not bound to an artifact is a text file.
+#
+# ci/generate-provenance.sh refuses to run outside a pipeline rather than
+# filling the fields with plausible values. A predicate invented on a laptop
+# signs exactly as well as a true one and a reader cannot tell them apart.
+PROVENANCE="${HSM_PKI_SCAN_OUT:-$REPO_ROOT/.local/scan}/provenance.json"
+"$REPO_ROOT/ci/generate-provenance.sh" "$PROVENANCE"
+HSM_PKI_COSIGN_VERSION=v2 \
+HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" attest \
+    --key "pkcs11:token=${HSM_PKI_SUPPLY_TOKEN:-hsm-pki-local-supply-chain};object=image-signing-key-v1" \
+    --type slsaprovenance1 \
+    --predicate "/repo/$(realpath --relative-to="$REPO_ROOT" -- "$PROVENANCE")" \
+    --tlog-upload=false -y \
+    --allow-http-registry="$ALLOW_HTTP" \
+    "$DIGEST_REF"
+
+log "8/9  extracting the release binary from the image that was just signed"
 # Extracted from the image rather than built again. A second `go build` would
 # produce a second binary -- possibly identical, but nothing guarantees it --
 # and signing that would attest to bytes that are not the ones shipping. The
@@ -171,7 +191,7 @@ docker rm -f "$cid" >/dev/null
 chmod 0755 "$BINARY"
 echo "    $(sha256sum "$BINARY" | cut -d' ' -f1)  $(basename "$BINARY")"
 
-log "8/8  signing the release binary"
+log "9/9  signing the release binary"
 # artifact-signing-key-v1, not the image key. Purpose separation is the
 # point: a compromise of the key that signs releases must not be able to
 # sign an image, and vice versa (CLAUDE.md 3.6). ci/sign-artifact.sh refuses
