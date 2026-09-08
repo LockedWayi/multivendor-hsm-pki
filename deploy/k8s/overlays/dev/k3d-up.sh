@@ -25,6 +25,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
 CLUSTER="${HSM_PKI_K3D_CLUSTER:-hsm-pki}"
 NODE="k3d-${CLUSTER}-server-0"
 NS=hsm-pki-dev
@@ -96,7 +98,7 @@ docker exec "$NODE" mkdir -p /opt/hsm-pki/pkcs11 /opt/hsm-pki/tokens /opt/hsm-pk
 docker cp "$LOCAL/pkcs11/libsofthsm2.so" "$NODE:/opt/hsm-pki/pkcs11/"
 if [ -z "$(ls -A "$NODE_STATE/tokens" 2>/dev/null)" ]; then
     echo "    seeding the token store (intermediate only -- the root's token is not copied)"
-    docker run --rm -v "$LOCAL/tokens":/t alpine:3 tar -C /t -cf - . \
+    docker run --rm -v "$LOCAL/tokens":/t "$ALPINE_IMAGE" tar -C /t -cf - . \
         | docker exec -i "$NODE" tar -C /opt/hsm-pki/tokens -xf -
 else
     echo "    token store already populated, left alone"

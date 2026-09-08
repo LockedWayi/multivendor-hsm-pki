@@ -30,6 +30,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
 STATE="${HSM_PKI_LOCAL_STATE:-$REPO_ROOT/.local/dev}"
 SERVICE_IMAGE="hsm-pki-server:local"
 DEV_IMAGE="hsm-pki-dev:local"
@@ -54,7 +56,7 @@ if [[ "${1:-}" == "--reset" ]]; then
     # so the removal runs as root in a container too rather than asking the
     # reader for sudo on their own machine.
     if [[ -d "$STATE" ]]; then
-        docker run --rm -v "$(dirname "$STATE")":/parent alpine:3 \
+        docker run --rm -v "$(dirname "$STATE")":/parent "$ALPINE_IMAGE" \
             rm -rf "/parent/$(basename "$STATE")"
     fi
     shift

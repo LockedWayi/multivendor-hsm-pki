@@ -39,9 +39,16 @@
 #     ~78% (ci/coverage.sh's header, measured).
 #
 #   * Every third-party ref is pinned to an immutable identifier — actions
-#     by commit SHA, the gitleaks image by digest — the same discipline the
-# repository applies to its base images and to cosign (the identity rule:
-#     a tag is a pointer somebody can move).
+#     by commit SHA, images by digest — the same discipline the repository
+#     applies to its base images and to cosign (the identity rule: a tag is
+#     a pointer somebody can move).
+#
+#     That sentence was here for four days before anything checked it, and
+#     it was false in six places: ci/softhsm2-dev.Dockerfile ran on a tag,
+#     and four scripts reached for a bare `alpine:3` while ci/scanner-pins.sh
+#     sat next to them pinning alpine by digest. `ci/check-image-pins.sh`
+#     runs in the suite gate now, so the claim fails the build when it stops
+#     being true.
 #
 # "Blocks merge" needs one repository setting this file cannot make: the six
 # gate jobs marked required under branch protection. That setting was
@@ -136,6 +143,12 @@ jobs:
       # changes it is a guard nobody is checking.
       - name: Publish-guard selftest
         run: ci/assert-publishable-selftest.sh
+
+      # The pinning claim in this file's header, checked rather than
+      # asserted. It was false in six places until 2026-09-08 -- including
+      # the image that generates the supply-chain signing keys.
+      - name: Every third-party image is pinned by digest
+        run: ci/check-image-pins.sh
 
       # -p 1 matches the documented invocation everywhere this suite runs.
       # SoftHSM2 gets a fresh temp token store per test, so parallel package
