@@ -8,6 +8,8 @@
 #   terraform fmt, validate, trivy config + secrets      (Phase 5.4)
 #   trustchain the key inventory against an out-of-band anchor (Phase 5.9)
 #   publish   build, scan, push and sign the image        (Phase 5.6)
+#   verifyrun re-check every signature this run made, holding no key
+#             material at all                              (Phase 5.9)
 #
 # Phase 5.1 and 5.2's gitleaks gate were pulled forward on 2026-09-04; the
 # scanning jobs arrived with 5.3 and 5.2's Semgrep gate on 2026-09-05.
@@ -449,3 +451,94 @@ jobs:
           name: ephemeral-signing-keys-${{ github.sha }}
           path: .local/ci-keys/
           if-no-files-found: error
+
+      # The signed binary and its bundle, so the verify job below can check
+      # them without rebuilding -- rebuilding would produce a second binary
+      # and check the signature against the wrong bytes.
+      - name: Keep the signed release binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-binary-${{ github.sha }}
+          path: |
+            .local/release/hsm-pki-server
+            .local/release/hsm-pki-server.bundle
+          if-no-files-found: error
+
+  # The independent half (Phase 5.9). It holds no token, no PIN and no module,
+  # and it re-derives every answer the signing job asserted.
+  #
+  # What it can prove and what it cannot is worth being exact about. It does
+  # NOT establish custody: the inventory it reads was signed by the same run
+  # that made the signatures, so that link is self-consistent by construction.
+  # An ephemeral trust root cannot vouch for itself to anybody else, and
+  # nothing here claims otherwise -- `trustchain` and ci/verify-release.sh are
+  # the anchored checks.
+  #
+  # What it proves is the thing a signer cannot prove about itself: that the
+  # signatures are checkable by something that did not make them. A wrong key
+  # published, a bundle naming a different digest, a format only cosign's own
+  # writer understands -- each of those passes in the signing job and fails
+  # here. That is why it is a separate job and not a second command.
+  verifyrun:
+    name: verify this run's signatures (no key material)
+    needs: [publish]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch this run's public keys
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ephemeral-signing-keys-${{ github.sha }}
+          path: .local/ci-keys
+
+      - name: Fetch the signed release binary
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-binary-${{ github.sha }}
+          path: .local/release
+
+      # Resolved from the registry rather than handed over by the signing
+      # job. A verifier told which digest to check is verifying the signer's
+      # claim about what it published; a verifier that looks it up is
+      # checking what a consumer would actually pull.
+      #
+      # By PULLING and reading RepoDigests, which is the consumer's own
+      # method -- not `docker manifest inspect`. Those two disagree, measured:
+      # against the same tag, manifest inspect reported
+      # sha256:2eb7d020... while the pushed and signed digest was
+      # sha256:df8cbf9d..., because the registry serves a re-encoded OCI
+      # manifest whose bytes hash differently. Both answers look like a
+      # digest and only one is the one that was signed, so the wrong choice
+      # here fails verification for a reason that has nothing to do with the
+      # signature. Pulling also proves the image is fetchable at all.
+      - name: Resolve the published digest independently
+        id: digest
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker pull -q "$repo:sha-$GITHUB_SHA" >/dev/null
+          digest="$(docker inspect "$repo:sha-$GITHUB_SHA" \
+            --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+            | grep "^$repo@" | head -1 | cut -d@ -f2)"
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "could not resolve a digest for $repo:sha-$GITHUB_SHA" >&2; exit 1 ;;
+          esac
+          echo "ref=$repo@$digest" >> "$GITHUB_OUTPUT"
+          echo "$repo@$digest"
+
+      - name: Verify both signatures, and prove the refusals
+        run: |
+          chmod +x .local/release/hsm-pki-server
+          ci/verify-run-artifacts.sh \
+            .local/ci-keys \
+            .local/release/hsm-pki-server \
+            .local/release/hsm-pki-server.bundle \
+            '${{ steps.digest.outputs.ref }}'
