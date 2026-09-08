@@ -38,6 +38,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
 KEY_LABEL="artifact-signing-key-v1"
 TOKEN_LABEL="${HSM_PKI_SUPPLY_TOKEN:-hsm-pki-local-supply-chain}"
 # The published public key, named relative to the repository because that is
@@ -143,7 +145,7 @@ log "signing $(rel "$ARTIFACT") with $KEY_LABEL on token $TOKEN_LABEL"
 # operator who asked for it and to the verifier below, which is a failure
 # that looks exactly like a bad signature. Handed back here rather than left
 # for the reader to discover.
-docker run --rm -v "$(cd "$(dirname "$BUNDLE")" && pwd)":/out alpine:3 \
+docker run --rm -v "$(cd "$(dirname "$BUNDLE")" && pwd)":/out "$ALPINE_IMAGE" \
     chown "$(id -u):$(id -g)" "/out/$(basename "$BUNDLE")"
 chmod 0644 "$BUNDLE"
 
