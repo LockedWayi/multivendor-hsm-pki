@@ -28,6 +28,22 @@ cd "$REPO_ROOT"
 failures=0
 fail() { printf '  UNPINNED  %s\n' "$*" >&2; failures=$((failures + 1)); }
 
+# Only files this repository actually tracks.
+#
+# The first version of this script walked the working tree and immediately
+# found `.local/ci-cache/gomod/golang.org/x/sys@v0.47.0/unix/linux/Dockerfile`
+# in CI -- a dependency's own Dockerfile, inside the restored Go module
+# cache. It was a true finding about a file that is none of this
+# repository's business, which is the same lesson ci/scan-deps.sh already
+# carries as `--skip-dirs .local` ("scanning it means scanning the
+# scanner").
+#
+# Excluding .local by name would fix that instance. `git ls-files` fixes the
+# class: it is the precise definition of "a file we are responsible for",
+# and it stays correct when the next piece of untracked working state
+# appears under a different name.
+tracked() { git ls-files -z -- "$@"; }
+
 echo "==> Dockerfile FROM lines"
 # Complete and unambiguous: every build stage must name a digest. `FROM x AS
 # y` and plain `FROM x` are both covered because the test is on the whole
@@ -47,7 +63,7 @@ while IFS= read -r hit; do
                 fail "$file: $line"
             fi ;;
     esac
-done < <(grep -rn "^FROM " --include="*Dockerfile*" . 2>/dev/null | sed 's/^\.\///' | cut -d: -f1,3-)
+done < <(tracked '*Dockerfile*' | xargs -0 -r grep -n "^FROM " /dev/null 2>/dev/null | cut -d: -f1,3-)
 
 echo
 echo "==> upstream images referenced from scripts and workflows"
@@ -63,9 +79,9 @@ while IFS= read -r hit; do
         *"#"*) continue ;;
     esac
     fail "$hit"
-done < <(grep -rnE "(^|[^A-Za-z0-9_./-])($UPSTREAM):[A-Za-z0-9._-]+" \
-            --include="*.sh" --include="*.yml" --include="*.yaml" \
-            ci/ deploy/ .github/ 2>/dev/null \
+done < <(tracked 'ci/*.sh' 'ci/*.yml' 'deploy/*.sh' 'deploy/*.yml' 'deploy/*.yaml' \
+                 '.github/*.yml' '.github/*.yaml' \
+         | xargs -0 -r grep -nE "(^|[^A-Za-z0-9_./-])($UPSTREAM):[A-Za-z0-9._-]+" /dev/null 2>/dev/null \
          | grep -vE "^[^:]*:[0-9]+: *#" || true)
 
 echo
