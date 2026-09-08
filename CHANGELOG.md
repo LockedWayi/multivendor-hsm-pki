@@ -6,6 +6,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **The pinning claim in `ci.yml` was false in six places, and nothing
+  checked it.** The header has asserted since Phase 5.1 that every
+  third-party reference is pinned to an immutable identifier. It was not:
+  `ci/softhsm2-dev.Dockerfile` ran on a *tag*, and four scripts reached for a
+  bare `alpine:3` while `ci/scanner-pins.sh` sat beside them pinning alpine by
+  digest with a comment saying, in as many words, that "it only runs rm" is
+  how an unpinned image gets into a repository with a rule against them.
+
+  The dev image is the one that mattered: it runs the whole test suite and
+  the coverage floor, `run-local.sh` runs the CA in it, and
+  `provision-signing-keys.sh` **generates the supply-chain signing keys**
+  inside it. A moved tag there is a different toolchain generating a private
+  key. It is now pinned to the same digest as the service image's build
+  stage, so the suite cannot pass against a toolchain the shipped binary is
+  not compiled with.
+
+  `ci/check-image-pins.sh` runs in the suite gate, so the claim fails the
+  build when it stops being true — proven by un-pinning each class in turn
+  and watching it go red.
+
 ### Added
 - **The release binary is signed, and every signature a run makes is
   re-checked by a job holding no key material** (Phase 5.9). The binary is
