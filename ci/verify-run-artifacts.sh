@@ -66,6 +66,10 @@ KEYS_DIR="${1:?usage: ci/verify-run-artifacts.sh <keys-dir> <binary> <bundle> <i
 BINARY="${2:?missing binary}"
 BUNDLE="${3:?missing bundle}"
 IMAGE_REF="${4:?missing image digest reference}"
+# The commit this run built. Supplied rather than read from the checkout so
+# the assertion below is against what the *pipeline* says it built, not
+# against whatever HEAD happens to be in the verifying workspace.
+EXPECT_COMMIT="${5:-${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}}"
 
 # Holding no key material is the whole point of this job, so it is asserted
 # rather than assumed -- and the assertion has to be about what the verifying
@@ -126,7 +130,7 @@ done
 INVENTORY="$KEYS_DIR/key-inventory.json"
 [ -f "$INVENTORY" ] || die "no inventory at $INVENTORY"
 
-log "1/5  the run's inventory is internally consistent (NOT a custody claim)"
+log "1/6  the run's inventory is internally consistent (NOT a custody claim)"
 openssl dgst -sha256 -verify "$KEYS_DIR/inventory-signing-key-v1.pub" \
     -signature "$KEYS_DIR/key-inventory.json.sig" "$INVENTORY" \
     || die "the run's own inventory does not verify against the run's own
@@ -156,14 +160,14 @@ IMAGE_KEY="$(key_for image)"
 [ -n "$ARTIFACT_KEY" ] || die "the inventory lists no usable artifact-signing key"
 [ -n "$IMAGE_KEY" ] || die "the inventory lists no usable image-signing key"
 
-log "2/5  the release binary, checked by the Go standard library"
+log "2/6  the release binary, checked by the Go standard library"
 # ci/verify-artifact re-derives the answer from crypto/ecdsa rather than
 # asking cosign whether cosign was right.
 go_verify "$(rel "$ARTIFACT_KEY")" "$(rel "$BUNDLE")" "$(rel "$BINARY")" \
     || die "the release binary does not verify against the artifact key the
 run published. The signature is not checkable outside the signer."
 
-log "3/5  the image, checked with no token mounted"
+log "3/6  the image, checked with no token mounted"
 export HSM_PKI_COSIGN_VERSION=v2
 "$REPO_ROOT/ci/cosign.sh" fetch >/dev/null
 rel_image_key="${IMAGE_KEY#"$REPO_ROOT"/}"
@@ -180,7 +184,66 @@ echo "    verified"
 # asserted on every run, so the day one of them stops refusing, this job goes
 # red rather than quietly approving.
 
-log "4/5  a tampered binary must be refused"
+log "4/6  the provenance attestation, and what it actually says"
+# Two separate questions, and passing the first without the second is how a
+# provenance attestation becomes decoration.
+#
+#   signature   does the published key vouch for this statement?
+#   content     does the statement describe THIS image and THIS commit?
+#
+# cosign answers the first. The second is answered here by parsing the
+# in-toto statement rather than trusting cosign's "verified" line, because
+# an attestation correctly signed over the wrong subject verifies happily --
+# and a signed claim about a different artifact is worse than no claim, since
+# it reads as provenance for this one.
+ATTESTATION="$REPO_ROOT/.local/verify-negative/provenance.dsse.json"
+mkdir -p "$(dirname "$ATTESTATION")"
+HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" verify-attestation \
+    --key "/repo/$rel_image_key" --type slsaprovenance1 \
+    --insecure-ignore-tlog=true "$IMAGE_REF" > "$ATTESTATION" 2>/dev/null \
+    || die "the SLSA provenance attestation does not verify against the image
+key this run published."
+
+python3 - "$ATTESTATION" "${IMAGE_REF#*@}" "$EXPECT_COMMIT" <<'PY' || exit 1
+import base64, json, sys
+
+envelope_path, want_digest, want_commit = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# cosign emits one DSSE envelope per line.
+line = next(l for l in open(envelope_path) if l.strip())
+statement = json.loads(base64.b64decode(json.loads(line)["payload"]))
+
+problems = []
+if statement.get("predicateType") != "https://slsa.dev/provenance/v1":
+    problems.append(f"predicateType is {statement.get('predicateType')!r}")
+
+subjects = statement.get("subject") or []
+got = {"sha256:" + s.get("digest", {}).get("sha256", "") for s in subjects}
+if want_digest not in got:
+    problems.append(f"subject digest {got} does not include the image {want_digest}")
+
+deps = statement["predicate"]["buildDefinition"].get("resolvedDependencies") or []
+commits = {d.get("digest", {}).get("gitCommit") for d in deps}
+if want_commit not in commits:
+    problems.append(f"resolvedDependencies commit {commits} is not {want_commit}")
+
+builder = statement["predicate"]["runDetails"]["builder"].get("id", "")
+if not builder.startswith("https://"):
+    problems.append(f"builder id {builder!r} is not a URI")
+
+if problems:
+    print("verify-run-artifacts: the attestation is signed but says the wrong thing:",
+          file=sys.stderr)
+    for p in problems:
+        print("  -", p, file=sys.stderr)
+    sys.exit(1)
+
+print(f"    subject   {want_digest}")
+print(f"    source    {want_commit}")
+print(f"    builder   {builder}")
+PY
+
+log "5/6  a tampered binary must be refused"
 TAMPER_DIR="$REPO_ROOT/.local/verify-negative"
 mkdir -p "$TAMPER_DIR"
 TAMPERED="$TAMPER_DIR/hsm-pki-server"
@@ -193,7 +256,7 @@ if go_verify "$(rel "$ARTIFACT_KEY")" "$(rel "$BUNDLE")" "$(rel "$TAMPERED")" >/
 fi
 echo "    refused"
 
-log "5/5  the wrong purpose's key must be refused"
+log "6/6  the wrong purpose's key must be refused"
 # CLAUDE.md 3.6 says the keys are purpose-separated and never interchangeable.
 # That is a claim about behaviour, so it is measured: the image key must not
 # validate a release artifact.
@@ -206,7 +269,8 @@ echo "    refused"
 cat <<EOF
 
 All signatures made by this run are checkable by something that did not make
-them, and all three negative cases are refused.
+them, the provenance says what it should, and all three negative cases are
+refused.
 
   binary  $(sha256sum "$BINARY" | cut -d' ' -f1)
   image   $IMAGE_REF
