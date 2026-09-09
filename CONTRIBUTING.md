@@ -20,7 +20,54 @@ implementation, but it is built to real contribution standards.
    docker build -f deploy/docker/Dockerfile -t hsm-pki-server:local .
    ci/scan-image.sh hsm-pki-server:local              # trivy image + SBOM
    ci/terraform-scan.sh                               # tofu fmt/validate + trivy
+   ci/check-image-pins.sh                             # every image pinned by digest
+   ci/assert-publishable-selftest.sh                  # the publish guard, both ways
+   ci/verify-release.sh --inventory-only              # anchor + key inventory
    ```
+
+   These are every gate the pipeline runs, in the order it runs them. That is
+   the point of the list: CI is not a second environment to keep in sync, so
+   a check that cannot be run from here does not belong in the workflow.
+
+## The signing and publishing scripts
+
+Not gates — they need a token, a registry, or both — but they are the same
+commands the pipeline uses, and they are here so the pipeline is not the only
+place they exist.
+
+```sh
+# One-time: provision local signing keys and publish the key inventory.
+# Writes only public material to docs/keys/; no private key is ever written.
+deploy/docker/provision-signing-keys.sh
+
+# Fetch and verify cosign. Two tracks, and they are not interchangeable:
+# v2 signs and attests images (the layout admission reads), v3 signs release
+# artifacts (its bundle is what internal/artifactsig reads, and the flag that
+# suppresses the transparency log exists only there).
+HSM_PKI_COSIGN_VERSION=v2 ci/cosign.sh fetch
+HSM_PKI_COSIGN_VERSION=v3 ci/cosign.sh fetch
+
+# Sign a blob or an image over the HSM. Both refuse to leave a signature the
+# published public key cannot verify.
+COSIGN_PKCS11_PIN=... ci/sign-artifact.sh <file>
+COSIGN_PKCS11_PIN=... ci/sign-image.sh <image>@sha256:<digest>
+
+# Build, scan, push and sign, exactly as the publish job does. Needs a
+# registry login and the GITHUB_* variables the provenance predicate records.
+COSIGN_PKCS11_PIN=... ci/publish-image.sh <registry>/<repo>
+
+# Re-check everything a run signed, from somewhere holding no key material.
+ci/verify-run-artifacts.sh <keys-dir> <binary> <bundle> <image>@sha256:<digest>
+
+# Give a published digest a signature a stranger can act on. Maintainer-only:
+# it uses the durable key, not the pipeline's ephemeral one.
+COSIGN_PKCS11_PIN=... ci/countersign-release.sh <image>@sha256:<digest>
+```
+
+`ci/generate-provenance.sh` is deliberately not runnable by hand: it refuses
+without the `GITHUB_*` environment, because a provenance predicate filled in
+on a laptop signs exactly as well as a true one and a reader cannot tell them
+apart.
 
 5. Open a PR. In the description, include a short **reasoning note** for any
    architectural decision: what you decided, the alternatives, and why.
