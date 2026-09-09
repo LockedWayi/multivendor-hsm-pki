@@ -419,12 +419,6 @@ jobs:
       # committed, durable keys consumers verify against, and overwriting
       # them with a set that dies with the build is the one thing this
       # separation exists to prevent.
-      - name: Provision this run's signing keys
-        run: |
-          HSM_PKI_SIGNING_STATE="$PWD/.local/ci-signing" \
-          HSM_PKI_KEYS_DIR="$PWD/.local/ci-keys" \
-            deploy/docker/provision-signing-keys.sh
-
       # Both tracks, because this job signs two different kinds of thing and
       # they do not agree on a version. v2 signs and attests the image: its
       # layout is what Kyverno's verifier reads, and v3's OCI-referrers form
@@ -452,17 +446,36 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Build, scan, push and sign
-        env:
-          # The PIN reaches cosign as an environment variable and never
-          # inside a PKCS#11 URI (CLAUDE.md 3.1). It is the throwaway PIN of
-          # a token created minutes ago and destroyed with the runner, which
-          # is why it is not a secret -- but the mechanism is the one a real
-          # deployment uses, so it is wired the same way.
-          COSIGN_PKCS11_PIN: "1234"
+      # Provisioning and signing are ONE step, and that is the whole reason
+      # this reads the way it does.
+      #
+      # The token's PIN is generated here and must not outlive this shell.
+      # Splitting the steps would mean handing it between them through
+      # $GITHUB_ENV, which is a file on the runner -- and a PIN written to a
+      # file is exactly what CLAUDE.md 3.1 forbids, whoever wrote the file.
+      # So the PIN is created, used and discarded inside one `run:`: never a
+      # literal in this repository, never on a command line, never on disk.
+      #
+      # It was the literal "1234" until 2026-09-09, copied from the local
+      # provisioning script. That was defensible -- the token is created and
+      # destroyed inside this job, so the PIN protects nothing -- but it
+      # produced a question with two bad answers (a repository secret holding
+      # a value the repository already publishes is theatre; an inline
+      # literal invites reuse somewhere it does matter). Generating it
+      # dissolves the question instead of answering it.
+      - name: Provision this run's keys, then build, scan, push and sign
         run: |
-          HSM_PKI_SIGNING_STATE="$PWD/.local/ci-signing" \
-          HSM_PKI_KEYS_DIR="$PWD/.local/ci-keys" \
+          export HSM_PKI_SUPPLY_PIN_VALUE="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          export HSM_PKI_INVENTORY_PIN_VALUE="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+          export HSM_PKI_SIGNING_STATE="$PWD/.local/ci-signing"
+          export HSM_PKI_KEYS_DIR="$PWD/.local/ci-keys"
+
+          deploy/docker/provision-signing-keys.sh
+
+          # cosign takes the PIN from the environment, never from a PKCS#11
+          # URI -- a URI is a command-line argument, so it reaches ps output
+          # and any log that echoes the command.
+          export COSIGN_PKCS11_PIN="$HSM_PKI_SUPPLY_PIN_VALUE"
           HSM_PKI_DOCKER_CONFIG="$HOME/.docker" \
             ci/publish-image.sh "ghcr.io/${GITHUB_REPOSITORY,,}"
 

@@ -104,29 +104,43 @@ log "2/9  scanning the exact bytes about to be pushed"
 SBOM="${HSM_PKI_SCAN_OUT:-$REPO_ROOT/.local/scan}/sbom.cdx.json"
 [ -f "$SBOM" ] || die "ci/scan-image.sh produced no SBOM at $SBOM"
 
-log "3/9  pushing $IMAGE_REPO:$SHA_TAG"
-docker tag "$LOCAL_TAG" "$IMAGE_REPO:$SHA_TAG"
-docker push "$IMAGE_REPO:$SHA_TAG"
+# A signature is made over a digest, and a digest only exists once the
+# registry holds the bytes -- so push-then-sign is the only available order,
+# and a failure in between leaves something published. That happened twice
+# in two days: once when only one cosign track was fetched, once on a
+# transient error, each time leaving a `sha-<commit>` tag on an image no
+# signature covered.
+#
+# The order cannot change, but what is *named* can. The bytes go up under a
+# staging tag that says what it is, the digest is signed, and only then do
+# the tags a consumer would ever type get applied. The invariant that buys:
+#
+#     sha-<commit> and v<x.y.z> only ever point at a signed digest.
+#
+# A failed run leaves a staging tag on an unsigned blob, which is untidy and
+# harmless -- admission refuses it, ci/verify-release.sh refuses it, and
+# nobody is going to pull `staging-<run>` by accident. That is a smaller
+# thing to be wrong than a release tag nothing vouches for.
+STAGING_TAG="staging-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
+
+log "3/9  pushing the bytes under $STAGING_TAG (not a release tag yet)"
+docker tag "$LOCAL_TAG" "$IMAGE_REPO:$STAGING_TAG"
+docker push "$IMAGE_REPO:$STAGING_TAG"
 
 # Asked of the registry rather than assumed from the build: what a consumer
 # pulls is what the registry holds.
-DIGEST="$(docker inspect "$IMAGE_REPO:$SHA_TAG" \
+DIGEST="$(docker inspect "$IMAGE_REPO:$STAGING_TAG" \
     --format '{{range .RepoDigests}}{{println .}}{{end}}' \
     | grep "^$IMAGE_REPO@" | head -1 | cut -d@ -f2 || true)"
 [ -n "$DIGEST" ] || die \
-    "could not resolve $IMAGE_REPO:$SHA_TAG to a registry digest after
+    "could not resolve $IMAGE_REPO:$STAGING_TAG to a registry digest after
 pushing it. Signing the local image instead would attest to bytes nobody
 can fetch."
 DIGEST_REF="$IMAGE_REPO@$DIGEST"
 echo "    $DIGEST_REF"
 
-if [ -n "$SEMVER_TAG" ]; then
-    log "4/9  pushing the release tag $SEMVER_TAG at the same digest"
-    docker tag "$LOCAL_TAG" "$IMAGE_REPO:$SEMVER_TAG"
-    docker push "$IMAGE_REPO:$SEMVER_TAG"
-else
-    log "4/9  no release tag on this commit -- skipping the semver tag"
-fi
+log "4/9  release tags are deferred until the signature exists"
+echo "    will apply: $SHA_TAG${SEMVER_TAG:+, $SEMVER_TAG}"
 
 log "5/9  signing $DIGEST_REF"
 # By digest, never by tag. ci/sign-image.sh takes it from here: it signs
@@ -176,6 +190,16 @@ HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" attest \
     --tlog-upload=false -y \
     --allow-http-registry="$ALLOW_HTTP" \
     "$DIGEST_REF"
+
+# Everything above this line has to have succeeded to get here: the image is
+# signed, the SBOM and provenance are attested. Only now does the digest
+# acquire a name a consumer would type.
+log "applying the release tags now that the digest is signed"
+for t in "$SHA_TAG" ${SEMVER_TAG:+"$SEMVER_TAG"}; do
+    docker tag "$LOCAL_TAG" "$IMAGE_REPO:$t"
+    docker push "$IMAGE_REPO:$t"
+    echo "    $IMAGE_REPO:$t -> $DIGEST"
+done
 
 log "8/9  extracting the release binary from the image that was just signed"
 # Extracted from the image rather than built again. A second `go build` would

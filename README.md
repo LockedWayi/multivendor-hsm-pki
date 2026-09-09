@@ -121,21 +121,27 @@ different artifact, and a finding from one is invisible to the others:
 | `trivy fs` + `govulncheck` | what you imported | is a vulnerable version present — and do we reach it? | yes |
 | `trivy image` | what was assembled | is the shipped image vulnerable? | yes |
 | `trivy config` + OpenTofu | what would be provisioned | is the infrastructure misconfigured? | yes |
-| trust chain | the key inventory, against an anchor in another repository | can this tree still say which key is which? | **not yet** |
-| run verification | every signature this run made, holding no key material | are they checkable by something that did not make them? | **not yet** |
+| trust chain | the key inventory, against an anchor in another repository | can this tree still say which key is which? | yes |
+| run verification | every signature this run made, holding no key material | are they checkable by something that did not make them? | after merge |
 
 Every check is a script in `ci/`, run the same way locally and in the
 pipeline, so a red check is reproducible without pushing again.
 
-Six of the eight are **required** on `main`, including for the repository
+Seven of the eight are **required** on `main`, including for the repository
 owner — a gate the owner can wave through is a report, not a gate.
 `enforce_admins` is on, force-pushes and deletions are refused.
 
-The last two rows are the honest part. They were added after the required
-set was configured, and marking a check required is a repository *setting*
-that no file here can make. Until that is done they run on every push and
-report; they do not block. Saying "eight gates" while two of them cannot
-stop a merge would be the exact overstatement this table exists to avoid.
+The eighth is the honest row, and it is not an oversight. Run verification
+checks the signatures on an image that has *already been published*, which
+only happens on a merge to `main` — so there is nothing for it to verify
+while a pull request is open, and it is skipped there. Marking it required
+would block every merge on a check that never reports. It runs after the
+merge instead, and a failure turns `main` red.
+
+That is a real gap and it is left visible rather than closed by wording: a
+signature defect is caught minutes after landing, not before. What prevents
+it reaching a consumer is downstream — an unsigned or wrongly signed image
+is refused by `ci/verify-release.sh` and by admission.
 
 That is demonstrated rather than asserted:
 **[PR #4](https://github.com/LockedWayi/multivendor-hsm-pki/pull/4)**
