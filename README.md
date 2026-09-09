@@ -13,6 +13,10 @@ security module without welding your codebase to one vendor's driver?*
 
 ---
 
+The design reasoning — why one interface over three vendors, why the keys
+are purpose-separated, why the hierarchy is two-tier, and what was rejected
+along the way — is in **[docs/architecture.md](docs/architecture.md)**.
+
 ## Why this is unusual
 
 Most HSM integrations hard-code a single vendor. The PKCS#11 standard is
@@ -106,22 +110,32 @@ has already approved it.
 
 ## The pipeline
 
-Six checks, and they are not six opinions about one thing. Each reads a
+Eight checks, and they are not eight opinions about one thing. Each reads a
 different artifact, and a finding from one is invisible to the others:
 
-| Check | Reads | Answers |
-|---|---|---|
-| Suite + coverage floor | the code, against SoftHSM2 | does it work against a real token? |
-| Semgrep | the code you wrote | did we introduce a defect? |
-| gitleaks | every commit in history | did we commit a secret, ever? |
-| `trivy fs` + `govulncheck` | what you imported | is a vulnerable version present — and do we reach it? |
-| `trivy image` | what was assembled | is the shipped image vulnerable? |
-| `trivy config` + OpenTofu | what would be provisioned | is the infrastructure misconfigured? |
+| Check | Reads | Answers | Required |
+|---|---|---|---|
+| Suite + coverage floor | the code, against SoftHSM2 | does it work against a real token? | yes |
+| Semgrep | the code you wrote | did we introduce a defect? | yes |
+| gitleaks | every commit in history | did we commit a secret, ever? | yes |
+| `trivy fs` + `govulncheck` | what you imported | is a vulnerable version present — and do we reach it? | yes |
+| `trivy image` | what was assembled | is the shipped image vulnerable? | yes |
+| `trivy config` + OpenTofu | what would be provisioned | is the infrastructure misconfigured? | yes |
+| trust chain | the key inventory, against an anchor in another repository | can this tree still say which key is which? | **not yet** |
+| run verification | every signature this run made, holding no key material | are they checkable by something that did not make them? | **not yet** |
 
 Every check is a script in `ci/`, run the same way locally and in the
-pipeline, so a red check is reproducible without pushing again. All six are
-**required** on `main`, including for the repository owner — a gate the
-owner can wave through is a report, not a gate.
+pipeline, so a red check is reproducible without pushing again.
+
+Six of the eight are **required** on `main`, including for the repository
+owner — a gate the owner can wave through is a report, not a gate.
+`enforce_admins` is on, force-pushes and deletions are refused.
+
+The last two rows are the honest part. They were added after the required
+set was configured, and marking a check required is a repository *setting*
+that no file here can make. Until that is done they run on every push and
+report; they do not block. Saying "eight gates" while two of them cannot
+stop a merge would be the exact overstatement this table exists to avoid.
 
 That is demonstrated rather than asserted:
 **[PR #4](https://github.com/LockedWayi/multivendor-hsm-pki/pull/4)**
@@ -138,7 +152,7 @@ not an accepted one.
 
 ## The published image, and how to verify it
 
-A push to `main` that clears all six gates publishes the service image to
+A push to `main` that clears every gate publishes the service image to
 `ghcr.io/lockedwayi/multivendor-hsm-pki` with a signed CycloneDX SBOM
 attestation. Two tags are written and no more: `sha-<commit>`, and
 `v<x.y.z>` when the commit carries that release tag. There is deliberately
@@ -183,6 +197,35 @@ openssl dgst -sha256 -verify anchor.pub \
 cosign verify --key <the image key listed in that inventory> \
     --insecure-ignore-tlog=true ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
 ```
+
+### The release binary
+
+The pipeline also signs the server binary, with `artifact-signing-key-v1` —
+never the image key, because a compromise of one must not be able to do the
+other's job. The binary is *extracted from the image that was just signed*
+rather than rebuilt, so the two signatures cover the same bytes.
+
+Its signature is checked by a program that holds only the public key and
+shares no code with the signer:
+
+```sh
+go run ./ci/verify-artifact \
+    -key <the run's artifact-signing-key-v1.pub> \
+    -bundle hsm-pki-server.bundle \
+    hsm-pki-server
+```
+
+It exits zero only when the bundle names that key, the digest it carries is
+the digest of the bytes actually supplied, and the signature verifies over
+them. Anything else — including a bundle it does not recognise — is
+non-zero. A signature checked only by the tool that produced it proves the
+tool agrees with itself, which it would do just as convincingly if the whole
+encoding were wrong.
+
+The binary and its bundle are attached to each pipeline run as the
+`release-binary-<sha>` artifact, and the key that signs them is in
+`ephemeral-signing-keys-<sha>` beside it — which is the same honesty problem
+the image has, and the same answer:
 
 ### The two signatures, and why only one is for you
 
@@ -247,25 +290,6 @@ ci/terraform-scan.sh     # OpenTofu fmt, validate, trivy
 `deploy/docker/run-local.sh` brings up the service against a throwaway
 SoftHSM2 token, and `CONTRIBUTING.md` has the rest.
 
-## Verifying a release
-
-A release artifact's signature is checked by a program that holds only the
-public key and shares no code with the signer:
-
-```sh
-go run ./ci/verify-artifact \
-    -key docs/keys/artifact-signing-key-v1.pub \
-    -bundle release/hsm-pki-server.bundle \
-    release/hsm-pki-server
-```
-
-It exits zero only when the bundle names that key, the digest it carries is
-the digest of the bytes actually supplied, and the signature verifies over
-them. Anything else — including a bundle it does not recognise — is
-non-zero. A signature checked only by the tool that produced it proves that
-the tool agrees with itself, which it would do just as convincingly if the
-whole encoding were wrong.
-
 ## Security posture
 
 - Private keys are generated on the HSM and never leave it. No private key
@@ -288,14 +312,19 @@ whole encoding were wrong.
 
 The PKCS#11 core, the CA and its two-tier hierarchy, the container and its
 Kubernetes deployment with a generated admission policy, the
-infrastructure-as-code modules, and the scanning pipeline are built and
-running. Authentication on the write endpoints, the signing gate in its
-fail-closed form, and Vault-based key custody are in progress.
+infrastructure-as-code modules, the scanning pipeline, and the signing gate
+— image and release binary signed over PKCS#11, SLSA provenance, and an
+independent verifier holding no key material — are built and running.
 
-Checks currently **report rather than block**: branch protection requires a
-plan this repository is not on yet. The scripts themselves fail closed, and
-a red check is treated as blocking by convention until the setting can make
-it so.
+In progress: authentication on the write endpoints (mTLS, using this
+platform's own CA to issue the client certificates), the key-rotation drill
+in CI, and Vault-based key custody.
+
+Six of the eight checks block a merge, `enforce_admins` included. The two
+newest — the trust-chain check and the run verification — report but do not
+yet block, because marking a check required is a repository setting rather
+than a file, and they were added after that set was configured. See "The
+pipeline" above; the distinction is kept there rather than smoothed over.
 
 ## License
 
