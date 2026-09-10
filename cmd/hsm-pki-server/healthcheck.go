@@ -7,22 +7,13 @@ import (
 	"time"
 )
 
-// healthcheckTimeout bounds the self-probe. It is deliberately short: a
-// liveness probe that hangs is indistinguishable from a healthy one to the
-// orchestrator waiting on it, and /healthz touches nothing but the process
-// itself, so anything slower than this is already a symptom.
+// healthcheckTimeout bounds the self-probe. /healthz touches nothing but
+// the process, so anything slower is already a symptom.
 const healthcheckTimeout = 2 * time.Second
 
-// probeAddress converts a listen address into one that can be dialled from
-// inside the same container.
-//
-// A wildcard bind is not a destination: 0.0.0.0 means "every local
-// interface" to a listener and is not a routable address to a dialler, and
-// :: has the same problem. Both are rewritten to loopback, which is the
-// only interface a probe running beside the process should ever use — a
-// health check that leaves the container is testing the network, not the
-// service. A specific bind address is kept as it is, because an operator
-// who narrowed the listener meant it.
+// probeAddress turns a listen address into one that can be dialled from
+// inside the container. 0.0.0.0 and :: are wildcards for a listener, not
+// destinations, so they become loopback. A specific bind address is kept.
 func probeAddress(listenAddr string) (string, error) {
 	host, port, err := net.SplitHostPort(listenAddr)
 	if err != nil {
@@ -38,19 +29,10 @@ func probeAddress(listenAddr string) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
-// runHealthcheck probes this process's own /healthz and reports whether it
-// answered. It exists because the runtime image has no shell and no HTTP
-// client for a HEALTHCHECK to invoke, and adding either to get a health
-// check would mean putting a general-purpose tool into a container whose
-// value is that it has none.
-// The binary is already in the image and already knows the listen address,
-// so it probes itself.
-//
-// /healthz and not /readyz, deliberately. Liveness answers "is this process
-// working"; readiness answers "should it receive traffic", which here means
-// touching the HSM. A transient HSM blip must not read as a dead container
-// and get it restarted — that turns a recoverable dependency failure into
-// an outage, and restarts do not fix an HSM (internal/api/health.go).
+// runHealthcheck probes this process's own /healthz. The runtime image has
+// no shell and no HTTP client, so the binary probes itself. /healthz and
+// not /readyz: readiness touches the HSM, and a transient HSM failure must
+// not restart the container.
 func runHealthcheck(listenAddr string) error {
 	addr, err := probeAddress(listenAddr)
 	if err != nil {

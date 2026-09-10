@@ -13,76 +13,40 @@ import (
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
-// LoadIntermediateParams configures LoadIntermediate.
-//
-// Note what is absent, and must stay absent: nothing here names the root's
-// token, workspace, or key label. The service holds the intermediate and
-// only the intermediate; the root exists solely inside the offline ceremony
-// (RunCeremony) and is never reachable from a running server's configuration
+// LoadIntermediateParams configures LoadIntermediate. Nothing here names
+// the root's token, workspace or key label, and nothing may. The service
+// holds the intermediate only.
 type LoadIntermediateParams struct {
 	// KeyLabel is the CKA_LABEL of the intermediate's key pair on the token
-	// this service authenticates. The ceremony created it under a versioned
-	// label.
+	// this service authenticates.
 	KeyLabel string
 	// CertPath is the ceremony-produced intermediate certificate, PEM. It
-	// contains no private key material — the intermediate's private key
-	// never leaves the HSM.
+	// holds no private key material.
 	CertPath string
 	Curve    pk11.ECCurve
 	// CertTTL is the validity window Issue gives every leaf this CA signs.
 	CertTTL time.Duration
-	// Distribution is where the leaves this CA issues tell relying parties
-	// to look for revocation status and for the issuing certificate. Unlike
-	// the intermediate's own CDP and AIA — fixed by the root at ceremony
-	// time — these are re-derived on every issuance, so they follow the
-	// service's configured base URL (internal/config, internal/api.
-	// LeafDistributionFor) rather than being frozen years earlier.
+	// Distribution is where the leaves this CA issues point relying parties
+	// for revocation status and for the issuing certificate. Unlike the
+	// intermediate's own CDP and AIA, fixed at ceremony time, these follow
+	// the service's configured base URL.
 	Distribution LeafDistribution
 }
 
 // LoadIntermediate authenticates the token and loads an existing,
-// ceremony-produced intermediate CA. It creates nothing.
+// ceremony-produced intermediate. It creates nothing: a service that can
+// mint its own CA is a service whose compromise yields a root. A missing
+// key or certificate is a configuration error.
 //
-// This replaced an earlier Bootstrap that would generate a key pair and
-// self-sign a CA certificate when it found neither. That convenience is
-// exactly what this phase removes: a service that can mint its own root is a
-// service whose compromise yields a root. Provisioning now happens once, out
-// of band, in a ceremony that runs on a token this service never names —
-// so a missing key or certificate here is a configuration error to report,
-// never a state to repair.
-//
-// The loaded certificate is checked before the service is allowed to come
-// up, every check fail-closed:
-//
-//   - It must be a CA certificate. Signing leaves with a non-CA certificate
-//     produces a chain no compliant verifier accepts.
-//   - It must NOT be self-signed. A self-signed CA certificate here means
-//     the operator has pointed the online service at a root, which is the
-//     precise misconfiguration this phase exists to make impossible.
-//   - It must carry pathlen:0. This platform's hierarchy is two tiers
-//
-// ; an online CA permitted to certify further CAs has a
-//
-//	  blast radius the design does not accept.
-//	- It must assert keyCertSign and cRLSign. A compliant verifier enforces
-//	  keyUsage independently of basicConstraints, so an intermediate
-//	  missing either produces certificates or CRLs that are rejected
-//	  everywhere but here.
-//	- It must be inside its own validity window. Nothing an expired issuer
-//	  signs can chain.
-//	- Its public key must match the HSM key found under KeyLabel. Without
-//	  this check, a certificate and a key label that refer to different key
-//	  pairs would load cleanly and then produce signatures that verify
-//	  against nothing — a failure that would surface at the relying party
-//	  rather than at startup.
-//
-// params.Distribution is checked too, before anything else, because a CA
-// that cannot name a distribution point issues nothing at all (see Issue).
+// The certificate is checked before the service comes up. It must be a CA
+// certificate, must not be self-signed (that would put a root online),
+// must carry pathlen:0, must assert keyCertSign and cRLSign, must be inside
+// its validity window, and its public key must match the token key under
+// KeyLabel. params.Distribution is checked first: a CA with no
+// distribution point issues nothing.
 func LoadIntermediate(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, resolvePIN PINResolver, params LoadIntermediateParams) (*CA, error) {
-	// Checked first, before the token is touched at all: it costs nothing,
-	// and a service that comes up only to reject every issuance with
-	// ErrNoDistributionPoints has failed in the least useful place. Startup
-	// is where an operator is watching.
+	// Checked before the token is touched. A service that starts and then
+	// refuses every issuance has failed in the wrong place.
 	if err := params.Distribution.Validate(); err != nil {
 		return nil, fmt.Errorf("ca: leaf distribution: %w", err)
 	}
@@ -118,11 +82,8 @@ func LoadIntermediate(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.W
 // checkIntermediateCert enforces the tier constraints described on
 // LoadIntermediate.
 func checkIntermediateCert(cert *x509.Certificate, path string) error {
-	// BasicConstraints must be present and marked valid before IsCA or
-	// MaxPathLenZero mean anything: crypto/x509 leaves both at their zero
-	// values when the extension is absent. IsCA=false already rejects that
-	// case, so this is belt-and-braces — but it states the dependency
-	// rather than leaving it to be re-derived by the next reader.
+	// crypto/x509 leaves IsCA and MaxPathLenZero at zero when the extension
+	// is absent, so the extension's presence is checked first.
 	if !cert.BasicConstraintsValid {
 		return fmt.Errorf("%w: %s carries no basicConstraints extension, so it asserts no CA status at all (RFC 5280 §4.2.1.9)",
 			ErrNotAnIntermediate, path)
@@ -130,24 +91,20 @@ func checkIntermediateCert(cert *x509.Certificate, path string) error {
 	if !cert.IsCA {
 		return fmt.Errorf("%w: %s is not a CA certificate (IsCA=false)", ErrNotAnIntermediate, path)
 	}
-	// A self-signed certificate is one that verifies under its own public
-	// key. Comparing Subject and Issuer alone would not do: those strings
-	// are attacker- or operator-controlled and say nothing about who
-	// actually signed the certificate.
+	// A self-signed certificate verifies under its own key. Subject and
+	// Issuer are operator-controlled strings and say nothing about who
+	// signed.
 	if err := cert.CheckSignatureFrom(cert); err == nil {
-		return fmt.Errorf("%w: %s is self-signed, which means it is a root — this service holds the intermediate only, and the root must stay offline",
+		return fmt.Errorf("%w: %s is self-signed, which means it is a root; this service holds the intermediate only, and the root must stay offline",
 			ErrRootCertificateRejected, path)
 	}
 	if !cert.MaxPathLenZero {
 		return fmt.Errorf("%w: %s does not carry pathlen:0, so it is permitted to certify further CAs; this platform's hierarchy is two tiers",
 			ErrNotAnIntermediate, path)
 	}
-	// keyUsage decides what this certificate is *allowed* to do, and a
-	// compliant verifier enforces it independently of basicConstraints
-	// (RFC 5280 §4.2.1.3). An intermediate missing keyCertSign produces
-	// leaves every such verifier rejects; missing cRLSign, the CRL this
-	// service publishes is rejected the same way — and this service signs
-	// both, so both are required rather than one being optional.
+	// A compliant verifier enforces keyUsage independently of
+	// basicConstraints (RFC 5280 §4.2.1.3). This service signs certificates
+	// and a CRL, so both bits are required.
 	if cert.KeyUsage&x509.KeyUsageCertSign == 0 {
 		return fmt.Errorf("%w: %s does not assert the keyCertSign key usage, so every certificate signed under it is rejected by a compliant verifier (RFC 5280 §4.2.1.3)",
 			ErrNotAnIntermediate, path)
@@ -156,12 +113,9 @@ func checkIntermediateCert(cert *x509.Certificate, path string) error {
 		return fmt.Errorf("%w: %s does not assert the cRLSign key usage, and this service publishes the CRL covering the certificates it issues (GET /crl)",
 			ErrNotAnIntermediate, path)
 	}
-	// An expired or not-yet-valid intermediate cannot produce a usable
-	// certificate: RFC 5280 §6.1.3 validates every certificate in the path
-	// against the same instant. Refusing at startup, where an operator is
-	// watching, beats coming up and failing every issuance later
-	//. Issue re-checks per issuance, because a service
-	// that started before the expiry is still running after it.
+	// RFC 5280 §6.1.3 validates every certificate in the path at the same
+	// instant. Issue checks again per issuance: a service that started
+	// before the expiry is still running after it.
 	now := time.Now()
 	if now.Before(cert.NotBefore) {
 		return fmt.Errorf("%w: %s is not valid until %s", ErrIssuerNotValid, path, cert.NotBefore.Format(time.RFC3339))
@@ -185,19 +139,15 @@ func checkKeyMatchesCert(signer *Signer, cert *x509.Certificate, keyLabel, certP
 		return fmt.Errorf("%w: HSM key %q is %T, not ECDSA", ErrKeyCertMismatch, keyLabel, signer.Public())
 	}
 	if !certPub.Equal(signerPub) {
-		return fmt.Errorf("%w: HSM key %q is not the key certified by %s — the service would sign with a key the certificate does not attest to",
+		return fmt.Errorf("%w: HSM key %q is not the key certified by %s; the service would sign with a key the certificate does not attest to",
 			ErrKeyCertMismatch, keyLabel, certPath)
 	}
 	return nil
 }
 
-// loadCertPEM reads the single PEM certificate at path.
-//
-// A file with a second block is rejected rather than silently reduced to
-// its first. The likely way that happens is an operator pasting a whole
-// chain into ca.intermediate_cert_path, and picking the first block would
-// make the choice by file order — which is nobody's decision (the engineering contract
-// the identity rule, and failing closed on not degrading to a weaker path).
+// loadCertPEM reads the single PEM certificate at path. A file with a
+// second block is rejected: an operator pasting a chain into
+// ca.intermediate_cert_path would otherwise get whichever block came first.
 func loadCertPEM(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -12,21 +12,15 @@ import (
 	"strings"
 	"time"
 
-	// modernc.org/sqlite is a pure-Go SQLite. It is chosen over mattn's cgo
-	// binding so this package adds no new cgo surface: internal/pkcs11
-	// already carries the one cgo dependency this repository accepts, and
-	// keeping the storage layer pure Go means a build failure there can
-	// never be confused with an HSM toolchain problem.
+	// modernc.org/sqlite is pure Go. internal/pkcs11 carries the one cgo
+	// dependency this repository accepts, and a build failure here must not
+	// look like an HSM toolchain problem.
 	_ "modernc.org/sqlite"
 )
 
-// schema is applied on every Open. Every statement is IF NOT EXISTS, so
-// opening an existing store is a no-op rather than a migration.
-//
-// Serial numbers and CRL numbers are TEXT holding a decimal big.Int, not
-// INTEGER. A certificate serial is 128 bits of crypto/rand (ca.GenerateSerial)
-// and does not fit in SQLite's 64-bit INTEGER; storing it as text is lossless
-// and matches how the HTTP layer already addresses a certificate.
+// schema is applied on every Open. Every statement is IF NOT EXISTS.
+// Serial numbers and CRL numbers are TEXT holding a decimal big.Int: a
+// 128-bit serial does not fit SQLite's 64-bit INTEGER.
 const schema = `
 CREATE TABLE IF NOT EXISTS certificates (
     serial      TEXT PRIMARY KEY,
@@ -53,45 +47,22 @@ type SQLite struct {
 	crlNumberFloor *big.Int
 }
 
-// OpenSQLite opens (creating if absent) the store at path.
-//
-// logger may be nil, in which case nothing is logged; it exists for one
-// message that must not be silent — see NextCRLNumber's seeding path.
-//
-// crlNumberFloor may be nil. When set, it is the lowest number a *fresh*
-// store will seed its CRL counter with; an existing counter is never
-// touched. It is the operator's escape hatch for the one case the clock
-// seed cannot cover on its own: a store that was lost and is being rebuilt
-// on a host whose clock has since moved backwards, where the clock-derived
-// seed could land below numbers verifiers already hold. Nobody can recover
-// that number automatically — the thing that remembered it is what was
-// lost — so an operator who does know it supplies it here.
+// OpenSQLite opens the store at path, creating it if absent. logger may be
+// nil. crlNumberFloor may be nil; when set, it is the lowest number a
+// fresh store seeds its counter with, for a store rebuilt on a host whose
+// clock has moved backwards. An existing counter is never touched.
 func OpenSQLite(ctx context.Context, path string, logger *slog.Logger, crlNumberFloor *big.Int) (*SQLite, error) {
-	// Three pragmas, each load-bearing.
-	//
-	// synchronous=full fsyncs on every commit. It is SQLite's default today,
-	// which is exactly why it is set explicitly: WAL mode is very commonly
-	// paired with synchronous=normal for throughput, and someone doing that
-	// here would trade away the durability the CRL counter depends on. A
-	// commit lost to a power failure means reissuing a CRL number that has
-	// already been served under different content — an RFC 5280 §5.2.3
-	// violation produced by a performance tweak.
-	//
-	// _txlock=immediate takes the write lock when a transaction begins
-	// rather than on its first write. Without it, two transactions can both
-	// begin, both read, and then deadlock when the second tries to upgrade —
-	// SQLITE_BUSY on a path that has no way to retry safely.
+	// synchronous=full fsyncs on every commit; a commit lost to a power
+	// failure would reissue a CRL number under different content.
+	// _txlock=immediate takes the write lock when a transaction begins, so
+	// two transactions cannot both read and then deadlock on the upgrade.
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(full)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
 	}
 
-	// One connection, deliberately. The embedded store is single-writer by
-	// design at this scale, and serializing at the
-	// pool removes SQLITE_BUSY as a failure mode entirely rather than
-	// managing it with retries. If replicas ever exist this moves to an
-	// external database, which is the swap the Store interface exists to
-	// permit — it is not fixed by allowing more connections here.
+	// One connection. The store is single-writer, and serializing at the
+	// pool removes SQLITE_BUSY as a failure mode.
 	db.SetMaxOpenConns(1)
 
 	if _, err := db.ExecContext(ctx, schema); err != nil {
@@ -107,12 +78,8 @@ func (s *SQLite) Record(ctx context.Context, rec CertRecord) error {
 	if err != nil {
 		return err
 	}
-	// A plain INSERT, so the PRIMARY KEY constraint rejects a duplicate.
-	//
-	// This used to be an upsert, which was a quiet security defect: the
-	// incoming record carries StatusValid, so re-recording an
-	// already-revoked serial silently un-revoked it and dropped it out of
-	// the CRL. See ErrDuplicateSerial.
+	// A plain INSERT, so the PRIMARY KEY constraint rejects a duplicate. An
+	// upsert here un-revoked certificates; see ErrDuplicateSerial.
 	_, err = s.db.ExecContext(ctx, `
         INSERT INTO certificates (serial, subject_der, not_after, status, revoked_at, reason)
         VALUES (?, ?, ?, ?, NULL, NULL)`,
@@ -127,13 +94,8 @@ func (s *SQLite) Record(ctx context.Context, rec CertRecord) error {
 }
 
 // isUniqueConstraintViolation reports whether err is SQLite's primary-key
-// conflict.
-//
-// Matched on the driver's message rather than a typed error: modernc's
-// driver returns its error as a formatted string, and depending on its
-// internal type here would couple this package to an implementation detail
-// that has changed across its versions. The substring it looks for is part
-// of SQLite's own stable error text, not the driver's wrapping.
+// conflict. Matched on SQLite's own error text, because the driver's error
+// type has changed across versions.
 func isUniqueConstraintViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
@@ -154,13 +116,9 @@ func (s *SQLite) Get(ctx context.Context, serial *big.Int) (CertRecord, bool, er
 	return rec, true, nil
 }
 
-// Revoke implements Store.
-//
-// The read and the write happen in one transaction. Without it, two
-// concurrent revocations of the same serial could both observe "not yet
-// revoked" and the second would overwrite the first's timestamp and reason —
-// quietly rewriting when and why a certificate was revoked, which is exactly
-// the record an incident review depends on.
+// Revoke implements Store. The read and the write happen in one
+// transaction, so two concurrent revocations of one serial cannot both
+// see "not yet revoked" and overwrite each other's timestamp and reason.
 func (s *SQLite) Revoke(ctx context.Context, serial *big.Int, reason RevocationReason, at time.Time) error {
 	if !reason.Valid() {
 		return fmt.Errorf("%w: %d", ErrInvalidRevocationReason, reason)
@@ -179,8 +137,8 @@ func (s *SQLite) Revoke(ctx context.Context, serial *big.Int, reason RevocationR
 	if err != nil {
 		return fmt.Errorf("store: reading certificate %s for revocation: %w", serial, err)
 	}
-	// Idempotent by contract: an already-revoked certificate keeps its
-	// original RevokedAt and reason. See Store.Revoke.
+	// An already revoked certificate keeps its original RevokedAt and
+	// reason. See Store.Revoke.
 	if Status(status) == StatusRevoked {
 		return tx.Commit()
 	}
@@ -217,19 +175,11 @@ func (s *SQLite) Revoked(ctx context.Context) ([]CertRecord, error) {
 	return out, nil
 }
 
-// NextCRLNumber implements Store.
-//
-// The counter is read, incremented, and written inside one transaction, so
-// two concurrent CRL generations cannot be handed the same number. A repeated
-// number is not cosmetic: RFC 5280 §5.2.3 lets a verifier keep the
-// higher-numbered CRL it already holds and ignore later ones, so a collision
-// can strand revocations indefinitely.
-//
-// A store with no counter row is seeded from the wall clock rather than from
-// 1 — see seedCRLNumber for why, and note that this is the only path that
-// logs: an empty counter means either a first start or a store that was lost
-// and rebuilt, and the second is worth noticing in an operator's logs rather
-// than absorbing silently.
+// NextCRLNumber implements Store. The counter is read, incremented and
+// written in one transaction, so two concurrent CRL generations cannot get
+// the same number. A store with no counter row is seeded from the wall
+// clock; see seedCRLNumber. That path logs, because on any start but the
+// first it means the store was lost and rebuilt.
 func (s *SQLite) NextCRLNumber(ctx context.Context) (*big.Int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -256,10 +206,7 @@ func (s *SQLite) NextCRLNumber(ctx context.Context) (*big.Int, error) {
 	default:
 		current, ok := new(big.Int).SetString(stored, 10)
 		if !ok {
-			// A counter we cannot parse is worse than one we do not have:
-			// continuing would mean guessing, and a guess below the real
-			// value strands every future CRL. Reject rather than repair
-			//
+			// A guess below the real value strands every future CRL.
 			return nil, fmt.Errorf("store: CRL counter %q is not a valid integer; refusing to guess the next number", stored)
 		}
 		next = new(big.Int).Add(current, big.NewInt(1))
@@ -322,12 +269,8 @@ func scanRecord(sc rowScanner) (CertRecord, error) {
 	return rec, nil
 }
 
-// marshalName stores a subject as the DER of its RDNSequence.
-//
-// The alternative — storing name.String() — is lossy: the RFC 2253 string
-// form cannot represent every attribute type and value faithfully, so a
-// subject would not survive a round trip through the store unchanged. A
-// record of what a CA issued should return what it issued.
+// marshalName stores a subject as the DER of its RDNSequence. The RFC
+// 2253 string form cannot represent every attribute faithfully.
 func marshalName(name pkix.Name) ([]byte, error) {
 	der, err := asn1.Marshal(name.ToRDNSequence())
 	if err != nil {

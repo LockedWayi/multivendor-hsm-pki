@@ -1,9 +1,7 @@
 package api_test
 
 // Every test in this package runs against every backend the environment
-// provides, through internal/hsmtest. Phase 2 ran them
-// against SoftHSM2 alone; that decision is superseded — see the banner on
-//
+// provides, through internal/hsmtest.
 
 import (
 	"context"
@@ -20,36 +18,21 @@ import (
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
-// newTestCA provisions two SoftHSM2 tokens, runs a real root ceremony over
-// them, and returns the **intermediate** CA the service is built on, plus
-// the adapter and workspace callers need for the /readyz probe and the
-// public root artifacts the server republishes.
-//
-// It used to bootstrap a self-signed root, matching what the service did
-// before Phase 3b. That configuration is now refused at startup
-// (ca.LoadIntermediate), so testing the HTTP surface against one would
-// exercise a deployment this platform rejects.
+// newTestCA runs a real root ceremony on the backend's two tokens and
+// returns the intermediate CA the service is built on, plus what the
+// /readyz probe and the root artifact endpoints need.
 func newTestCA(t *testing.T, b *hsmtest.Backend) (*ca.CA, pk11.VendorAdapter, pk11.Workspace, api.RootArtifacts) {
 	t.Helper()
 	return newTestCAAt(t, b, testBaseURL)
 }
 
-// testBaseURL stands in for a deployment's externally reachable origin in
-// the tests that never fetch what the URLs point at. The tests that do —
-// the ones proving a leaf's CDP and AIA actually resolve — pass the live
-// httptest listener's address to newTestCAAt instead, because a placeholder
-// would prove nothing about whether the paths match the routes.
+// testBaseURL stands in for a deployment's origin in the tests that never
+// fetch what the URLs point at. The tests that do pass the live httptest
+// listener's address to newTestCAAt.
 const testBaseURL = "https://pki.example.test"
 
-// newTestCAAt runs a real two-token ceremony on the given backend and
-// returns the intermediate CA the service is built on, plus the adapter and
-// workspace the /readyz probe needs and the public root artifacts the
-// server republishes.
-//
-// The tokens come from internal/hsmtest, so every test in this package runs
-// against every configured vendor. This helper used to
-// provision SoftHSM2 tokens inline, which is why the whole HTTP surface was
-// only ever exercised against one implementation.
+// newTestCAAt is newTestCA with the base URL the leaf distribution points
+// are built from.
 func newTestCAAt(t *testing.T, b *hsmtest.Backend, baseURL string) (*ca.CA, pk11.VendorAdapter, pk11.Workspace, api.RootArtifacts) {
 	t.Helper()
 	ctx := context.Background()
@@ -80,8 +63,7 @@ func newTestCAAt(t *testing.T, b *hsmtest.Backend, baseURL string) (*ca.CA, pk11
 		t.Fatalf("WriteFile(intermediate): %v", err)
 	}
 
-	// Load it exactly the way cmd/hsm-pki-server does, so these tests
-	// exercise the real startup path rather than a shortcut around it.
+	// Loaded the way cmd/hsm-pki-server does.
 	c, err := ca.LoadIntermediate(ctx, b.Adapter, b.Primary, pk11.SessionOptions{}, b.PrimaryPINFunc(), ca.LoadIntermediateParams{
 		KeyLabel:     interKeyLabel,
 		CertPath:     interCertPath,

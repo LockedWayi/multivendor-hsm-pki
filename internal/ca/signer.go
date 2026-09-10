@@ -1,7 +1,6 @@
-// Package ca implements the Certificate Authority logic — issuance,
-// revocation, CRL generation — built on the Phase 1 internal/pkcs11 core.
-// The CA never extracts its signing key from the HSM boundary: it asks a
-// Signer to sign, and never holds raw key material itself
+// Package ca implements the Certificate Authority: issuance, revocation
+// and CRL generation, built on internal/pkcs11. The CA never holds raw key
+// material; it asks a Signer to sign.
 package ca
 
 import (
@@ -56,14 +55,14 @@ type Signer struct {
 
 // NewSigner builds a Signer over an existing HSM key pair, identified by
 // the CKA_LABEL both halves of the pair were created with (KeyPairRequest.
-// Label). curve must match the key pair's actual curve — it is used to
+// Label). curve must match the key pair's actual curve; it is used to
 // reconstruct the public key from CKA_EC_POINT and to determine which hash
 // algorithm Sign will accept (P-256 pairs with SHA-256, P-384 with
 // SHA-384, P-521 with SHA-512, per FIPS 186-4's recommended curve/hash
 // pairings).
 //
 // This opens one session to find the public key object and read its
-// attributes, then closes it before returning — it does not keep a session
+// attributes, then closes it before returning; it does not keep a session
 // open (see the Signer doc comment).
 func NewSigner(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, keyLabel string, curve pk11.ECCurve) (*Signer, error) {
 	ellipticCurve := curve.Curve()
@@ -110,7 +109,7 @@ func (s *Signer) Public() crypto.PublicKey {
 
 // Sign implements crypto.Signer. digest must already be hashed with the
 // algorithm opts.HashFunc() names, and that algorithm must be the one
-// paired with this signer's curve (SHA-256 for P-256, and so on) — any
+// paired with this signer's curve (SHA-256 for P-256, and so on); any
 // other hash function, or a digest of the wrong length for it, is rejected
 // rather than sent to the HSM, so a mismatched caller fails loudly instead
 // of producing a signature over the wrong bytes.

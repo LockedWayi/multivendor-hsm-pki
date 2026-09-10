@@ -1,29 +1,17 @@
 // Command token-cleanup removes the test objects a suite run leaves behind
 // on a token that persists between runs.
 //
-// # Why this exists as a separate, operator-run tool
-//
-// `internal/hsmtest` destroys the objects each run creates, and deliberately
-// nothing else: a test suite that deleted objects it did not create would be
-// a destructive operation aimed at somebody else's token
-// (docs/test-matrix.md §5). That rule is right, and it leaves a real gap —
-// a run killed by a timeout, or a cleanup that could not reopen the module,
-// leaves objects nobody will ever remove. On a software emulator that is
-// untidy. On nShield or Luna hardware, where token memory is finite and
-// small, it is the thing that stops the suite being pointable at real
-// hardware more than a few times (Phase 7).
-//
-// So clearing it is an operator's decision, and this is the operator's tool
-// for making it. It is not wired into any test.
-//
-// # Fail-closed by construction
+// internal/hsmtest destroys the objects each run creates and nothing else.
+// A run killed by a timeout, or a cleanup that could not reopen the
+// module, leaves objects nobody removes. On an emulator that is untidy. On
+// nShield or Luna hardware, where token memory is small, it stops the
+// suite from running more than a few times. Clearing it is an operator's
+// decision, and this is the operator's tool. No test calls it.
 //
 // It prints what it would destroy and exits. Nothing is removed without
-// -confirm, and even then only objects whose CKA_LABEL matches -prefix,
-// which defaults to the run-scoped prefix hsmtest gives every object it
-// creates. An empty prefix is refused rather than treated as "everything":
-// "delete all test objects" and "delete every key on this token" must not be
-// one keystroke apart.
+// -confirm, and then only objects whose CKA_LABEL matches -prefix, which
+// defaults to the prefix hsmtest gives every object it creates. An empty
+// prefix is refused.
 //
 // Usage:
 //
@@ -50,8 +38,7 @@ func main() {
 	}
 }
 
-// object is one candidate for removal, kept with its label so the report
-// names what it is about to destroy rather than counting handles.
+// object is one candidate for removal, with its label.
 type object struct {
 	handle pk11.ObjectHandle
 	class  pk11.ObjectClass
@@ -78,9 +65,7 @@ func run(args []string) error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	// An empty prefix would mean every object on the token. That may even be
-	// what somebody wants one day, but it must not be reachable by leaving a
-	// flag off.
+	// An empty prefix would match every object on the token.
 	if *prefix == "" {
 		return fmt.Errorf("-prefix is empty, which would match every object on the token; " +
 			"pass an explicit prefix (hsmtest uses \"t-\")")
@@ -126,16 +111,14 @@ func run(args []string) error {
 		return nil
 	}
 	if !*confirm {
-		fmt.Printf("\ndry run — nothing was destroyed. Re-run with -confirm to remove these %d objects.\n", len(matched))
+		fmt.Printf("\ndry run; nothing was destroyed. Re-run with -confirm to remove these %d objects.\n", len(matched))
 		return nil
 	}
 
 	var failures int
 	for _, o := range matched {
 		if err := adapter.DestroyObject(ctx, s, o.handle); err != nil {
-			// Reported and carried on rather than aborting: stopping at the
-			// first failure would leave the operator to work out which half
-			// of the list is gone.
+			// Reported and carried on, so the operator sees the whole list.
 			fmt.Fprintf(os.Stderr, "  failed to destroy %q (class %d): %v\n", o.label, o.class, err)
 			failures++
 		}
@@ -147,12 +130,9 @@ func run(args []string) error {
 	return nil
 }
 
-// survey lists every public and private key object on the token and returns
-// the total count alongside those matching prefix.
-//
-// Both counts are reported because the ratio is the useful number: "42 of
-// 2048" tells an operator this is litter, "2048 of 2048" tells them to stop
-// and read the prefix again.
+// survey lists every public and private key object on the token and
+// returns the total beside those matching prefix. The ratio tells the
+// operator whether this is litter or the prefix is wrong.
 func survey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, prefix string) (total int, matched []object, err error) {
 	for _, class := range []pk11.ObjectClass{pk11.ClassPublicKey, pk11.ClassPrivateKey} {
 		handles, err := adapter.FindObjects(ctx, s, []pk11.Attribute{
@@ -165,8 +145,7 @@ func survey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, pr
 		for _, h := range handles {
 			attrs, err := adapter.GetAttributes(ctx, s, h, []pk11.AttributeType{pk11.AttrLabel})
 			if err != nil {
-				// An object whose label cannot be read is one this tool
-				// cannot claim to have identified, so it is left alone.
+				// An object whose label cannot be read is left alone.
 				continue
 			}
 			for _, a := range attrs {
@@ -179,9 +158,8 @@ func survey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, pr
 	return total, matched, nil
 }
 
-// printByRun groups the matched objects by the run id embedded in their
-// label, so an operator can see whether this is one abandoned run or a
-// year of them before agreeing to delete anything.
+// printByRun groups the matched objects by the run id in their label, so
+// the operator sees whether this is one abandoned run or many.
 func printByRun(matched []object) {
 	if len(matched) == 0 {
 		return
@@ -216,10 +194,9 @@ func newAdapter(adapterName, modulePath string) (pk11.VendorAdapter, error) {
 	}
 }
 
-// findWorkspace resolves a token by label, refusing to guess when the label
-// matches more than one — the same rule the rest of the platform applies
-// . It matters more here than usual: picking the wrong
-// token would mean destroying objects on it.
+// findWorkspace resolves a token by label, refusing to guess when the
+// label matches more than one. Picking the wrong token here would destroy
+// objects on it.
 func findWorkspace(ctx context.Context, adapter pk11.VendorAdapter, label, serial string) (pk11.Workspace, error) {
 	workspaces, err := adapter.Workspaces(ctx)
 	if err != nil {
@@ -245,7 +222,7 @@ func findWorkspace(ctx context.Context, adapter pk11.VendorAdapter, label, seria
 		for _, w := range matches {
 			fmt.Fprintf(&b, "\n  serial %q (slot %d)", w.Serial, w.SlotID)
 		}
-		return pk11.Workspace{}, fmt.Errorf("label %q matches %d tokens — refusing to guess which one to clean; "+
+		return pk11.Workspace{}, fmt.Errorf("label %q matches %d tokens; refusing to guess which one to clean. "+
 			"re-run with -workspace-serial. Candidates:%s", label, len(matches), b.String())
 	}
 }

@@ -220,11 +220,8 @@ ca:
 	}
 }
 
-// TestLoad_RequiredCAFieldsRejectEmpty pins that every ca.* path and label
-// is required rather than defaulted. The service no longer creates a CA when
-// it finds none (internal/ca.LoadIntermediate), so an unset field is a
-// misconfiguration to report at startup — and a default would silently point
-// the service at a location the operator never chose.
+// TestLoad_RequiredCAFieldsRejectEmpty: every ca.* path and label is
+// required, not defaulted.
 func TestLoad_RequiredCAFieldsRejectEmpty(t *testing.T) {
 	fields := []string{
 		"intermediate_key_label",
@@ -270,20 +267,10 @@ ca:
 	}
 }
 
-// TestConfig_NoRootKeyReferences is sub-task 3b.2's "grep-verifiable"
-// requirement made executable.
-//
-// The security property is that a compromise of the running service cannot
-// reach the root key, and the structural reason it holds is that the
-// service's configuration has no way to name the root's token, workspace, or
-// key label — so the process never authenticates that token at all.
-//
-// A future field could erode that quietly, which is what this guards. Note
-// the distinction it encodes: RootCertPath and RootCRLPath are permitted,
-// because a certificate and a CRL are public artifacts that confer no
-// ability to use a key. A root_key_label or root_workspace_label would not
-// be, and neither would a second PIN environment variable for the root's
-// token.
+// TestConfig_NoRootKeyReferences: the service's configuration has no way
+// to name the root's token, workspace or key label, so the process never
+// authenticates that token. RootCertPath and RootCRLPath are permitted:
+// a certificate and a CRL confer no ability to use a key.
 func TestConfig_NoRootKeyReferences(t *testing.T) {
 	forbidden := []string{
 		"root_key_label",
@@ -313,9 +300,7 @@ func TestConfig_NoRootKeyReferences(t *testing.T) {
 		}
 	}
 
-	// The two root fields that ARE allowed must still be exactly the public
-	// artifacts, so that a rename cannot smuggle something else past the
-	// list above.
+	// The two allowed root fields must be exactly the public artifacts.
 	allowedRootFields := map[string]bool{"root_cert_path": true, "root_crl_path": true}
 	for i := 0; i < caType.NumField(); i++ {
 		name, _, _ := strings.Cut(caType.Field(i).Tag.Get("yaml"), ",")
@@ -360,24 +345,17 @@ func TestResolvePIN(t *testing.T) {
 }
 
 func TestNewVendorAdapter_UnknownAdapterFails(t *testing.T) {
-	// Load rejects an unknown adapter before NewVendorAdapter would ever see
-	// one, so this exercises PKCS11Config.selectedVendor directly through a
-	// Config value constructed by hand rather than via Load.
+	// Load rejects an unknown adapter first, so selectedVendor is exercised
+	// through a hand-built Config.
 	cfg := &Config{PKCS11: PKCS11Config{Adapter: "quantum-hsm"}}
 	if _, err := cfg.NewVendorAdapter(); err == nil {
 		t.Fatal("NewVendorAdapter with an unknown adapter name succeeded, want an error")
 	}
 }
 
-// TestLoad_RejectsUnusableBaseURL pins that ca.base_url is validated as what
-// it becomes — the stem of a URL embedded in every issued certificate —
-// rather than merely being non-empty.
-//
-// The cost of accepting a bad one is asymmetric: startup succeeds, issuance
-// succeeds, and the defect surfaces only when a relying party tries to fetch
-// a CRL months later. By then the only fix is re-issuing every certificate
-// signed in the meantime, because an extension cannot be edited after the
-// signature.
+// TestLoad_RejectsUnusableBaseURL: ca.base_url becomes the stem of a URL
+// in every issued certificate, and a bad one is found by a relying party
+// months later.
 func TestLoad_RejectsUnusableBaseURL(t *testing.T) {
 	for _, tc := range []struct{ name, value string }{
 		{"unfetchable scheme", "ldap://pki.example.test"},
@@ -398,10 +376,8 @@ func TestLoad_RejectsUnusableBaseURL(t *testing.T) {
 	}
 }
 
-// TestLoad_AcceptsBaseURLWithPathPrefix covers the deployment that is not a
-// bare origin: a CA served under a path on a shared host. The prefix has to
-// survive, because internal/api.LeafDistributionFor appends the route paths
-// to whatever this holds.
+// TestLoad_AcceptsBaseURLWithPathPrefix: a CA served under a path keeps
+// its prefix.
 func TestLoad_AcceptsBaseURLWithPathPrefix(t *testing.T) {
 	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
 	body := strings.Replace(validSoftHSM2Config,
@@ -417,10 +393,7 @@ func TestLoad_AcceptsBaseURLWithPathPrefix(t *testing.T) {
 	}
 }
 
-// TestLoad_RejectsEmptyPINEnvVar covers the difference between "set" and
-// "usable". os.LookupEnv reports true for PIN="", so without this the
-// service passes startup validation and fails later, at an HSM login,
-// further from the cause than it needs to be.
+// TestLoad_RejectsEmptyPINEnvVar: os.LookupEnv reports true for PIN="".
 func TestLoad_RejectsEmptyPINEnvVar(t *testing.T) {
 	t.Setenv("TEST_SOFTHSM2_PIN", "")
 	if _, err := Load(writeConfig(t, validSoftHSM2Config)); err == nil {
@@ -428,10 +401,8 @@ func TestLoad_RejectsEmptyPINEnvVar(t *testing.T) {
 	}
 }
 
-// TestLoad_RejectsNegativeCRLNumberFloor pins RFC 5280 §5.2.3: a CRL number
-// is a non-negative integer. big.Int parses "-1" happily, and the value is
-// only consumed when a rebuilt store seeds its counter — the one moment
-// this field exists for, and the worst moment to discover a typo.
+// TestLoad_RejectsNegativeCRLNumberFloor: RFC 5280 §5.2.3 CRL numbers are
+// non-negative, and big.Int parses "-1".
 func TestLoad_RejectsNegativeCRLNumberFloor(t *testing.T) {
 	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
 	body := validSoftHSM2Config + "  crl_number_floor: \"-1\"\n"
@@ -440,9 +411,8 @@ func TestLoad_RejectsNegativeCRLNumberFloor(t *testing.T) {
 	}
 }
 
-// TestLoad_RejectsNonPositiveSessionBudgets covers durations that parse but
-// cannot describe a usable session: a budget of zero or less is not a
-// shorter budget, it is one that is already exceeded when the session opens.
+// TestLoad_RejectsNonPositiveSessionBudgets: a budget of zero or less is
+// already exceeded when the session opens.
 func TestLoad_RejectsNonPositiveSessionBudgets(t *testing.T) {
 	for _, tc := range []struct{ name, field, value string }{
 		{"negative idle_timeout", "idle_timeout", "-5m"},

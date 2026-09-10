@@ -8,9 +8,7 @@ import (
 	"testing"
 )
 
-// These tests touch no token: the health check is pure process-local HTTP,
-// so running them once is running them everywhere (the every-backend rule,
-// docs/test-matrix.md §4).
+// These tests touch no token: the health check is process-local HTTP.
 
 func TestProbeAddress(t *testing.T) {
 	for _, tc := range []struct {
@@ -69,18 +67,15 @@ func TestRunHealthcheck_HealthyWhenHealthzAnswers200(t *testing.T) {
 	if err := runHealthcheck(listenAddrOf(t, srv)); err != nil {
 		t.Fatalf("runHealthcheck: %v", err)
 	}
-	// The path matters: /readyz would make a transient HSM failure look
-	// like a dead process and get the container restarted.
+	// /readyz would make a transient HSM failure restart the container.
 	if probedPath != "/healthz" {
 		t.Fatalf("probed %q, want /healthz", probedPath)
 	}
 }
 
 func TestRunHealthcheck_UnhealthyOnNon200(t *testing.T) {
-	// 503 is what internal/api returns when it will not serve. A health
-	// check that reported success on any answer at all would be worse than
-	// no health check: it would assert liveness on the strength of the TCP
-	// stack alone.
+	// A health check that reported success on any answer would assert
+	// liveness on the strength of the TCP stack alone.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -92,8 +87,7 @@ func TestRunHealthcheck_UnhealthyOnNon200(t *testing.T) {
 }
 
 func TestRunHealthcheck_UnhealthyWhenNothingIsListening(t *testing.T) {
-	// Bind and immediately release a port, so the address is well-formed
-	// and reliably nobody's — the container-started-but-service-dead case.
+	// Bind and release a port, so the address is well-formed and nobody's.
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)

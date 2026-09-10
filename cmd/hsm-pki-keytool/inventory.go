@@ -33,10 +33,8 @@ type keySpecs []keySpec
 
 func (k *keySpecs) String() string { return fmt.Sprintf("%d keys", len(*k)) }
 
-// Set parses `purpose:label:status`. All three are required rather than
-// defaulted: a status this tool guessed would be a lifecycle decision made
-// by a default value, and the lifecycle is the entire point of the
-// document.
+// Set parses purpose:label:status. All three are required: a status this
+// tool guessed would be a lifecycle decision made by a default.
 func (k *keySpecs) Set(v string) error {
 	parts := strings.Split(v, ":")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
@@ -51,32 +49,16 @@ func (k *keySpecs) Set(v string) error {
 }
 
 // runGenerateInventoryCmd builds and signs the key inventory from the keys
-// actually on the token (Phase 4.8 "The key
-// inventory: what a verifier is allowed to trust").
-//
-// # Why this is a command and not a file somebody edits
-//
-// A hand-maintained inventory drifts from the token, and it drifts exactly
-// when it matters: after a rotation, when the document still lists a key
-// that was destroyed or omits one that now signs. Every live entry here is
-// read off the token, and reading it also confirms the key's protection
-// attributes through signingkey.Verify — so a key the token reports as
-// extractable never reaches the published list at all.
-//
-// # Two tokens, and the measurement that they are two
+// on the token. A hand-maintained inventory drifts from the token after a
+// rotation. Every live entry is read off the token through
+// signingkey.Verify, so a key the token reports as extractable never
+// reaches the published list.
 //
 // The supply-chain token holds the keys being listed; the offline token
-// holds the inventory signing key, which signs the list. If those were one
-// token, anyone holding it could add their own key to the list and thereby
-// authorise their own signatures — which is the failure the whole document
-// exists to prevent.
-//
-// So this refuses to proceed until it has measured that they differ: by
-// serial number, never by label, and
-// then by confirming the inventory signing key is not findable from the
-// supply-chain token — because a serial is a claim the driver makes and an
-// object search is a fact about the token. It is the ceremony's
-// root/intermediate check, applied one tier down for the same reason.
+// holds the inventory signing key. If those were one token, anyone holding
+// it could add their own key to the list. The command refuses until it has
+// measured that they differ: by serial, and then by confirming the
+// inventory signing key is not findable from the supply-chain token.
 func runGenerateInventoryCmd(args []string) error {
 	fs := flag.NewFlagSet("generate-inventory", flag.ExitOnError)
 
@@ -88,7 +70,7 @@ func runGenerateInventoryCmd(args []string) error {
 	workspaceSerial := fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label")
 	pinEnv := fs.String("pin-env", "", "environment variable holding the supply-chain token's PIN")
 
-	invWorkspaceLabel := fs.String("inventory-workspace", "", "token label holding the inventory signing key — the offline token, never the one above")
+	invWorkspaceLabel := fs.String("inventory-workspace", "", "token label holding the inventory signing key; the offline token, never the one above")
 	invWorkspaceSerial := fs.String("inventory-workspace-serial", "", "token serial number for the inventory signing token")
 	invPINEnv := fs.String("inventory-pin-env", "", "environment variable holding the inventory signing token's PIN")
 	invKeyLabel := fs.String("inventory-key-label", "", "versioned CKA_LABEL of the inventory signing key (e.g. inventory-signing-key-v1)")
@@ -97,7 +79,7 @@ func runGenerateInventoryCmd(args []string) error {
 	fs.Var(&keys, "key", "a key to list, as purpose:label:status (repeatable); e.g. image:image-signing-key-v1:active")
 
 	validity := fs.Duration("validity", 365*24*time.Hour, "how long the generated inventory stays acceptable to a verifier")
-	inPath := fs.String("in", "", "the current inventory, when regenerating — its version is incremented and its valid_from dates preserved")
+	inPath := fs.String("in", "", "the current inventory, when regenerating; its version is incremented and its valid_from dates preserved")
 	outPath := fs.String("out", "", "path to write the inventory JSON")
 	sigPath := fs.String("signature-out", "", "path to write the detached signature")
 
@@ -128,11 +110,8 @@ func runGenerateInventoryCmd(args []string) error {
 		return fmt.Errorf("-validity must be positive, got %s", *validity)
 	}
 
-	// Regenerating is the normal operation — that is what a rotation is —
-	// so an existing -out is not the error it would be for a ceremony. But
-	// overwriting it *without* reading it would silently reset the version
-	// counter and lose every valid_from, so the previous document has to be
-	// named rather than assumed.
+	// Overwriting -out without reading it would reset the version counter
+	// and lose every valid_from, so the previous document has to be named.
 	if *inPath == "" {
 		if _, err := os.Stat(*outPath); err == nil {
 			return fmt.Errorf("%s already exists: pass -in %s to regenerate from it "+
@@ -188,10 +167,7 @@ func runGenerateInventoryCmd(args []string) error {
 	if previous != nil {
 		version = previous.Version + 1
 	}
-	// Marshal validates, so nothing reaches the signing step — or the disk
-	// — that a verifier would refuse. That includes the
-	// duplicate-public-key check, which is the one that catches two
-	// purposes resolving to a single key pair.
+	// Marshal validates, including the duplicate-public-key check.
 	document, err := inventory.Inventory{
 		Schema:      inventory.Schema,
 		Version:     version,
@@ -208,10 +184,7 @@ func runGenerateInventoryCmd(args []string) error {
 		return err
 	}
 	// Checked before either file is written, against the public half read
-	// off the signing token. A signature nobody verified is a signature
-	// nobody has grounds to believe, and the cheap moment to discover it
-	// does not verify is before it is published rather than after a
-	// verifier rejects it.
+	// off the signing token.
 	if err := inventory.Verify(document, signature, signerPub); err != nil {
 		return fmt.Errorf("the signature this run produced does not verify against %q's public key: %w", *invKeyLabel, err)
 	}
@@ -231,17 +204,10 @@ func runGenerateInventoryCmd(args []string) error {
 	return nil
 }
 
-// readEntries turns the -key specs into inventory entries, taking each live
-// key's public half off the token and each retired key's from the previous
-// document.
-//
-// The asymmetry is the lifecycle rather than a shortcut. A retired key has
-// been destroyed on the token, so there is nothing left to
-// read; its entry survives only so a verifier meeting an old signature
-// learns the key was retired instead of learning nothing. And if such a key
-// *is* still on the token, the document and the token disagree about
-// whether it exists — reported, never papered over, because "retired" is a
-// claim this file would otherwise be making on the token's behalf.
+// readEntries turns the -key specs into inventory entries. A live key's
+// public half comes off the token. A retired key's comes from the previous
+// document, because the key has been destroyed. A key listed as retired
+// that is still on the token is an error.
 func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), curve pk11.ECCurve, specs keySpecs, previous *inventory.Inventory, invKeyLabel string) (entries []inventory.Entry, err error) {
 	prior := map[string]inventory.Entry{}
 	if previous != nil {
@@ -251,7 +217,7 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 	}
 
 	if adapter.TokenLoggedIn() {
-		return nil, fmt.Errorf("a token is already authenticated before logging into %q — refusing to proceed", ws.Label)
+		return nil, fmt.Errorf("a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
 	}
 	pin, err := resolvePIN()
 	if err != nil {
@@ -276,10 +242,8 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 		}
 	}()
 
-	// The serial comparison in the caller says the two tokens are different
-	// objects. This says the signing key is not *also* here — a serial is
-	// what the driver reports, an object search is what the token holds
-	//
+	// The caller compared serials. This confirms the signing key is not
+	// also here: a serial is a claim, an object search is a measurement.
 	free, err := pk11.LabelIsFree(ctx, adapter, s, pk11.ClassPrivateKey, invKeyLabel)
 	if err != nil {
 		return nil, fmt.Errorf("checking that %q is absent from the supply-chain token: %w", invKeyLabel, err)
@@ -303,10 +267,7 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 			Curve:   curveName(curve),
 			Status:  spec.status,
 		}
-		// valid_from is a historical fact, so it is preserved rather than
-		// refreshed: rewriting it on every regeneration would make every
-		// key look as though it were provisioned today, and the field
-		// exists to bound what a signature's date can be checked against.
+		// valid_from is preserved across regenerations.
 		entry.ValidFrom = now
 		if hadPrevious {
 			entry.ValidFrom = previousEntry.ValidFrom
@@ -337,9 +298,7 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 			continue
 		}
 
-		// Verify rather than Load: reading the key is also the moment to
-		// confirm the token still reports it sensitive and
-		// non-extractable, so a key that has become readable never reaches
+		// Verify, not Load, so a key that has become readable never reaches
 		// the published list.
 		key, err := signingkey.Verify(ctx, adapter, s, spec.label, curve)
 		if err != nil {
@@ -353,27 +312,20 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 		entries = append(entries, entry)
 	}
 
-	// Sorted by label so that regenerating an unchanged inventory produces
-	// identical bytes and a diff shows only what actually changed — the
-	// document is committed and reviewed by a human.
+	// Sorted by label, so an unchanged inventory regenerates to identical
+	// bytes.
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Label < entries[j].Label })
 	return entries, nil
 }
 
-// signInventory logs into the offline token for the span of one signature
-// and gives the authentication back afterwards, on every path. It returns
-// the public half alongside the signature so the caller can check its own
-// work before publishing it.
-// The inventory signature is fixed at ECDSA P-256 over SHA-256, and does
-// not follow -curve. That flag describes the keys being listed; this one
-// describes the signature a verifier checks with the published recipe
-// (`openssl dgst -sha256 -verify ...`), and the digest algorithm is part of
-// that published contract rather than a deployment choice. A signing key on
-// another curve fails here rather than silently producing a signature the
-// documented command cannot check.
+// signInventory logs into the offline token for one signature and logs out
+// afterwards, on every path. It returns the public half so the caller can
+// check the signature before publishing it. The signature is ECDSA P-256
+// over SHA-256 regardless of -curve: that flag describes the listed keys,
+// and the digest algorithm is part of the published verification recipe.
 func signInventory(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), keyLabel string, document []byte) (sig []byte, pub *ecdsa.PublicKey, err error) {
 	if adapter.TokenLoggedIn() {
-		return nil, nil, fmt.Errorf("a token is already authenticated before logging into %q — refusing to proceed", ws.Label)
+		return nil, nil, fmt.Errorf("a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
 	}
 	pin, err := resolvePIN()
 	if err != nil {
@@ -388,10 +340,7 @@ func signInventory(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Work
 		}
 	}()
 
-	// ca.NewSigner is a crypto.Signer over a key that never leaves the
-	// token, which is the same path the CA signs certificates through. The
-	// inventory is a different purpose on a different key, not a different
-	// mechanism.
+	// The same crypto.Signer path the CA signs certificates through.
 	signer, err := ca.NewSigner(ctx, adapter, ws, pk11.DefaultSessionOptions(), keyLabel, pk11.P256)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening the inventory signing key %q on %q: %w", keyLabel, ws.Label, err)
@@ -407,8 +356,7 @@ func signInventory(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Work
 	return sig, signerPub, nil
 }
 
-// curveName is the inverse of config.ParseCurve, for recording in the
-// document which curve a listed key uses.
+// curveName is the inverse of config.ParseCurve.
 func curveName(c pk11.ECCurve) string {
 	switch c {
 	case pk11.P384:

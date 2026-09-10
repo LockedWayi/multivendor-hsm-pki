@@ -5,14 +5,11 @@ import (
 	"testing"
 )
 
-// These touch no token: they are about the guards that run *before* this
-// tool is allowed to destroy anything, which is the part that must never
-// regress. The destroying itself is exercised by the operator running it.
+// These touch no token. They cover the guards that run before anything is
+// destroyed.
 
-// TestRun_RefusesAnEmptyPrefix is the one that matters. An empty prefix
-// matches every object on the token, so "clear this run's test keys" and
-// "wipe the token" would be one missing flag apart — and the second is not
-// undoable.
+// TestRun_RefusesAnEmptyPrefix: an empty prefix matches every object on
+// the token.
 func TestRun_RefusesAnEmptyPrefix(t *testing.T) {
 	t.Setenv("TOKEN_CLEANUP_TEST_PIN", "1234")
 	err := run([]string{
@@ -28,8 +25,7 @@ func TestRun_RefusesAnEmptyPrefix(t *testing.T) {
 	if !strings.Contains(err.Error(), "every object") {
 		t.Fatalf("error = %v, want it to say why an empty prefix is refused", err)
 	}
-	// And it must fail on the prefix, not on the unreachable module —
-	// otherwise the guard is being credited for an accident.
+	// It must fail on the prefix, not on the unreachable module.
 	if strings.Contains(err.Error(), "module") {
 		t.Fatalf("failed for the wrong reason: %v", err)
 	}
