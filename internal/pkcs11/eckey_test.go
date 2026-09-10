@@ -29,10 +29,8 @@ func TestDecodeECPoint_DERWrappedShortForm(t *testing.T) {
 }
 
 func TestDecodeECPoint_DERWrappedLongForm(t *testing.T) {
-	// A P-521 point is 133 bytes — long enough that its OCTET STRING
-	// wrapper needs a long-form DER length (short-form tops out at 127).
-	// This is the case the earlier hand-rolled "0x04 <len> <point>" decode
-	// (conformance_test.go's original helper) would have gotten wrong.
+	// A P-521 point is 133 bytes, so its OCTET STRING wrapper needs a
+	// long-form DER length.
 	priv, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -71,16 +69,11 @@ func TestDecodeECPoint_BareUnwrapped(t *testing.T) {
 	}
 }
 
-// TestDecodeECPoint_BareUnwrapped_ASN1TagCollision deterministically
-// reproduces the exact condition that made TestDecodeECPoint_BareUnwrapped
-// intermittently fail before DecodeECPoint tried the raw interpretation
-// first: a bare, unwrapped point whose second byte happens to equal 0x3F
-// (63) — the DER short-form length of the remaining 63 bytes — which
-// otherwise makes it possible to misparse as an ASN.1-wrapped OCTET
-// STRING. Rather than rely on a ~1/256 chance per random key, generate
-// keys until one lands on that exact byte value, capping the search well
-// above the expected ~256 draws so a regression here fails loudly instead
-// of flaking.
+// TestDecodeECPoint_BareUnwrapped_ASN1TagCollision reproduces the case
+// that made TestDecodeECPoint_BareUnwrapped fail about once in 256 runs:
+// a bare point whose second byte equals 0x3F, the DER short-form length
+// of the remaining 63 bytes. Keys are generated until one lands on that
+// byte, with a cap well above the expected 256 draws.
 func TestDecodeECPoint_BareUnwrapped_ASN1TagCollision(t *testing.T) {
 	const collidingSecondByte = 0x3F
 	var point []byte
@@ -96,7 +89,7 @@ func TestDecodeECPoint_BareUnwrapped_ASN1TagCollision(t *testing.T) {
 		}
 	}
 	if point == nil {
-		t.Fatal("did not find a colliding point within 100,000 draws — something about the collision probability assumption is wrong")
+		t.Fatal("did not find a colliding point within 100,000 draws; something about the collision probability assumption is wrong")
 	}
 
 	x, y := elliptic.Unmarshal(elliptic.P256(), point)

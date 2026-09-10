@@ -8,38 +8,28 @@ import "C"
 
 import "unsafe"
 
-// SecurePIN holds a PIN or passphrase in a C-heap buffer instead of Go's
-// garbage-collected heap.
+// SecurePIN holds a PIN in a buffer allocated with C.malloc. The Go GC does
+// not move or copy that buffer, so Zeroize can overwrite it and know that
+// copy is gone.
 //
-// Go strings are immutable by language contract, so once a secret becomes a
-// Go string there is no supported way to force the runtime to forget it —
-// the backing bytes may already have been copied, and overwriting them
-// after the fact through unsafe (a common but naive pattern) does not
-// change that. See, "PIN zeroize
-// method", for the full reasoning and the rejected alternative.
-//
-// A C.malloc'd buffer is memory the Go GC never owns, moves, or copies, so
-// it is memory we can positively, deterministically zero. That is the
-// property this type exists for.
+// It is not the only copy. withGoString hands the PIN to miekg/pkcs11 as a
+// Go string. Login in that binding (v1.1.2) calls C.CString, which makes a
+// second C buffer, and frees it after C_Login without zeroing it. That
+// copy is outside this package's control. docs/threat-model.md, "PIN
+// handling", records the residual and the two options.
 type SecurePIN struct {
 	buf unsafe.Pointer
 	n   C.size_t
 }
 
-// NewSecurePIN copies pin into a new C-heap buffer and zeroes pin in place.
-// pin is unusable (all-zero) after this call returns; the C-heap copy is
-// the only remaining copy this package is responsible for.
+// NewSecurePIN copies pin into a new C-heap buffer and zeroes pin in
+// place. pin is all-zero after this call returns.
 func NewSecurePIN(pin []byte) *SecurePIN {
 	n := C.size_t(len(pin))
 	var buf unsafe.Pointer
 	if n > 0 {
 		buf = C.malloc(n)
-		// The unsafe block is the point of this type, not an optimization
-		// in it. A PIN held in a Go []byte can be copied by the garbage
-		// collector on a stack or heap move, leaving a copy this package
-		// cannot find to overwrite; a C-heap buffer does not move, so
-		// Zeroize can guarantee the bytes it wrote over are the only ones
-		// that existed.
+		// A C-heap buffer does not move, so Zeroize can reach it later.
 		// nosemgrep: go.lang.security.audit.unsafe.use-of-unsafe-block
 		C.memcpy(buf, unsafe.Pointer(&pin[0]), n)
 	}
@@ -49,36 +39,30 @@ func NewSecurePIN(pin []byte) *SecurePIN {
 	return &SecurePIN{buf: buf, n: n}
 }
 
-// withGoString invokes fn with a Go string that ALIASES the C buffer's
-// bytes directly via unsafe.String (Go 1.20+) — this does not allocate a
-// second, Go-heap-owned copy of the PIN. fn must not retain the string
-// beyond its own call, since the buffer is freed by Zeroize.
+// withGoString calls fn with a Go string that aliases the C buffer through
+// unsafe.String, so no Go-heap copy is made here. fn must not keep the
+// string: Zeroize frees the buffer. The binding's Login still makes its
+// own C copy; see the type comment.
 func (p *SecurePIN) withGoString(fn func(string) error) error {
 	if p.n == 0 {
 		return fn("")
 	}
-	// Aliasing rather than copying, for the same reason: the alternative
-	// is string(C.GoBytes(...)), which allocates a second, Go-heap-owned
-	// copy of the PIN that Zeroize could never reach. The lifetime rule
-	// this depends on is stated on the method.
 	// nosemgrep: go.lang.security.audit.unsafe.use-of-unsafe-block
 	s := unsafe.String((*byte)(p.buf), int(p.n))
 	return fn(s)
 }
 
-// wipe overwrites the C-heap buffer with zeros without freeing it. Split
-// out from Zeroize so tests can verify the overwrite happened by reading
-// the buffer afterward — reading it post-free would be a use-after-free
-// read into memory glibc's allocator may have already reused for its own
-// free-list bookkeeping, which proves nothing about our memset.
+// wipe overwrites the buffer without freeing it. Tests read the buffer
+// after wipe to check the overwrite. Reading it after free would be a
+// use-after-free.
 func (p *SecurePIN) wipe() {
 	if p.buf != nil {
 		C.memset(p.buf, 0, p.n)
 	}
 }
 
-// Zeroize overwrites the C-heap buffer with zeros and frees it. Safe to
-// call more than once, and safe to call on a PIN that was never populated.
+// Zeroize overwrites the buffer and frees it. Safe to call more than once,
+// and on a PIN that was never populated.
 func (p *SecurePIN) Zeroize() {
 	if p.buf == nil {
 		return

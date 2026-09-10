@@ -1,11 +1,7 @@
 package store_test
 
-// One suite, both implementations — the same discipline internal/pkcs11's
-// conformance suite uses, for the same reason. Memory is what the rest of
-// the repository's tests run against, so any behaviour it does not share
-// with SQLite is a trap: a test suite that passes against the fake and a
-// service that behaves differently against the real store is worse than
-// having no fake at all.
+// One suite, both implementations. Memory is what the rest of the tests
+// run against, so any behaviour it does not share with SQLite is a trap.
 
 import (
 	"context"
@@ -20,10 +16,8 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
-// backend names one implementation and how to build it. reopen returns a
-// fresh handle to the *same* underlying state where that is meaningful, and
-// nil where it is not — Memory has no state to reopen, which is exactly the
-// property the restart tests exist to distinguish.
+// backend names one implementation. reopen returns a fresh handle to the
+// same state where that is meaningful, and nil for Memory.
 type backend struct {
 	name   string
 	open   func(t *testing.T) store.Store
@@ -65,16 +59,14 @@ func forEachBackend(t *testing.T, fn func(t *testing.T, b backend)) {
 	}
 }
 
-// messyTime is deliberately awkward: a non-UTC zone and sub-second
-// precision. Passing an already-normalized instant is what let the two
-// implementations disagree while the shared suite stayed green, so the suite
-// now hands them something only a real normalization can flatten.
+// messyTime has a non-UTC zone and sub-second precision, so only a real
+// normalization flattens it. Already normalized inputs let the two
+// implementations disagree while the suite stayed green.
 func messyTime(t *testing.T) time.Time {
 	t.Helper()
 	loc, err := time.LoadLocation("Asia/Istanbul")
 	if err != nil {
-		// A tzdata-less environment is not a reason to skip the precision
-		// half of the check.
+		// No tzdata: keep the precision half of the check.
 		return time.Now().Add(24 * time.Hour).Add(437 * time.Millisecond)
 	}
 	return time.Now().In(loc).Add(24 * time.Hour).Add(437 * time.Millisecond)
@@ -111,22 +103,20 @@ func TestStore_RecordAndGet(t *testing.T) {
 		if got.Serial.Cmp(rec.Serial) != 0 {
 			t.Fatalf("serial = %v, want %v", got.Serial, rec.Serial)
 		}
-		// The subject must survive the round trip intact, not merely
-		// approximately: this is the record of what the CA actually issued.
+		// The subject must survive the round trip intact.
 		if got.Subject.CommonName != rec.Subject.CommonName {
 			t.Fatalf("CommonName = %q, want %q", got.Subject.CommonName, rec.Subject.CommonName)
 		}
 		if len(got.Subject.Organization) != 1 || got.Subject.Organization[0] != rec.Subject.Organization[0] {
 			t.Fatalf("Organization = %v, want %v", got.Subject.Organization, rec.Subject.Organization)
 		}
-		// Both implementations must return the same normalized instant, not
-		// merely "something close to" what was passed in.
+		// Both implementations must return the same normalized instant.
 		wantNotAfter := store.NormalizeTime(rec.NotAfter)
 		if !got.NotAfter.Equal(wantNotAfter) {
 			t.Fatalf("NotAfter = %v, want the normalized %v", got.NotAfter, wantNotAfter)
 		}
 		if got.NotAfter.Location() != time.UTC {
-			t.Fatalf("NotAfter is in %v, want UTC — the two implementations must not differ on this", got.NotAfter.Location())
+			t.Fatalf("NotAfter is in %v, want UTC; the two implementations must not differ on this", got.NotAfter.Location())
 		}
 		if got.NotAfter.Nanosecond() != 0 {
 			t.Fatalf("NotAfter carries sub-second precision (%v) a CRL cannot express", got.NotAfter)
@@ -205,9 +195,8 @@ func TestStore_RevokeUnknownSerialFails(t *testing.T) {
 	})
 }
 
-// TestStore_RevokeIsIdempotent pins the contract that a retried revocation
-// succeeds without rewriting when or why the certificate was revoked. That
-// original record is what an incident review reads.
+// TestStore_RevokeIsIdempotent: a retried revocation succeeds without
+// rewriting when or why the certificate was revoked.
 func TestStore_RevokeIsIdempotent(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
 		ctx := t.Context()
@@ -264,9 +253,8 @@ func TestStore_CRLNumberIsStrictlyIncreasing(t *testing.T) {
 	})
 }
 
-// TestSQLite_RevocationSurvivesRestart is sub-task 3b.3's own Done-when
-// criterion. It is SQLite-only by nature: it asserts the exact property
-// Memory does not have, which is why the service never runs on Memory.
+// TestSQLite_RevocationSurvivesRestart is SQLite-only: it asserts the
+// property Memory does not have.
 func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "ca.db")
@@ -294,7 +282,7 @@ func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 		}
 	}()
 
-	// The process is gone. Everything below reads only what was persisted.
+	// Everything below reads only what was persisted.
 	st, err := store.OpenSQLite(ctx, path, nil, nil)
 	if err != nil {
 		t.Fatalf("OpenSQLite (after restart): %v", err)
@@ -306,7 +294,7 @@ func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 		t.Fatalf("Revoked after restart: %v", err)
 	}
 	if len(revoked) != 1 {
-		t.Fatalf("after restart the store holds %d revoked certificates, want 1 — a revoked certificate reappearing as valid is a security regression", len(revoked))
+		t.Fatalf("after restart the store holds %d revoked certificates, want 1; a revoked certificate reappearing as valid is a security regression", len(revoked))
 	}
 	if revoked[0].Serial.Cmp(rec.Serial) != 0 {
 		t.Fatalf("revoked serial = %v, want %v", revoked[0].Serial, rec.Serial)
@@ -328,9 +316,8 @@ func TestSQLite_RevocationSurvivesRestart(t *testing.T) {
 	}
 }
 
-// TestSQLite_CRLNumberSeedsAboveAClockValue documents the rebuild case: a
-// store that was lost and recreated must not restart the sequence at 1,
-// because verifiers still hold the numbers the old store issued.
+// TestSQLite_CRLNumberSeedsAboveAClockValue: a rebuilt store must not
+// restart the sequence at 1.
 func TestSQLite_CRLNumberSeedsAboveAClockValue(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.OpenSQLite(ctx, filepath.Join(t.TempDir(), "fresh.db"), nil, nil)
@@ -343,18 +330,15 @@ func TestSQLite_CRLNumberSeedsAboveAClockValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NextCRLNumber: %v", err)
 	}
-	// Bounded dynamically rather than by a hard-coded epoch, so the test
-	// asserts "seeded from roughly now" instead of "above a date someone
-	// picked once".
+	// Bounded by the clock, not by a fixed date.
 	lower := big.NewInt(time.Now().Add(-time.Hour).UnixMilli())
 	if n.Cmp(lower) < 0 {
 		t.Fatalf("a fresh store's first CRL number is %v, below %v; it must be seeded from the clock so a rebuilt store cannot reissue numbers verifiers already hold", n, lower)
 	}
 }
 
-// TestStore_ConcurrentUse re-establishes under -race that the store is safe
-// under the concurrent issuance load Phase 2.8 set for the service, and that
-// concurrency cannot hand out a duplicate CRL number.
+// TestStore_ConcurrentUse: the store is safe under concurrent issuance
+// and never hands out a duplicate CRL number.
 func TestStore_ConcurrentUse(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
 		ctx := t.Context()
@@ -366,10 +350,7 @@ func TestStore_ConcurrentUse(t *testing.T) {
 		errs := make([]error, workers)
 		numbers := make([]*big.Int, workers)
 
-		// A start barrier, so every goroutine is already spawned and waiting
-		// when the work begins. Without it the first workers finish before
-		// the last are scheduled and the test proves far less about
-		// contention than it appears to.
+		// A start barrier, so the goroutines contend.
 		start := make(chan struct{})
 
 		wg.Add(workers)
@@ -422,12 +403,8 @@ func s(t *testing.T, b backend) store.Store {
 	return st
 }
 
-// TestStore_RecordRejectsDuplicateSerial is the regression for the defect
-// this suite missed on the first pass: Record used to overwrite an existing
-// row, and because an incoming record carries StatusValid, re-recording an
-// already-revoked serial silently un-revoked it and dropped it out of the
-// CRL — the exact failure this package exists to prevent, reached through a
-// different door.
+// TestStore_RecordRejectsDuplicateSerial: Record used to overwrite an
+// existing row, and re-recording a revoked serial silently un-revoked it.
 func TestStore_RecordRejectsDuplicateSerial(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
 		ctx := t.Context()
@@ -464,9 +441,8 @@ func TestStore_RecordRejectsDuplicateSerial(t *testing.T) {
 	})
 }
 
-// TestStore_RevokeRejectsInvalidReason keeps a reason code no verifier can
-// interpret out of the CRL. Neither crypto/x509 nor the CRL builder checks
-// it, so this is the only place it can be caught.
+// TestStore_RevokeRejectsInvalidReason: a reason code no verifier can
+// interpret stays out of the CRL.
 func TestStore_RevokeRejectsInvalidReason(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
 		ctx := t.Context()
@@ -498,8 +474,8 @@ func TestStore_RevokeRejectsInvalidReason(t *testing.T) {
 	})
 }
 
-// TestStore_ReturnedSerialIsACopy pins that a caller cannot reach into the
-// store through the *big.Int it was handed.
+// TestStore_ReturnedSerialIsACopy: a caller cannot reach into the store
+// through the *big.Int it was handed.
 func TestStore_ReturnedSerialIsACopy(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, b backend) {
 		ctx := t.Context()
@@ -527,10 +503,8 @@ func TestStore_ReturnedSerialIsACopy(t *testing.T) {
 	})
 }
 
-// TestSQLite_CRLNumberFloorRaisesASeed covers the operator escape hatch for
-// the one case the clock seed cannot cover alone: a rebuilt store on a host
-// whose clock has moved backwards, where an operator who knows the last
-// issued number supplies it.
+// TestSQLite_CRLNumberFloorRaisesASeed covers a rebuilt store on a host
+// whose clock moved backwards.
 func TestSQLite_CRLNumberFloorRaisesASeed(t *testing.T) {
 	ctx := t.Context()
 	floor := new(big.Int).Add(big.NewInt(time.Now().UnixMilli()), big.NewInt(1_000_000_000))
@@ -551,8 +525,7 @@ func TestSQLite_CRLNumberFloorRaisesASeed(t *testing.T) {
 }
 
 // TestSQLite_CRLNumberFloorDoesNotTouchAnExistingCounter: the floor seeds,
-// it does not reset. An operator setting it on a healthy store must not
-// cause the sequence to jump or, worse, restart.
+// it does not reset.
 func TestSQLite_CRLNumberFloorDoesNotTouchAnExistingCounter(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "existing.db")
@@ -579,6 +552,6 @@ func TestSQLite_CRLNumberFloorDoesNotTouchAnExistingCounter(t *testing.T) {
 		t.Fatalf("NextCRLNumber: %v", err)
 	}
 	if want := new(big.Int).Add(seeded, big.NewInt(1)); next.Cmp(want) != 0 {
-		t.Fatalf("CRL number = %v after reopening with a floor, want %v — the floor must seed, not reset", next, want)
+		t.Fatalf("CRL number = %v after reopening with a floor, want %v; the floor must seed, not reset", next, want)
 	}
 }

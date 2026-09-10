@@ -1,12 +1,7 @@
-// Package pkcs11 provides a vendor-agnostic abstraction over PKCS#11 HSMs.
-//
-// The interface (VendorAdapter) is designed against the standard PKCS#11
-// surface only — no vendor extension leaks into it. A concrete adapter
-// (SoftHSM2Adapter, ProtectServerAdapter today; nShield/Luna later, see
-// and)
-// resolves vendor quirks internally and presents this one interface, the
-// way a travel power adapter presents one plug to an appliance regardless
-// of which wall socket is behind it.
+// Package pkcs11 is the vendor-agnostic PKCS#11 layer. VendorAdapter is
+// written against the standard PKCS#11 surface only. A concrete adapter
+// (SoftHSM2Adapter, ProtectServerAdapter) handles its vendor's differences
+// and presents this one interface.
 package pkcs11
 
 import (
@@ -15,40 +10,22 @@ import (
 	p11 "github.com/miekg/pkcs11"
 )
 
-// Workspace is a vendor HSM's isolated key space. nShield calls it a
-// softcard, Luna a partition, ProtectServer a slot; SoftHSM2 and the
-// PKCS#11 standard call it a token in a slot. Modeling it abstractly here,
-// rather than as a SoftHSM2-shaped concept, is what lets future vendor
-// adapters map their own term onto it without this interface changing.
+// Workspace is a vendor's isolated key space: an nShield softcard, a Luna
+// partition, a ProtectServer slot, a PKCS#11 token in a slot.
 //
-// # Which field identifies a token
+// Label is for addressing: what an operator types and what config.yaml
+// carries. Serial is for identity: what code compares to decide whether
+// two workspaces are the same token. PKCS#11 places no uniqueness
+// constraint on CKA_LABEL, and permits a slot ID to change between
+// reboots. CK_TOKEN_INFO.serialNumber is the field meant for identity;
+// RFC 7512 carries token= and serial= as separate URI attributes.
 //
-// Label is for *addressing* — it is what an operator knows and types, and
-// what config.yaml carries. Serial is for *identity* — it is what two
-// workspace values must be compared on to decide whether they are the same
-// physical token.
-//
-// The two are not interchangeable, and using Label as identity is a real
-// defect rather than a shortcut. PKCS#11 places no uniqueness constraint on
-// CKA_LABEL (it is documented as a description), so two distinct tokens may
-// legitimately carry the same one. SlotID is worse still: the standard
-// explicitly allows it to change between reboots and reinsertions, so it
-// identifies a position, not a token. CK_TOKEN_INFO.serialNumber is the
-// field the standard intends for this, which is why RFC 7512's PKCS#11 URI
-// scheme carries `token=` (label) and `serial=` as separate attributes for
-// exactly this reason.
-//
-// Serial is treated as an opaque string and never parsed. Vendors format it
-// very differently — SoftHSM2 emits a hex-like token serial, ProtectToolkit
-// emits forms such as "0000:57270" — and nothing here needs its structure,
-// only its equality.
+// Serial is an opaque string. SoftHSM2 emits a hex-like serial and
+// ProtectToolkit forms such as "0000:57270". Only equality is used.
 type Workspace struct {
 	SlotID uint
 	Label  string
-	// Serial is CK_TOKEN_INFO.serialNumber, trailing padding trimmed. It is
-	// the field to compare when deciding whether two Workspace values name
-	// the same token; see the type's doc comment for why Label and SlotID
-	// are not.
+	// Serial is CK_TOKEN_INFO.serialNumber with trailing padding trimmed.
 	Serial  string
 	Present bool
 }
@@ -61,10 +38,9 @@ const (
 	RoleSO   Role = Role(p11.CKU_SO)
 )
 
-// SessionOptions bounds a session's lifetime. Phase 1 requires both an idle
-// timeout and a maximum TTL be enforced
-// so a forgotten session cannot hold a login — and an HSM session slot —
-// open indefinitely.
+// SessionOptions bounds a session's lifetime with an idle timeout and a
+// maximum TTL, so a forgotten session cannot hold a token session slot
+// open.
 type SessionOptions struct {
 	IdleTimeout time.Duration
 	MaxTTL      time.Duration
@@ -80,9 +56,8 @@ func DefaultSessionOptions() SessionOptions {
 	}
 }
 
-// AttributeType identifies a PKCS#11 object attribute (a CKA_* constant).
-// Re-exported here so callers never need to import miekg/pkcs11 directly —
-// this package is the only vendor-facing surface.
+// AttributeType is a CKA_* constant, re-exported so callers never import
+// miekg/pkcs11.
 type AttributeType uint
 
 const (
@@ -131,18 +106,10 @@ const (
 	KeyTypeAES KeyType = KeyType(p11.CKK_AES)
 )
 
-// NumericAttribute builds an Attribute whose value is a numeric PKCS#11
-// field (CKA_CLASS, CKA_KEY_TYPE, and similar) — most commonly used to
-// build a FindObjects or Unwrap template.
-//
-// PKCS#11 encodes these as a native CK_ULONG, whose width is platform-
-// dependent (4 bytes on Windows' LLP64 model, 8 bytes on Linux/macOS's
-// LP64 model). This service targets Linux containers only,
-// so this hard-codes the 8-byte little-endian LP64 encoding rather than
-// taking on a runtime width check for a platform this project never runs
-// on. A caller building attributes by hand with the wrong width is exactly
-// the trap this helper exists to remove — see the Phase 1 test suite,
-// which hit it first.
+// NumericAttribute builds an Attribute whose value is a CK_ULONG, for
+// FindObjects and Unwrap templates. CK_ULONG is 8 bytes little-endian on
+// LP64 Linux, the only platform this service runs on. The width is not
+// detected at run time.
 func NumericAttribute(t AttributeType, v uint64) Attribute {
 	buf := make([]byte, 8)
 	for i := 0; i < 8; i++ {
@@ -169,9 +136,9 @@ type Mechanism struct {
 	Param []byte
 }
 
-// ObjectHandle is an opaque reference to an object living on the HSM (a key,
-// a certificate, ...). It is never the key material itself — for a private
-// key it is meaningless outside the session it was found or created in.
+// ObjectHandle is an opaque reference to an object on the token. It is
+// never the key material. The Signer comment in internal/ca says how its
+// scope across sessions is handled.
 type ObjectHandle uint
 
 // ECCurve selects the curve for GenerateKeyPair. The zero value is P256,
@@ -184,10 +151,8 @@ const (
 	P521
 )
 
-// KeyPairRequest carries the parameters for generating an asymmetric key
-// pair. Phase 1 supports EC only — the CA (Phase 2) is ECDSA P-256 by
-// default and this is the key type it needs; RSA support is deferred until
-// a phase actually requires it.
+// KeyPairRequest carries the parameters for generating an EC key pair.
+// Only EC is supported; the CA is ECDSA.
 type KeyPairRequest struct {
 	Curve  ECCurve
 	Label  string
@@ -195,14 +160,9 @@ type KeyPairRequest struct {
 	Sign   bool
 	Verify bool
 	// Extractable permits the private key to leave the token wrapped under
-	// another key (C_WrapKey). Default false, and it should stay false for
-	// every key this platform generates today: the wrap-based backup design
-	// that would need it is documented in
-	// docs/key-ceremony-and-recovery.md and not built.
-	//
-	// There is deliberately no Sensitive field. CKA_SENSITIVE is always
-	// set true by GenerateKeyPair — see the comment there for what happened
-	// when it was a caller's choice.
+	// another key (C_WrapKey). Default false. The ceremony sets it on the
+	// root when the operator asks for a backup-capable root. There is no
+	// Sensitive field: GenerateKeyPair always sets CKA_SENSITIVE true.
 	Extractable bool
 }
 
@@ -212,9 +172,9 @@ type KeyPairHandle struct {
 	Private ObjectHandle
 }
 
-// SecretKeyRequest carries the parameters for generating a symmetric key.
-// Phase 1 supports AES only, to exercise Encrypt/Decrypt/Wrap/Unwrap in the
-// VendorAdapter interface — EC keys cannot exercise those operations.
+// SecretKeyRequest carries the parameters for generating an AES key. AES
+// is the only symmetric type; it exists to exercise Encrypt, Decrypt, Wrap
+// and Unwrap.
 type SecretKeyRequest struct {
 	KeyBits     int // 128, 192, or 256; 0 defaults to 256
 	Label       string

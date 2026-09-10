@@ -1,12 +1,8 @@
 package ca
 
 // White-box tests for the checks ReissueIntermediate makes before it
-// touches a token. Every property here is a property of a certificate or of
-// a parameter struct, not of a key on an HSM, so these build certificates
-// in software: an HSM would add minutes of setup and prove nothing extra
-//. The token-touching half — the real rotation, the
-// missing-root-key refusal, the overwrite guard — is in reissue_test.go and
-// runs against every backend.
+// touches a token. They build certificates in software. The token-backed
+// half is in reissue_test.go.
 
 import (
 	"crypto/ecdsa"
@@ -22,8 +18,8 @@ import (
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
-// softRoot builds a self-signed CA certificate in software, shaped like the
-// one RunCeremony produces unless a field is overridden.
+// softRoot builds a self-signed CA certificate in software, shaped like
+// the one RunCeremony produces unless mutate changes a field.
 func softRoot(t *testing.T, mutate func(*x509.Certificate)) *x509.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -61,10 +57,8 @@ func TestCheckRootMaySign_AcceptsACeremonyShapedRoot(t *testing.T) {
 	}
 }
 
-// An unconstrained root — no pathLenConstraint at all — must be accepted.
-// This is the case the measured MaxPathLen == -1 exists to protect: a check
-// written as "MaxPathLen == 0" would reject it, and a root with no
-// constraint is perfectly entitled to certify a CA beneath it.
+// An unconstrained root, with no pathLenConstraint, must be accepted. A
+// check written as MaxPathLen == 0 would reject it.
 func TestCheckRootMaySign_AcceptsRootWithNoPathLenConstraint(t *testing.T) {
 	root := softRoot(t, func(c *x509.Certificate) { c.MaxPathLen = 0; c.MaxPathLenZero = false })
 	if root.MaxPathLen != -1 {
@@ -85,23 +79,18 @@ func TestCheckRootMaySign_Rejects(t *testing.T) {
 	}{
 		{
 			name: "not a CA",
-			// MaxPathLen must be cleared alongside IsCA: crypto/x509
-			// refuses to create a non-CA certificate that specifies one.
+			// crypto/x509 refuses a non-CA certificate with a path length.
 			root:     softRoot(t, func(c *x509.Certificate) { c.IsCA = false; c.MaxPathLen = 0 }),
 			validity: year,
 			wantErr:  ErrNotAnIntermediate,
 		},
 		{
-			// pathlen:0 means no CA may sit beneath this root, so the
-			// intermediate this would produce could sign nothing.
 			name:     "pathlen:0 root cannot certify a CA",
 			root:     softRoot(t, func(c *x509.Certificate) { c.MaxPathLen = 0; c.MaxPathLenZero = true }),
 			validity: year,
 			wantErr:  ErrNotAnIntermediate,
 		},
 		{
-			// the issuer-authority rule: the issuing certificate must assert the key
-			// usage the operation needs.
 			name:     "no keyCertSign",
 			root:     softRoot(t, func(c *x509.Certificate) { c.KeyUsage = x509.KeyUsageCRLSign }),
 			validity: year,
@@ -126,8 +115,6 @@ func TestCheckRootMaySign_Rejects(t *testing.T) {
 			wantErr:  ErrIssuerNotValid,
 		},
 		{
-			// the issuer-authority rule: the issuer must be able to cover the
-			// lifetime about to be granted. Rejected, never clamped.
 			name:     "intermediate would outlive the root",
 			root:     softRoot(t, func(c *x509.Certificate) { c.NotAfter = time.Now().Add(year) }),
 			validity: 5 * year,
@@ -147,12 +134,9 @@ func TestCheckRootMaySign_Rejects(t *testing.T) {
 	}
 }
 
-// A certificate that is not self-signed is not the root of this hierarchy,
-// however much its Subject claims to be. checkRootMaySign verifies the
-// signature rather than comparing Subject to Issuer, because those strings
-// are operator-controlled and say nothing about who actually signed
-// . The fixture is built to make the two disagree: Subject
-// and Issuer are identical strings, and the signature is by a different key.
+// A certificate that is not self-signed is not the root. checkRootMaySign
+// verifies the signature rather than comparing Subject to Issuer. The
+// fixture makes Subject and Issuer identical and signs with another key.
 func TestCheckRootMaySign_RejectsNonSelfSignedRoot(t *testing.T) {
 	const sharedCN = "soft test root"
 
@@ -203,8 +187,7 @@ func TestCheckRootMaySign_RejectsNonSelfSignedRoot(t *testing.T) {
 		t.Fatalf("parsing impostor certificate: %v", err)
 	}
 
-	// The property the test depends on: a Subject/Issuer comparison cannot
-	// tell these apart, so only the signature check can.
+	// A Subject/Issuer comparison cannot tell these apart.
 	if impostor.Subject.String() != impostor.Issuer.String() {
 		t.Fatalf("fixture is wrong: Subject %q != Issuer %q, so this would not test what it claims",
 			impostor.Subject, impostor.Issuer)
@@ -214,18 +197,10 @@ func TestCheckRootMaySign_RejectsNonSelfSignedRoot(t *testing.T) {
 	}
 }
 
-// checkRootMaySign's verdict depends on the instant it is given, which is
-// the property that makes calling it twice worth anything. Same root, same
-// requested validity, two different clocks: one inside the root's window,
-// one past it.
-//
-// This is the unit-level stand-in for the real hazard. In
-// ReissueIntermediate the two calls are separated by an HSM key generation,
-// a token login and an object search, so the certificate's NotAfter is
-// computed from a strictly later instant than the one validate() approved.
-// Reproducing that window end-to-end would need an injectable clock;
-// pinning the time-dependence here, plus the call at the template site,
-// is what the fix rests on.
+// checkRootMaySign's verdict depends on the instant it is given. Same
+// root, same validity, two clocks: one inside the root's window, one past
+// it. In ReissueIntermediate the two calls are separated by key
+// generation, a login and an object search.
 func TestCheckRootMaySign_VerdictDependsOnTheInstantGiven(t *testing.T) {
 	year := 365 * 24 * time.Hour
 	// A root with a little over a year left.
@@ -237,8 +212,7 @@ func TestCheckRootMaySign_VerdictDependsOnTheInstantGiven(t *testing.T) {
 	if err := checkRootMaySign(root, year, time.Now()); err != nil {
 		t.Fatalf("rejected a one-year intermediate under a root with a year and an hour left: %v", err)
 	}
-	// Two hours later the same request no longer fits, and the answer has
-	// to change with the clock rather than with the parameters.
+	// Two hours later the same request no longer fits.
 	later := time.Now().Add(2 * time.Hour)
 	err := checkRootMaySign(root, year, later)
 	if err == nil {
@@ -249,9 +223,8 @@ func TestCheckRootMaySign_VerdictDependsOnTheInstantGiven(t *testing.T) {
 	}
 }
 
-// The parameter validation that runs before any key is generated
-// . Every case here must be caught without an HSM being
-// reachable at all, which is what makes it safe to run this as pure logic.
+// The parameter validation that runs before any key is generated. No
+// token is reachable here.
 func TestReissueIntermediateParams_Validate(t *testing.T) {
 	root := softRoot(t, nil)
 	base := func() ReissueIntermediateParams {
@@ -285,9 +258,7 @@ func TestReissueIntermediateParams_Validate(t *testing.T) {
 		{"missing root CRL URL", func(p *ReissueIntermediateParams) { p.RootCRLURL = "" }},
 		{"missing root cert URL", func(p *ReissueIntermediateParams) { p.RootCertURL = "" }},
 		{"nil root certificate", func(p *ReissueIntermediateParams) { p.RootCert = nil }},
-		// An empty subject is checkable without an HSM, so validating before mutating says reject
-		// it before the first key exists. validateCSR applies the same test
-		// to a leaf; this one names a CA.
+		// An empty subject is rejected before the first key exists.
 		{"empty intermediate subject", func(p *ReissueIntermediateParams) { p.IntermediateSubject = pkix.Name{} }},
 		{"subject with only a country", func(p *ReissueIntermediateParams) {
 			p.IntermediateSubject = pkix.Name{Country: []string{"TR"}}

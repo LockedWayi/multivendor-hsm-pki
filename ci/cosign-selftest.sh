@@ -1,28 +1,19 @@
 #!/usr/bin/env bash
 #
-# Lateral tests for ci/cosign.sh's guards.
+# Tests for ci/cosign.sh's guards.
 #
-# Every check in that script exists because something failed open. A guard
-# nobody can trigger deliberately is a guard nobody has seen work, so each
-# one is exercised here against the boundary case it is meant to catch --
-# the same discipline as 4.6's "prove the gate fails" and 4.8's lateral
-# tests around the duplicate-key check.
+# Every check in that script exists because something failed open. Each is
+# exercised here against the case it catches.
 #
-# Run:  ci/cosign-selftest.sh
+#   ci/cosign-selftest.sh
 #
 # No downloads and no HSM: the cases that need a cosign use a stand-in that
-# prints one measured output shape. The strings are not invented -- each was
-# captured from a real binary before being reproduced here:
+# prints one measured output shape. The strings were captured from real
+# binaries:
 #
 #   "This cosign was not built with pkcs11-tool support!"  cosign-linux-amd64 v3.1.3
 #   "failed to load PKCS11 module"                         the pkcs11key build, no module
 #   "Listing tokens of PKCS11 module '...'"                the pkcs11key build, module present
-#
-# The stand-ins cover what the real binaries cannot produce on demand --
-# garbage, silence, a message that changes in some future release -- while
-# the end-to-end evidence stays what it was: the real pkcs11key build is
-# accepted and the real default build is refused, both recorded in
-# 4.9.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,9 +22,8 @@ trap "rm -rf '$WORK'" EXIT
 
 # shellcheck source=ci/cosign.sh
 source "$REPO_ROOT/ci/cosign.sh"
-# The sourced script sets -e for its own benefit, and it lands in this shell
-# too. Every case here deliberately runs a guard that is expected to fail, so
-# -e would end the suite at the first success.
+# The sourced script sets -e. Every case here runs a guard that is expected
+# to fail.
 set +e
 
 pass=0; fail=0
@@ -112,16 +102,9 @@ printf 'the binary that was already there\n' > "$GOOD"; chmod +x "$GOOD"
 before="$(sha256sum "$GOOD" | cut -d' ' -f1)"
 BIN_DIR="$WORK/installed"; COSIGN_BIN="$GOOD"
 COSIGN_SHA256="0000000000000000000000000000000000000000000000000000000000000000"
-# Compared as a set difference rather than a count. This suite runs from its
-# own mktemp directory, so "are there any temp dirs left" can never be no --
-# the first version of this check said so and could not fail.
-#
-# And the directory is asked of mktemp rather than assumed to be /tmp.
-# mktemp honours $TMPDIR, so a hardcoded /tmp/tmp.* glob finds nothing
-# wherever TMPDIR points elsewhere -- macOS puts it under /var/folders by
-# default, and any Linux shell can set it -- and the check would then pass
-# vacuously while a real leak went unseen. Measured: with TMPDIR elsewhere,
-# the glob matched 0 of 1 leaked directories.
+# Compared as a set difference, not a count: this suite runs from its own
+# mktemp directory. The directory is asked of mktemp, because it honours
+# TMPDIR and a hardcoded /tmp glob found nothing elsewhere.
 tmp_root="$(dirname "$(mktemp -d -u)")"
 leak_glob() { ls -d "$tmp_root"/tmp.* 2>/dev/null | sort; }
 tmp_before="$(leak_glob)"
@@ -144,8 +127,7 @@ echo
 echo "E. the Rekor check refuses a response that records nothing"
 rekor_fixture() { printf '%s' "$2" > "$WORK/$1.json"; echo "$WORK/$1.json"; }
 DIGEST="549398fbe5a2f930b4eb564c7bbe9588270566ffcc8c9cb45644c066714aa380"
-# The case that shipped: valid JSON, no entry. A loop over it checks nothing
-# and returns success, which reads as "publicly logged" to the caller.
+# Valid JSON, no entry. A loop over it checks nothing.
 expect refuse "E1 an empty object" \
     assert_rekor_records "$(rekor_fixture e1 '{}')" "$DIGEST"
 expect refuse "E2 an entry recording a different digest" \
@@ -153,10 +135,9 @@ expect refuse "E2 an entry recording a different digest" \
 
 echo
 echo "F. sign-artifact refuses a path the container cannot reach"
-# Measured before this guard existed: signing /etc/hostname made cosign hash
-# the *container's* /etc/hostname and sign it, successfully, under the right
-# key -- the wrong file, correctly signed. The check runs before signing, so
-# a throwaway PIN is enough to reach it and the token is never opened.
+# Signing /etc/hostname once hashed and signed the container's own
+# /etc/hostname. The check runs before signing, so a throwaway PIN reaches
+# it and no token is opened.
 expect refuse "F1 an artifact outside the repository" \
     env COSIGN_PKCS11_PIN=unused "$REPO_ROOT/ci/sign-artifact.sh" /etc/hostname
 expect refuse "F2 a bundle written outside the repository" \

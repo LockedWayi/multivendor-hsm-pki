@@ -2,8 +2,8 @@
 #
 # Captured 2026-09-04 on K3s v1.35.5+k3s1 via k3d.
 # Mechanism: built-in Pod Security Admission at 'restricted' (namespace
-# hsm-pki-dev). Sub-task 4.7 adds a Kyverno policy alongside this and
-# captures its rejection separately -- the two are different mechanisms
+# hsm-pki-dev). pod-hardening.yaml adds a Kyverno policy alongside this and
+# captures its rejection separately. The two are different mechanisms
 # and proving one says nothing about the other.
 #
 # Command:

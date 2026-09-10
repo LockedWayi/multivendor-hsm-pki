@@ -1,7 +1,7 @@
 # The build context is the repository root, and most of it has no business
 # being sent to the daemon or landing in a layer.
 
-# Version control: excluded deliberately, which is why the build passes
+# Version control: excluded, which is why the build passes
 # -buildvcs=false. Sending .git would also send every historical blob.
 .git
 .github

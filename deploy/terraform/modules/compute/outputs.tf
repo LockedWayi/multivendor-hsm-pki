@@ -23,7 +23,7 @@ output "status" {
   description = "Hostinger-reported provisioning status of the VPS."
 }
 
-# No output here carries a secret: `password` is deliberately not one of
+# No output here carries a secret: `password` is not one of
 # this module's managed attributes (see the README), so there is nothing
 # sensitive to mark. This is a design consequence, not an oversight --
 # recorded so a reader does not go looking for a `sensitive = true` that

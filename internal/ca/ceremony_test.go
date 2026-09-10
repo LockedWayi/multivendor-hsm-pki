@@ -26,10 +26,8 @@ const (
 	testRootCRLURL  = "http://pki.example.test/root.crl"
 	testRootCertURL = "http://pki.example.test/root.crt"
 
-	// The leaf-tier equivalents: where a certificate this intermediate
-	// issues tells a relying party to look. Distinct from the two above by
-	// design — the root's CRL covers the intermediate, the intermediate's
-	// covers the leaves.
+	// The leaf-tier URLs. The root's CRL covers the intermediate; the
+	// intermediate's covers the leaves.
 	testLeafCRLURL    = "http://pki.example.test/crl"
 	testLeafIssuerURL = "http://pki.example.test/intermediate.crt"
 )
@@ -52,10 +50,9 @@ func testCeremonyParams(b *ceremonyBackend) ca.CeremonyParams {
 	}
 }
 
-// TestRunCeremony_ProducesVerifiableChain is sub-task 3b.1's own Done-when
-// criterion: the ceremony runs against a clean two-token setup and produces
-// a chain openssl accepts, with the root showing pathlen:1 and the
-// intermediate pathlen:0.
+// TestRunCeremony_ProducesVerifiableChain: the ceremony runs against a
+// clean two-token setup and produces a chain openssl accepts, with the
+// root at pathlen:1 and the intermediate at pathlen:0.
 func TestRunCeremony_ProducesVerifiableChain(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		ctx := context.Background()
@@ -86,18 +83,16 @@ func TestRunCeremony_ProducesVerifiableChain(t *testing.T) {
 			t.Fatalf("intermediate cert is not validly signed by root cert: %v", err)
 		}
 
-		// CDP/AIA are set at ceremony time because they can never be added
-		// afterward without bringing the offline root back out to re-sign.
+		// CDP and AIA are set at ceremony time; they cannot be added later.
 		if len(interCert.CRLDistributionPoints) != 1 || interCert.CRLDistributionPoints[0] != testRootCRLURL {
 			t.Fatalf("intermediate CRLDistributionPoints = %v, want [%s]", interCert.CRLDistributionPoints, testRootCRLURL)
 		}
 		if len(interCert.IssuingCertificateURL) != 1 || interCert.IssuingCertificateURL[0] != testRootCertURL {
 			t.Fatalf("intermediate IssuingCertificateURL = %v, want [%s]", interCert.IssuingCertificateURL, testRootCertURL)
 		}
-		// No OCSP pointer until the responder exists in Phase 5b — pointing
-		// at an endpoint that is not there is worse than omitting it.
+		// No OCSP pointer: no responder exists.
 		if len(interCert.OCSPServer) != 0 {
-			t.Fatalf("intermediate OCSPServer = %v, want empty until Phase 5b", interCert.OCSPServer)
+			t.Fatalf("intermediate OCSPServer = %v, want empty; no responder exists", interCert.OCSPServer)
 		}
 
 		crl, err := x509.ParseRevocationList(result.RootCRLDER)
@@ -111,8 +106,7 @@ func TestRunCeremony_ProducesVerifiableChain(t *testing.T) {
 			t.Fatalf("freshly ceremony-produced root CRL has %d entries, want 0", len(crl.RevokedCertificateEntries))
 		}
 
-		// Both tokens must be left logged out — RunCeremony owns login and
-		// logout of each token for exactly the span it needs, never longer.
+		// Both tokens must be left logged out.
 		if b.adapter.TokenLoggedIn() {
 			t.Fatal("RunCeremony left a token authenticated after returning")
 		}
@@ -150,9 +144,8 @@ func TestRunCeremony_ProducesVerifiableChain(t *testing.T) {
 	})
 }
 
-// TestRunCeremony_RejectsSameTokenForBothRoles is the fail-closed guard
-// against the one input mistake that would silently defeat the whole point
-// of this phase's token-isolation decision.
+// TestRunCeremony_RejectsSameTokenForBothRoles: one token for both tiers
+// is refused.
 func TestRunCeremony_RejectsSameTokenForBothRoles(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		params := testCeremonyParams(b)
@@ -165,12 +158,10 @@ func TestRunCeremony_RejectsSameTokenForBothRoles(t *testing.T) {
 	})
 }
 
-// TestRunCeremony_DetectsSameTokenPresentedWithDifferentSerials is why the
-// empirical cross-visibility check exists alongside the serial comparison.
-// It fakes the case a serial check cannot catch — one token reported under
-// two identities — by handing the ceremony the same real token twice with
-// the serial rewritten on one copy. The serial guard passes; the
-// object-visibility check must still stop it.
+// TestRunCeremony_DetectsSameTokenPresentedWithDifferentSerials fakes the
+// case a serial check cannot catch: the same token handed in twice with
+// the serial rewritten on one copy. The object-visibility check must stop
+// it.
 func TestRunCeremony_DetectsSameTokenPresentedWithDifferentSerials(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		params := testCeremonyParams(b)
@@ -221,20 +212,16 @@ func TestRunCeremony_RejectsInvalidParams(t *testing.T) {
 		}
 
 		// Every case above must have been rejected before any key was
-		// created, so a valid ceremony can still run afterward against the
-		// same labels. If validation had let one through far enough to
-		// touch the HSM, this would fail with "refuses to overwrite an
-		// existing key label".
+		// created, so a valid ceremony still runs against the same labels.
 		if _, err := ca.RunCeremony(ctx, b.adapter, pk11.SessionOptions{}, testCeremonyParams(b)); err != nil {
 			t.Fatalf("a valid ceremony after the rejected ones failed, so validation mutated the tokens: %v", err)
 		}
 	})
 }
 
-// TestRunCeremony_ConcurrentRunsFailClosed drives several ceremonies at the
-// same token pair simultaneously. Exactly one may win: the rest must be
-// rejected by the anchor-login guard or the key-label guard, never interleave
-// key generation.
+// TestRunCeremony_ConcurrentRunsFailClosed runs several ceremonies at one
+// token pair at once. One may win; the rest must be rejected by the
+// anchor-login guard or the key-label guard.
 func TestRunCeremony_ConcurrentRunsFailClosed(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		ctx := context.Background()
@@ -263,9 +250,7 @@ func TestRunCeremony_ConcurrentRunsFailClosed(t *testing.T) {
 			t.Fatalf("%d of %d concurrent ceremonies succeeded, want exactly 1; errors: %v", succeeded, runs, errs)
 		}
 
-		// The winner's key label must resolve to exactly one object. A
-		// duplicate created through the check-then-act window would make
-		// NewSigner fail here rather than silently sign under a wrong key.
+		// The winner's key label must resolve to exactly one object.
 		if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), pk11.RoleUser); err != nil {
 			t.Fatalf("LoginToken: %v", err)
 		}
@@ -276,10 +261,8 @@ func TestRunCeremony_ConcurrentRunsFailClosed(t *testing.T) {
 	})
 }
 
-// TestRunCeremony_ConcurrentIssuanceUnderCeremonyIntermediate is the load
-// case that matters for this phase. Phase 2.8 established that issuance is
-// concurrency-safe under the anchor-login model; this re-establishes it
-// against an intermediate produced by the ceremony rather than by Bootstrap.
+// TestRunCeremony_ConcurrentIssuanceUnderCeremonyIntermediate: issuance
+// is concurrency-safe under an intermediate the ceremony produced.
 func TestRunCeremony_ConcurrentIssuanceUnderCeremonyIntermediate(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		ctx := context.Background()
@@ -338,9 +321,8 @@ func TestRunCeremony_ConcurrentIssuanceUnderCeremonyIntermediate(t *testing.T) {
 		}
 		wg.Wait()
 
-		// Every leaf must be issued, chain through the intermediate to the
-		// root, and carry a unique serial — a shared serial across
-		// concurrent issuance would be a real defect, not a cosmetic one.
+		// Every leaf must be issued, chain to the root, and carry a unique
+		// serial.
 		roots := x509.NewCertPool()
 		roots.AddCert(rootCert)
 		intermediates := x509.NewCertPool()
@@ -368,9 +350,8 @@ func TestRunCeremony_ConcurrentIssuanceUnderCeremonyIntermediate(t *testing.T) {
 	})
 }
 
-// TestRunCeremony_RefusesToOverwriteExistingKeyLabel proves the ceremony
-// fails closed rather than silently reusing or duplicating a key label an
-// earlier run already created.
+// TestRunCeremony_RefusesToOverwriteExistingKeyLabel: a label an earlier
+// run created is refused.
 func TestRunCeremony_RefusesToOverwriteExistingKeyLabel(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		ctx := context.Background()
@@ -384,25 +365,16 @@ func TestRunCeremony_RefusesToOverwriteExistingKeyLabel(t *testing.T) {
 	})
 }
 
-// TestRunCeremony_RootKeyExtractableIsOperatorControlled proves
-// CeremonyParams.RootKeyExtractable actually reaches the token's
-// CKA_EXTRACTABLE attribute in both directions — asked of the token, not
-// assumed from the request that was sent, the same discipline 3b.7
-// established after CKA_SENSITIVE turned out to be a silent lie on one
-// backend . Maintainer decision, 2026-08-31
-// (docs/key-ceremony-and-recovery.md, "Deciding root-key extractability"):
-// whether the root key can ever leave its token wrapped is an operator
-// choice made at ceremony time, not a fixed default baked into RunCeremony —
-// this is the regression test for that choice actually taking effect.
+// TestRunCeremony_RootKeyExtractableIsOperatorControlled: the flag reaches
+// the token's CKA_EXTRACTABLE in both directions, read back off the token.
 func TestRunCeremony_RootKeyExtractableIsOperatorControlled(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		for _, extractable := range []bool{true, false} {
 			t.Run(fmt.Sprintf("extractable=%v", extractable), func(t *testing.T) {
 				ctx := context.Background()
 				params := testCeremonyParams(b)
-				// Distinct labels per iteration: the ceremony refuses to
-				// overwrite a key label it has already used, and this test
-				// runs two ceremonies against the same pair of tokens.
+				// Distinct labels per iteration; the ceremony refuses a used
+				// label.
 				params.RootKeyLabel = b.label(fmt.Sprintf("root-key-ext-%v", extractable))
 				params.IntermediateKeyLabel = b.label(fmt.Sprintf("inter-key-ext-%v", extractable))
 				params.RootKeyExtractable = extractable
@@ -446,15 +418,10 @@ func TestRunCeremony_RootKeyExtractableIsOperatorControlled(t *testing.T) {
 	})
 }
 
-// TestRunCeremony_LeafDoesNotVerifyAgainstUnrelatedRoot proves the ceremony
-// output is bound to its own run (phase-3b-pki-hardening.md 3b.1's Done-when,
-// "rejection of a leaf signed directly by the root of a different ceremony
-// run"). The unrelated root is a plain software-generated self-signed
-// certificate rather than a second HSM ceremony: PKCS#11 modules support only
-// one C_Initialize per process, so a second ceremony against the same module
-// cannot run in the same test binary. What the test proves — that the chain
-// does not verify against a root it was not issued under — does not depend on
-// how that unrelated root's key was generated.
+// TestRunCeremony_LeafDoesNotVerifyAgainstUnrelatedRoot: the chain does
+// not verify against a root it was not issued under. The unrelated root is
+// a software-generated self-signed certificate; a second ceremony against
+// the same module cannot run in one process.
 func TestRunCeremony_LeafDoesNotVerifyAgainstUnrelatedRoot(t *testing.T) {
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skip("openssl not found on PATH")
@@ -483,9 +450,8 @@ func TestRunCeremony_LeafDoesNotVerifyAgainstUnrelatedRoot(t *testing.T) {
 	})
 }
 
-// selfSignedRootDER returns a fresh, software-generated self-signed root
-// certificate DER — used only as an "unrelated root" negative-test fixture,
-// never as a stand-in for HSM-backed key custody.
+// selfSignedRootDER returns a software-generated self-signed root, used
+// only as an unrelated root in a negative test.
 func selfSignedRootDER(t *testing.T, commonName string) []byte {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -509,10 +475,8 @@ func selfSignedRootDER(t *testing.T, commonName string) []byte {
 	return der
 }
 
-// issueTestLeaf logs into the intermediate token, issues one leaf through
-// ca.CA.Issue under the ceremony's intermediate, writes it as PEM under dir,
-// and logs the token back out. It exists so tests can prove the ceremony's
-// intermediate actually signs a working chain.
+// issueTestLeaf issues one leaf under the ceremony's intermediate, writes
+// it as PEM under dir, and logs the token out again.
 func issueTestLeaf(t *testing.T, b *ceremonyBackend, interCert *x509.Certificate, dir string) (path string, cert *x509.Certificate) {
 	t.Helper()
 	ctx := context.Background()

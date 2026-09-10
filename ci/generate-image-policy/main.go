@@ -1,59 +1,21 @@
 // Command generate-image-policy renders the admission policy that decides
 // which container images may run, from the published key inventory.
 //
-// # Why this is generated and not written
+// A policy with a public key pasted into it is a hard-coded verifier. On
+// the day image-signing-key-v1 is rotated, images signed by v2 would be
+// refused until somebody remembered this file. So the policy holds every
+// key the inventory lists as active or verify-only for the image purpose,
+// and a rotation is a regeneration.
 //
-// the key lifecycle says verifiers consume the inventory, never a hard-coded
-// key. An admission policy with a public key pasted into it is exactly the
-// hard-coded verifier that rule forbids, and the failure it produces is the
-// expensive kind: on the day `image-signing-key-v1` is rotated, images
-// signed by `-v2` are refused at admission and images signed by `-v1` still
-// pass, until somebody remembers this file. Rotation would then be a
-// breaking change to the cluster, which in practice means it never happens.
+// It emits two objects: an ImageValidatingPolicy, require-signed-images,
+// and a ValidatingPolicy, require-image-digest. The second matters: a
+// signature is over a digest, and a tag-named image can be repointed after
+// admission approved it.
 //
-// So the policy holds every key the inventory calls verifiable for the
-// image purpose -- `active` and `verify-only` together, which is what makes
-// a transition window expressible at all. Regenerating after a rotation is
-// one command, and the diff shows exactly which keys the cluster will trust.
-//
-// # What it emits
-//
-//	ImageValidatingPolicy  require-signed-images   every image carries a
-//	                                               signature by a key the
-//	                                               inventory vouches for
-//	ValidatingPolicy       require-image-digest    every image is named by
-//	                                               digest, never by tag
-//
-// The second is not a nicety. A signature is over a digest, so a tag-named
-// image is a pointer that can be repointed after admission has approved it
-// . Kyverno would resolve the tag and verify whatever it
-// resolved to, which answers a question about this instant rather than
-// about the thing that will run.
-//
-// # The document is verified before it is believed
-//
-// The inventory is signed precisely so that editing the file is not enough
-// to change what a verifier trusts — and this generator is a verifier: its
-// output IS what the cluster trusts. An earlier version read the document
-// and never the signature beside it, so a tampered inventory rendered
-// straight into an admission policy carrying the tamperer's key; the only
-// signature check lived in the test suite, which made the deploy path's
-// safety a convention ("the tests ran first") rather than a property of
-// the tool. Found by an independent audit, 2026-09-04.
-//
-// So three refusals now sit in front of the template, each fail-closed
-// :
-//
-//   - the detached signature must verify against the anchor
-//     (inventory-signing-key-v1.pub beside the inventory by default;
-//     -anchor and -signature override the paths, never the requirement);
-//   - valid_until must not have passed — a withheld update must not keep
-//     yesterday's list, and yesterday's keys, alive forever;
-//   - when -out names an existing rendering, the inventory's version must
-//     not be lower than the one that rendering was produced from (read
-//     from its own header). Stdout mode has no replacement target, so it
-//     has no floor to enforce — the committed-policy path is the one this
-//     protects.
+// The inventory is verified before it is believed. The generator's output
+// is what the cluster trusts, so it refuses an inventory whose detached
+// signature does not verify against the anchor, an expired inventory, and
+// an inventory older than the one its existing rendering came from.
 //
 // Usage:
 //
@@ -62,6 +24,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -84,11 +47,10 @@ func main() {
 
 // attestor is one trusted key, as the policy template needs it.
 type attestor struct {
-	// Name is a CEL identifier, so it is the label with everything CEL
-	// cannot carry removed.
+	// Name is a CEL identifier: the label with everything CEL cannot carry
+	// removed.
 	Name string
-	// Label and Status are the inventory's own words, written into the
-	// output as a comment so a reader can tell why a key is trusted.
+	// Label and Status are written into the output as a comment.
 	Label  string
 	Status string
 	PEM    string
@@ -97,10 +59,8 @@ type attestor struct {
 type policyData struct {
 	Source       string
 	InventoryVer int
-	// Anchor and ValidUntil record, in the rendered file's own header, what
-	// the document was checked against and how long it claimed to be good
-	// for — so a reader of the committed policy can see the verification
-	// happened without re-deriving it.
+	// Anchor and ValidUntil are written into the rendered file's header, so
+	// a reader sees what the document was checked against.
 	Anchor     string
 	ValidUntil string
 	Attestors  []attestor
@@ -113,13 +73,9 @@ func run(args []string, out io.Writer) error {
 	fs.SetOutput(out)
 	invPath := fs.String("inventory", "docs/keys/key-inventory.json", "path to the signed key inventory")
 	outPath := fs.String("out", "", "file to write; stdout when empty")
-	// Off by default, and it has to be: a policy that will talk plaintext
-	// to a registry cannot tell a real registry from anyone who can answer
-	// on its address, so the signature it fetches is whatever that party
-	// chose to serve. The local k3d registry speaks HTTP, so the dev
-	// cluster renders its own copy with this on -- visibly, in a file that
-	// says so -- rather than the committed policy carrying the concession
-	// for every environment.
+	// Off by default. A policy that fetches signatures over plaintext
+	// cannot tell the registry from anyone answering on its address. The
+	// dev overlay renders its own copy with this on for the k3d registry.
 	insecure := fs.Bool("allow-insecure-registry", false,
 		"let the policy fetch signatures over plaintext HTTP (development registries only)")
 	sigPath := fs.String("signature", "",
@@ -135,16 +91,8 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("reading the inventory: %w", err)
 	}
 
-	// The signature is checked before the document is even parsed. Order
-	// matters less for security here than for the error a reader gets: a
-	// tampered file usually still parses, so parse-first reports nothing,
-	// while verify-first names the actual problem — these bytes are not the
-	// bytes the offline key signed.
-	//
-	// The defaults resolve beside the inventory rather than against the
-	// working directory, so the documented invocation works from anywhere
-	// and the committed layout (docs/keys/ holds all three files) needs no
-	// flags at all.
+	// The signature is checked before the document is parsed, so a tampered
+	// file is reported as such. The defaults resolve beside the inventory.
 	resolvedSig := *sigPath
 	if resolvedSig == "" {
 		resolvedSig = *invPath + ".sig"
@@ -155,13 +103,13 @@ func run(args []string, out io.Writer) error {
 	}
 	sig, err := os.ReadFile(filepath.Clean(resolvedSig))
 	if err != nil {
-		return fmt.Errorf("reading the inventory's signature: %w — an inventory without its "+
-			"signature is a list of trusted keys anyone could have written; pass -signature "+
+		return fmt.Errorf("reading the inventory's signature: %w; an inventory without its "+
+			"signature is a list of trusted keys anyone could have written. Pass -signature "+
 			"if it lives somewhere other than beside the inventory", err)
 	}
 	anchorPEM, err := os.ReadFile(filepath.Clean(resolvedAnchor))
 	if err != nil {
-		return fmt.Errorf("reading the inventory signing anchor: %w — pass -anchor if it "+
+		return fmt.Errorf("reading the inventory signing anchor: %w; pass -anchor if it "+
 			"lives somewhere other than beside the inventory", err)
 	}
 	anchor, err := inventory.Entry{Label: filepath.Base(resolvedAnchor), PublicKeyPEM: string(anchorPEM)}.PublicKey()
@@ -169,10 +117,9 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("parsing the anchor %s: %w", resolvedAnchor, err)
 	}
 	if err := inventory.Verify(raw, sig, anchor); err != nil {
-		return fmt.Errorf("the inventory's signature does not verify against %s: %w — "+
-			"a policy rendered from an unverified inventory would let whoever edited the "+
-			"file choose which keys the cluster trusts, which is the exact attack the "+
-			"signature exists to refuse", resolvedAnchor, err)
+		return fmt.Errorf("the inventory's signature does not verify against %s: %w. "+
+			"A policy rendered from an unverified inventory would let whoever edited the "+
+			"file choose which keys the cluster trusts", resolvedAnchor, err)
 	}
 
 	inv, err := inventory.Parse(raw)
@@ -180,24 +127,20 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("parsing the inventory: %w", err)
 	}
 
-	// Freshness: an expired document is refused, not warned about. Without
-	// this, an attacker who can only *withhold* inventory updates keeps
-	// yesterday's list — and any key it has since retired — trusted forever
-	// (the freeze attack valid_until exists for; internal/inventory's
-	// package comment names it and correctly says it cannot enforce it
-	// alone — this is the consumer-side half).
-	if now := time.Now(); now.After(inv.ValidUntil) {
-		return fmt.Errorf("the inventory expired at %s (now %s): a stale list of trusted keys "+
-			"is refused rather than rendered — regenerate and re-sign it with "+
-			"hsm-pki-keytool generate-inventory", inv.ValidUntil.Format(time.RFC3339), now.Format(time.RFC3339))
+	// Freshness and key selection share one implementation with every
+	// other consumer: an expired document is refused, a not-yet-valid key
+	// is left out, a retired key is never included.
+	verifiable, err := inv.VerifiableAt(inventory.PurposeImage, time.Now())
+	if errors.Is(err, inventory.ErrExpired) {
+		return fmt.Errorf("%v. A stale list of trusted keys is refused rather than rendered. "+
+			"Regenerate and re-sign it with hsm-pki-keytool generate-inventory", err)
+	}
+	if err != nil {
+		return err
 	}
 
-	// Rollback: when this run replaces an existing rendering, the incoming
-	// inventory may not be older than the one that rendering came from — an
-	// old document can resurrect a retired key. The floor is read from the
-	// -out file's own header, which this generator has always written.
-	// Stdout mode replaces nothing, so it has no floor to enforce; the
-	// committed-policy path is the durable artifact this protects.
+	// An older inventory can resurrect a retired key. The floor is read
+	// from the -out file's own header. Stdout mode replaces nothing.
 	if *outPath != "" {
 		prev, err := previousRenderedVersion(*outPath)
 		if err != nil {
@@ -205,19 +148,15 @@ func run(args []string, out io.Writer) error {
 		}
 		if prev > 0 && inv.Version < prev {
 			return fmt.Errorf("the inventory is version %d but %s was rendered from version %d: "+
-				"refusing the rollback — an older list can resurrect a retired key. If replacing "+
-				"the rendering with an older inventory is genuinely intended, move the existing "+
-				"file aside first, so the decision is somebody's rather than this tool's "+
-				"", inv.Version, *outPath, prev)
+				"refusing the rollback; an older list can resurrect a retired key. If replacing "+
+				"the rendering with an older inventory is intended, move the existing "+
+				"file aside first", inv.Version, *outPath, prev)
 		}
 	}
 
-	verifiable := inv.Verifiable(inventory.PurposeImage)
 	if len(verifiable) == 0 {
-		// Refused rather than emitted. A policy with no attestors rejects
-		// every image, which is fail-closed and also useless -- it would
-		// stop the cluster and read as a broken policy rather than as an
-		// empty inventory.
+		// A policy with no attestors refuses every image and reads as a
+		// broken policy rather than an empty inventory.
 		return fmt.Errorf("the inventory lists no active or verify-only key for the image purpose, "+
 			"so there is nothing for the cluster to trust; provision one before generating a policy (%s)", *invPath)
 	}
@@ -229,8 +168,7 @@ func run(args []string, out io.Writer) error {
 		if name == "" {
 			return fmt.Errorf("key label %q has no characters CEL can carry in an identifier", e.Label)
 		}
-		// Two labels collapsing to one identifier would silently drop a
-		// key the inventory vouches for, so it fails rather than picks.
+		// Two labels collapsing to one identifier would drop a key.
 		if prev, dup := seen[name]; dup {
 			return fmt.Errorf("key labels %q and %q both become the CEL identifier %q; "+
 				"rename one before generating a policy", prev, e.Label, name)
@@ -244,9 +182,8 @@ func run(args []string, out io.Writer) error {
 		})
 	}
 
-	// Every list a pod can carry an image in. Enumerated rather than
-	// discovered, so a fourth one appearing in a future Kubernetes is a
-	// change somebody makes deliberately instead of a gap nobody sees.
+	// Every list a pod can carry an image in, enumerated so a new one is a
+	// change somebody makes.
 	lists := []string{"containers", "initContainers", "ephemeralContainers"}
 
 	var buf bytes.Buffer
@@ -286,21 +223,13 @@ func run(args []string, out io.Writer) error {
 	return nil
 }
 
-// renderedVersionPattern matches the header line every rendering carries
-// ("Rendered from <path> (version N) by"), which is where the rollback
-// check's floor comes from.
+// renderedVersionPattern matches the header line every rendering carries,
+// which is where the rollback floor comes from.
 var renderedVersionPattern = regexp.MustCompile(`Rendered from .+ \(version ([0-9]+)\)`)
 
 // previousRenderedVersion reads the inventory version out of the rendering
-// being replaced. It returns 0 when nothing exists at path yet — there is
-// no floor to enforce against a file that is not there.
-//
-// A file that exists but carries no version header is refused rather than
-// treated as version 0: it means -out points at something this generator
-// did not write, and quietly overwriting it — or quietly exempting it from
-// the rollback check — would each be a decision made by a missing header
-// rather than by a person (failing closed and the identity rule's "a lookup that cannot
-// identify its subject fails closed" applied to a file).
+// being replaced, or 0 when no file exists. A file with no version header
+// is refused: -out then points at something this generator did not write.
 func previousRenderedVersion(path string) (int, error) {
 	data, err := os.ReadFile(filepath.Clean(path))
 	if os.IsNotExist(err) {
@@ -313,7 +242,7 @@ func previousRenderedVersion(path string) (int, error) {
 	if m == nil {
 		return 0, fmt.Errorf("%s exists but carries no \"Rendered from ... (version N)\" header, "+
 			"so it is not a rendering this generator wrote and there is no version to check a "+
-			"rollback against — move it aside if overwriting it is intended", path)
+			"rollback against; move it aside if overwriting it is intended", path)
 	}
 	v, err := strconv.Atoi(string(m[1]))
 	if err != nil {
@@ -322,12 +251,9 @@ func previousRenderedVersion(path string) (int, error) {
 	return v, nil
 }
 
-// celIdentifier reduces a key label to something CEL can use as a name.
-//
-// `attestors.<name>` is an identifier, and a versioned label carries
-// hyphens, which an identifier cannot. Digits and letters survive in order,
-// so image-signing-key-v1 becomes imagesigningkeyv1 and the mapping is
-// obvious to a reader looking at both.
+// celIdentifier reduces a key label to a CEL identifier: letters and
+// digits survive in order, so image-signing-key-v1 becomes
+// imagesigningkeyv1.
 func celIdentifier(label string) string {
 	var b strings.Builder
 	for _, r := range label {

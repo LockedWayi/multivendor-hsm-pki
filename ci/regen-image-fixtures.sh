@@ -5,26 +5,18 @@
 #
 #   ci/regen-image-fixtures.sh
 #
-# Four repositories, differing only in what has been signed and by which
-# key. Three of them hold the *same bytes*, which is the point: a cosign
-# signature is stored per repository, so identical content is signed in one
-# place, signed by the wrong key in another, and unsigned in a third. That
-# is what lets the suite test the signature rule without the image content
-# being a variable.
+# Three repositories hold the same bytes and differ in what is signed and
+# by which key. A cosign signature is stored per repository.
 #
 #   signed      busybox, signed by image-signing-key-v1     must be admitted
 #   wrongkey    busybox, signed by artifact-signing-key-v1  wrong purpose
 #   unsigned    busybox, not signed                         no signature
 #
-# The service's own image is signed by ci/sign-image.sh as part of
-# deploy/k8s/overlays/dev/k3d-up.sh and is not recreated here.
+# The service's own image is signed by deploy/k8s/overlays/dev/k3d-up.sh.
 #
-# Digests are read back from the registry rather than from `docker inspect`.
-# They differ: the local daemon reports the digest of the manifest it holds,
-# which for a multi-architecture base is the index, while the registry
-# reports what it stored on push. Using the local one produced
-# MANIFEST_UNKNOWN from admission -- a fixture that looked right and named
-# an image the cluster could not resolve.
+# Digests are read back from the registry, not from docker inspect. The
+# local daemon reports the digest of the manifest it holds, which for a
+# multi-arch base is the index, while the registry reports what it stored.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

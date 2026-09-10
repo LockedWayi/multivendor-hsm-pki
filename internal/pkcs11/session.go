@@ -7,12 +7,10 @@ import (
 	p11 "github.com/miekg/pkcs11"
 )
 
-// Session wraps one PKCS#11 session handle and enforces the idle-timeout
-// and max-TTL budget it was opened with (
-// acceptance criteria). It carries no PKCS#11 call logic itself — that
-// belongs to the owning VendorAdapter, which serializes the underlying
-// stateful PKCS#11 calls. Session only tracks whether it is still allowed
-// to be used.
+// Session wraps one PKCS#11 session handle and enforces the idle timeout
+// and max TTL it was opened with. It carries no PKCS#11 call logic. The
+// owning adapter serializes the calls; Session only tracks whether it may
+// still be used.
 type Session struct {
 	mu          sync.Mutex
 	workspace   Workspace
@@ -25,9 +23,9 @@ type Session struct {
 	closed      bool
 }
 
-// touch fails closed the instant a session's budget is
-// exceeded, and records this call as activity otherwise. Every adapter
-// operation that uses a session must call this first.
+// touch fails closed once the session's budget is exceeded, and records
+// this call as activity otherwise. Every adapter operation that uses a
+// session calls it first.
 func (s *Session) touch() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -44,9 +42,8 @@ func (s *Session) touch() error {
 	return nil
 }
 
-// expired reports whether the session's budget has been exceeded without
-// mutating lastUsedAt — used by the adapter's background janitor to find
-// sessions to force-close even when nothing is actively using them.
+// expired reports whether the budget is exceeded, without touching
+// lastUsedAt. The janitor uses it.
 func (s *Session) expired() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

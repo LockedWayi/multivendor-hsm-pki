@@ -1,8 +1,9 @@
-# Local plugin cache and working state — reinitialized by `tofu init`
+# Local plugin cache and working state, reinitialized by `tofu init`
 **/.terraform/*
 
-# State: never committed. Phase 3.4 moves state to a remote, locked,
-# encrypted backend; until then a local *.tfstate must never land in git.
+# State: never committed. State lives in a remote, locked, encrypted
+# backend (docs/terraform-state-backend-setup.md). A local *.tfstate must
+# never land in git.
 *.tfstate
 *.tfstate.*
 
@@ -15,7 +16,7 @@ crash.*.log
 *.tfplan
 
 # Variable files carry the real, environment-specific values (including
-# backend credentials such as backend.tfvars, see 3.4) — only the
+# backend credentials such as backend.tfvars); only the
 # committed *.example companion documents the shape
 *.tfvars
 *.tfvars.json
@@ -32,6 +33,6 @@ override.tf.json
 .terraformrc
 terraform.rc
 
-# Deliberately NOT ignored: .terraform.lock.hcl — the provider dependency
+# Not ignored: .terraform.lock.hcl. The provider dependency
 # lock file contains no secrets and is committed so every environment and
 # every contributor resolves the identical, hash-verified provider build.

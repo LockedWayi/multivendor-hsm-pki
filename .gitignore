@@ -1,4 +1,4 @@
-# Secrets and local config — never commit these
+# Secrets and local config. Never commit these
 *.env
 .env
 *.pem
@@ -11,7 +11,7 @@ config.yaml
 config.yml
 
 # Proprietary vendor SDK material (Thales ProtectToolkit and friends).
-# Licensed, non-redistributable, and never vendored into this repository —
+# Licensed, non-redistributable, and never vendored into this repository;
 #. These patterns are a safety net, not the
 # policy; the policy is that vendor code lives outside the repo entirely.
 libctsw.so

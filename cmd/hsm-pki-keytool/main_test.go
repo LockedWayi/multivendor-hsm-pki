@@ -15,15 +15,9 @@ func requireSoftHSM2(t *testing.T) string {
 	return hsmtest.RequireSoftHSM2(t)
 }
 
-// initTwoTokens exposes the backend's two tokens to a CLI test: it puts the
-// PINs into environment variables, because the command takes the *name* of
-// the variable rather than a PIN value, and hands back the
-// labels the flags need.
-//
-// It used to provision SoftHSM2 tokens inline, which is why every ceremony
-// CLI test ran against one vendor. The tokens now come from
-// internal/hsmtest, so these run wherever the environment provides a
-// backend.
+// initTwoTokens puts the backend's PINs into environment variables, since
+// the command takes the variable's name, and returns the labels the flags
+// need.
 func initTwoTokens(t *testing.T, b *hsmtest.Backend) (rootPINEnv, interPINEnv string) {
 	t.Helper()
 	rootPINEnv, interPINEnv = "KEYTOOL_TEST_ROOT_PIN", "KEYTOOL_TEST_INTER_PIN"
@@ -32,20 +26,14 @@ func initTwoTokens(t *testing.T, b *hsmtest.Backend) (rootPINEnv, interPINEnv st
 	return rootPINEnv, interPINEnv
 }
 
-// ceremonyArgs builds a complete, valid flag set, so each test can mutate
-// exactly the one thing it is about.
-//
-// The key labels are run-scoped. A vendor whose tokens persist between runs
-// would otherwise hit the ceremony's own "refuses to overwrite an existing
-// key label" guard on the second run — which is the guard working, not a
-// test failure, but it makes the suite unrepeatable.
+// ceremonyArgs builds a complete, valid flag set. The key labels are
+// run-scoped, so a persistent token does not trip the overwrite guard on
+// the second run.
 func ceremonyArgs(t *testing.T, b *hsmtest.Backend, dir string) []string {
 	t.Helper()
 	rootPINEnv, interPINEnv := initTwoTokens(t, b)
-	// The command under test builds its own adapter over the same module,
-	// and ProtectToolkit refuses a second C_Initialize in one process. The
-	// harness's adapter has already resolved the token labels above, so it
-	// has nothing left to do — hand the module over.
+	// The command opens its own adapter over the same module, and
+	// ProtectToolkit refuses a second C_Initialize in one process.
 	b.Release()
 	return []string{
 		"-adapter", b.AdapterName,
@@ -80,11 +68,9 @@ func TestRunCeremonyCmd_ProducesArtifacts(t *testing.T) {
 	})
 }
 
-// TestRunCeremonyCmd_RequiresDistributionURLs pins that the ceremony cannot
-// be run without deciding where the root CRL and certificate will live.
-// These become extensions on a certificate that can never be re-signed
-// without bringing the offline root back out, so the decision has to happen
-// before the signature, not after.
+// TestRunCeremonyCmd_RequiresDistributionURLs: the ceremony cannot run
+// without the root CRL and certificate URLs, which become extensions on a
+// certificate the offline root signs once.
 func TestRunCeremonyCmd_RequiresDistributionURLs(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 
@@ -119,9 +105,9 @@ func TestRunCeremonyCmd_RefusesToOverwriteExistingOutput(t *testing.T) {
 	})
 }
 
-// TestFindWorkspace_AmbiguousLabelFailsClosed covers the case PKCS#11
-// explicitly permits and this tool must not resolve by guessing: two
-// distinct tokens carrying the same label.
+// TestFindWorkspace_AmbiguousLabelFailsClosed: two tokens with one label,
+// which PKCS#11 permits, must not be resolved by guessing. SoftHSM2 only:
+// no vendor backend provides that layout.
 func TestFindWorkspace_AmbiguousLabelFailsClosed(t *testing.T) {
 	modulePath := requireSoftHSM2(t)
 	dir := t.TempDir()
@@ -135,7 +121,7 @@ func TestFindWorkspace_AmbiguousLabelFailsClosed(t *testing.T) {
 	}
 	t.Setenv("SOFTHSM2_CONF", confPath)
 
-	// Two tokens, deliberately sharing one label.
+	// Two tokens sharing one label.
 	for i := 0; i < 2; i++ {
 		cmd := exec.Command("softhsm2-util", "--init-token", "--free",
 			"--label", "duplicate-label", "--so-pin", "000000", "--pin", "123456")
@@ -155,8 +141,7 @@ func TestFindWorkspace_AmbiguousLabelFailsClosed(t *testing.T) {
 		t.Fatal("findWorkspace resolved an ambiguous label instead of failing closed")
 	}
 
-	// With a serial supplied, the ambiguity is resolved and the lookup must
-	// return that exact token.
+	// With a serial supplied, the lookup returns that token.
 	wss, err := adapter.Workspaces(ctx)
 	if err != nil {
 		t.Fatalf("Workspaces: %v", err)

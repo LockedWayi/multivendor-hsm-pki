@@ -51,8 +51,8 @@ func TestSession_TouchMaxTTLExpiry(t *testing.T) {
 
 func TestSession_TouchExtendsIdleWindow(t *testing.T) {
 	s := newTestSessionState(30*time.Millisecond, time.Hour)
-	// Two touches inside the idle window keep the session alive past what
-	// a single 30ms budget would allow if it weren't being extended.
+	// Two touches inside the idle window keep the session alive past one
+	// 30ms budget.
 	time.Sleep(15 * time.Millisecond)
 	if err := s.touch(); err != nil {
 		t.Fatalf("first touch() = %v, want nil", err)
@@ -70,7 +70,7 @@ func TestSession_ExpiredDoesNotMutateState(t *testing.T) {
 		t.Fatal("expired() = false, want true")
 	}
 	if s.closed {
-		t.Fatal("expired() must not mark the session closed itself — only touch() and markClosed() do")
+		t.Fatal("expired() must not mark the session closed itself; only touch() and markClosed() do")
 	}
 }
 

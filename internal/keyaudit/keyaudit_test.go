@@ -27,13 +27,8 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// TestRepository_HonoursItsOwnKeyInventory is the mechanical half of
-// purpose separation and §3.7. Purpose separation is broken by a line in a
-// workflow file rather than by a function, so the check has to look at the
-// repository — a rule only a careful reader enforces lasts until the first
-// hurried afternoon.
-//
-// It touches no token: the inventory is a document and this reads files.
+// TestRepository_HonoursItsOwnKeyInventory checks the repository's own
+// configuration against its inventory. It touches no token.
 func TestRepository_HonoursItsOwnKeyInventory(t *testing.T) {
 	root := repoRoot(t)
 	findings, err := keyaudit.Audit(root)
@@ -45,28 +40,22 @@ func TestRepository_HonoursItsOwnKeyInventory(t *testing.T) {
 	}
 }
 
-// TestPublishedInventory_VerifiesAgainstThePublishedAnchor catches the
-// drift that matters most: a committed inventory that the committed anchor
-// did not sign. It would mean the document was edited after signing, which
-// is exactly the thing signing it was supposed to make impossible.
+// TestPublishedInventory_VerifiesAgainstThePublishedAnchor: a committed
+// inventory the committed anchor did not sign was edited after signing.
 func TestPublishedInventory_VerifiesAgainstThePublishedAnchor(t *testing.T) {
 	if err := keyaudit.VerifyPublishedInventory(repoRoot(t)); err != nil {
 		t.Fatalf("the committed key inventory does not verify against the committed inventory signing key: %v", err)
 	}
 }
 
-// TestAudit_CatchesACAKeyInAScript proves the check can fail. A guard that
-// has only ever been run against a clean repository has not been shown to be
-// a guard — the same discipline as the admission negative test in 4.7 and
-// the deliberately outdated image in 4.6.
+// TestAudit_CatchesACAKeyInAScript shows the check can fail.
 func TestAudit_CatchesACAKeyInAScript(t *testing.T) {
 	root := t.TempDir()
 	keys := filepath.Join(root, "docs", "keys")
 	if err := os.MkdirAll(keys, 0755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	// Copy the real published artifacts, so the fixture is the genuine
-	// document rather than a hand-written one that might not be valid.
+	// The real published artifacts, so the fixture is a valid document.
 	for _, name := range []string{"key-inventory.json", "image-signing-key-v1.pub", "artifact-signing-key-v1.pub"} {
 		data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "keys", name))
 		if err != nil {
@@ -95,10 +84,8 @@ func TestAudit_CatchesACAKeyInAScript(t *testing.T) {
 	}
 }
 
-// TestAudit_CatchesAKeyTheInventoryDoesNotList is the other half: a
-// consumer pointed at a key nobody published. Signing with it would produce
-// artifacts that every inventory-driven verifier rejects, and the failure
-// would surface at a relying party rather than at the build.
+// TestAudit_CatchesAKeyTheInventoryDoesNotList: a consumer pointed at a
+// key nobody published.
 func TestAudit_CatchesAKeyTheInventoryDoesNotList(t *testing.T) {
 	root := t.TempDir()
 	keys := filepath.Join(root, "docs", "keys")

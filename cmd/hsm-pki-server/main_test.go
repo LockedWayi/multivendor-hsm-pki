@@ -3,35 +3,21 @@ package main
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 )
 
-// requireSoftHSM2 skips the test when no SoftHSM2 module is present, the
-// same convention internal/pkcs11's conformance suite uses — this test
-// exercises real adapter calls, not just config parsing, so it needs an
-// actual PKCS#11 module.
-func requireSoftHSM2(t *testing.T) string {
-	t.Helper()
-	modulePath := os.Getenv("SOFTHSM2_MODULE")
-	if modulePath == "" {
-		modulePath = "/usr/lib/softhsm/libsofthsm2.so"
-	}
-	if _, err := os.Stat(modulePath); err != nil {
-		t.Skip("SoftHSM2 module not found — run inside the dev container (see CONTRIBUTING.md)")
-	}
-	return modulePath
-}
-
-func writeSoftHSM2Config(t *testing.T, modulePath, label string) string {
+// writeConfig writes a service configuration for one token of one backend.
+// The PIN is read from the MAIN_TEST_PIN variable, as the service does.
+func writeConfig(t *testing.T, adapterName, modulePath, label string) string {
 	t.Helper()
 	body := "pkcs11:\n" +
-		"  adapter: \"softhsm2\"\n" +
-		"  softhsm2:\n" +
+		"  adapter: \"" + adapterName + "\"\n" +
+		"  " + adapterName + ":\n" +
 		"    module_path: \"" + modulePath + "\"\n" +
 		"    workspace_label: \"" + label + "\"\n" +
 		"    pin_env: \"MAIN_TEST_PIN\"\n" +
@@ -51,132 +37,87 @@ func writeSoftHSM2Config(t *testing.T, modulePath, label string) string {
 	return path
 }
 
-func provisionToken(t *testing.T, label, pin string) {
-	t.Helper()
-	dir := t.TempDir()
-	tokenDir := filepath.Join(dir, "tokens")
-	if err := os.MkdirAll(tokenDir, 0700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	confPath := filepath.Join(dir, "softhsm2.conf")
-	conf := "directories.tokendir = " + tokenDir + "\n" +
-		"objectstore.backend = file\n" +
-		"log.level = ERROR\n"
-	if err := os.WriteFile(confPath, []byte(conf), 0600); err != nil {
-		t.Fatalf("WriteFile(softhsm2.conf): %v", err)
-	}
-	t.Setenv("SOFTHSM2_CONF", confPath)
-
-	cmd := exec.Command("softhsm2-util", "--init-token", "--free",
-		"--label", label, "--so-pin", "000000", "--pin", pin)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("softhsm2-util --init-token: %v: %s", err, out)
-	}
-}
-
 func TestVerifyHSMConnection_Success(t *testing.T) {
-	modulePath := requireSoftHSM2(t)
-	const label, pin = "main-test-ok", "123456"
-	provisionToken(t, label, pin)
-	t.Setenv("MAIN_TEST_PIN", pin)
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		t.Setenv("MAIN_TEST_PIN", b.PrimaryPIN)
+		cfg, err := config.Load(writeConfig(t, b.AdapterName, b.ModulePath, b.Primary.Label))
+		if err != nil {
+			t.Fatalf("config.Load: %v", err)
+		}
+		b.Release()
+		adapter, err := cfg.NewVendorAdapter()
+		if err != nil {
+			t.Fatalf("NewVendorAdapter: %v", err)
+		}
+		defer adapter.Close()
 
-	cfg, err := config.Load(writeSoftHSM2Config(t, modulePath, label))
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	adapter, err := cfg.NewVendorAdapter()
-	if err != nil {
-		t.Fatalf("NewVendorAdapter: %v", err)
-	}
-	defer adapter.Close()
-
-	ws, err := verifyHSMConnection(context.Background(), cfg, adapter)
-	if err != nil {
-		t.Fatalf("verifyHSMConnection: %v", err)
-	}
-	if ws.Label != label {
-		t.Fatalf("Workspace.Label = %q, want %q", ws.Label, label)
-	}
+		ws, err := verifyHSMConnection(context.Background(), cfg, adapter)
+		if err != nil {
+			t.Fatalf("verifyHSMConnection: %v", err)
+		}
+		if ws.Label != b.Primary.Label {
+			t.Fatalf("Workspace.Label = %q, want %q", ws.Label, b.Primary.Label)
+		}
+		if ws.Serial != b.Primary.Serial {
+			t.Fatalf("Workspace.Serial = %q, want %q", ws.Serial, b.Primary.Serial)
+		}
+	})
 }
 
 func TestVerifyHSMConnection_UnknownWorkspaceFails(t *testing.T) {
-	modulePath := requireSoftHSM2(t)
-	const realLabel, pin = "main-test-realtoken", "123456"
-	provisionToken(t, realLabel, pin)
-	t.Setenv("MAIN_TEST_PIN", pin)
-
-	// Config points at a workspace label that was never provisioned.
-	cfg, err := config.Load(writeSoftHSM2Config(t, modulePath, "no-such-workspace"))
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	adapter, err := cfg.NewVendorAdapter()
-	if err != nil {
-		t.Fatalf("NewVendorAdapter: %v", err)
-	}
-	defer adapter.Close()
-
-	if _, err := verifyHSMConnection(context.Background(), cfg, adapter); err == nil {
-		t.Fatal("verifyHSMConnection against an unprovisioned workspace succeeded, want an error")
-	}
-}
-
-func TestVerifyHSMConnection_WrongPINFails(t *testing.T) {
-	modulePath := requireSoftHSM2(t)
-	const label, realPIN = "main-test-wrongpin", "123456"
-	provisionToken(t, label, realPIN)
-	t.Setenv("MAIN_TEST_PIN", "000001")
-
-	cfg, err := config.Load(writeSoftHSM2Config(t, modulePath, label))
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	adapter, err := cfg.NewVendorAdapter()
-	if err != nil {
-		t.Fatalf("NewVendorAdapter: %v", err)
-	}
-	defer adapter.Close()
-
-	if _, err := verifyHSMConnection(context.Background(), cfg, adapter); err == nil {
-		t.Fatal("verifyHSMConnection with the wrong PIN succeeded, want an error")
-	}
-}
-
-// TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails is the identity rule on
-// the service side: a label that matches two tokens identifies neither.
-//
-// PKCS#11 specifies CKA_LABEL as a description and requires no uniqueness,
-// so taking the first match means the driver's enumeration order decides
-// which token holds the CA's key — and it may decide differently on the next
-// boot. cmd/hsm-pki-keytool already refused to choose here; the service used
-// to take the first hit, which is the defect this pins.
-func TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails(t *testing.T) {
-	modulePath := requireSoftHSM2(t)
-	const label, pin = "main-test-duplicate", "123456"
-
-	// Two tokens, one label, in a single token directory. SoftHSM2 permits
-	// it, which is the whole point: the standard does not forbid it either.
-	dir := t.TempDir()
-	tokenDir := filepath.Join(dir, "tokens")
-	if err := os.MkdirAll(tokenDir, 0700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	confPath := filepath.Join(dir, "softhsm2.conf")
-	conf := "directories.tokendir = " + tokenDir + "\nobjectstore.backend = file\nlog.level = ERROR\n"
-	if err := os.WriteFile(confPath, []byte(conf), 0600); err != nil {
-		t.Fatalf("WriteFile(softhsm2.conf): %v", err)
-	}
-	t.Setenv("SOFTHSM2_CONF", confPath)
-	for i := 0; i < 2; i++ {
-		cmd := exec.Command("softhsm2-util", "--init-token", "--free",
-			"--label", label, "--so-pin", "000000", "--pin", pin)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("softhsm2-util --init-token (%d): %v: %s", i, err, out)
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		t.Setenv("MAIN_TEST_PIN", b.PrimaryPIN)
+		cfg, err := config.Load(writeConfig(t, b.AdapterName, b.ModulePath, "no-such-workspace"))
+		if err != nil {
+			t.Fatalf("config.Load: %v", err)
 		}
-	}
-	t.Setenv("MAIN_TEST_PIN", pin)
+		b.Release()
+		adapter, err := cfg.NewVendorAdapter()
+		if err != nil {
+			t.Fatalf("NewVendorAdapter: %v", err)
+		}
+		defer adapter.Close()
 
-	cfg, err := config.Load(writeSoftHSM2Config(t, modulePath, label))
+		if _, err := verifyHSMConnection(context.Background(), cfg, adapter); err == nil {
+			t.Fatal("verifyHSMConnection against an unprovisioned workspace succeeded, want an error")
+		}
+	})
+}
+
+// A wrong PIN counts against the token's failed-login counter on a
+// vendor backend. One attempt per run is within what every token allows.
+func TestVerifyHSMConnection_WrongPINFails(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		t.Setenv("MAIN_TEST_PIN", "0"+b.PrimaryPIN)
+		cfg, err := config.Load(writeConfig(t, b.AdapterName, b.ModulePath, b.Primary.Label))
+		if err != nil {
+			t.Fatalf("config.Load: %v", err)
+		}
+		b.Release()
+		adapter, err := cfg.NewVendorAdapter()
+		if err != nil {
+			t.Fatalf("NewVendorAdapter: %v", err)
+		}
+		defer adapter.Close()
+
+		if _, err := verifyHSMConnection(context.Background(), cfg, adapter); err == nil {
+			t.Fatal("verifyHSMConnection with the wrong PIN succeeded, want an error")
+		}
+	})
+}
+
+// TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails provisions two
+// tokens with one label. PKCS#11 does not require CKA_LABEL to be unique,
+// and the service must refuse to choose between them. This runs on
+// SoftHSM2 only: a vendor's tokens are provisioned by hand and no test
+// creates a duplicate label there.
+func TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails(t *testing.T) {
+	modulePath := hsmtest.RequireSoftHSM2(t)
+	const label = "main-test-duplicate"
+	pins := hsmtest.NewSoftHSM2Tokens(t, label, label)
+	t.Setenv("MAIN_TEST_PIN", pins[0])
+
+	cfg, err := config.Load(writeConfig(t, "softhsm2", modulePath, label))
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
@@ -190,8 +131,8 @@ func TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("verifyHSMConnection chose between two tokens sharing a label, want a refusal")
 	}
-	// The error has to be usable: an operator needs to know which tokens
-	// collided, and serial is the field that distinguishes them.
+	// The operator needs to know which tokens collided. The serial is the
+	// field that tells them apart.
 	if !strings.Contains(err.Error(), "matches 2 tokens") {
 		t.Fatalf("error %q does not say the label was ambiguous", err)
 	}

@@ -15,11 +15,8 @@ import (
 )
 
 // provisionOn generates one signing key on ws and returns its public PEM.
-//
-// Login and logout bracket each call rather than wrapping the whole setup,
-// because PKCS#11 authenticates a token for the whole application: holding
-// one token authenticated while logging into another is exactly what
-// LoginToken refuses, and the tokens here are deliberately two.
+// Login and logout bracket each call: LoginToken refuses while another
+// token is authenticated.
 func provisionOn(t *testing.T, b *hsmtest.Backend, ws pk11.Workspace, pin, label string) []byte {
 	t.Helper()
 	ctx := context.Background()
@@ -46,9 +43,8 @@ func provisionOn(t *testing.T, b *hsmtest.Backend, ws pk11.Workspace, pin, label
 }
 
 // inventoryFixture provisions the two supply-chain keys on the primary
-// token and the inventory signing key on the secondary, then hands back the
-// labels and a ready flag set. It releases the module afterwards, because
-// the command opens its own adapter.
+// token and the inventory signing key on the secondary, then releases the
+// module because the command opens its own adapter.
 type inventoryFixture struct {
 	dir           string
 	imageLabel    string
@@ -69,13 +65,9 @@ func newInventoryFixture(t *testing.T, b *hsmtest.Backend) inventoryFixture {
 		invKeyLabel:   b.Label("inventory-signing-key-v1"),
 	}
 
-	// Every key here is generated through the *same* adapter instance, and
-	// that is load-bearing rather than incidental. ProtectToolkit-C 7.3.3 in
-	// software emulation seeds its RNG per C_Initialize, so the first key
-	// generated after each library initialisation is the same key every
-	// time. A fixture that opened a second
-	// adapter to make v2 would get v1's key back, and the failure would
-	// look like a bug in the inventory rather than what it is.
+	// Every key is generated through the same adapter. ProtectToolkit-C
+	// 7.3.3 software emulation seeds its RNG per C_Initialize, so a second
+	// adapter would produce v1's key again for v2.
 	provisionOn(t, b, b.Primary, b.PrimaryPIN, f.imageLabel)
 	provisionOn(t, b, b.Primary, b.PrimaryPIN, f.imageLabelV2)
 	provisionOn(t, b, b.Primary, b.PrimaryPIN, f.artifactLabel)
@@ -107,11 +99,9 @@ func (f inventoryFixture) signaturePath() string {
 	return filepath.Join(f.dir, "key-inventory.json.sig")
 }
 
-// TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts is the
-// end-to-end claim: a signature made by a key that never left an HSM, over
-// a document a foreign implementation can read and check with the recipe
-// this repository publishes. Verifying it with our own
-// inventory.Verify would prove only that the package agrees with itself.
+// TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts: a signature
+// made by a key that never left a token, over a document openssl checks
+// with the published recipe.
 func TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		f := newInventoryFixture(t, b)
@@ -137,7 +127,7 @@ func TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts(t *testing.T) {
 		if got := inv.Active(inventory.PurposeArtifact); len(got) != 1 || got[0].Label != f.artifactLabel {
 			t.Errorf("Active(artifact) = %+v, want just %s", got, f.artifactLabel)
 		}
-		// No private material anywhere in a document that gets published.
+		// No private material.
 		if strings.Contains(string(document), "PRIVATE") {
 			t.Error("the inventory mentions PRIVATE")
 		}
@@ -156,8 +146,7 @@ func TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts(t *testing.T) {
 			t.Fatalf("openssl rejected an HSM-made inventory signature: %v\n%s", err, out)
 		}
 
-		// And it must reject a changed document, or the check above only
-		// proves openssl says yes to whatever it is handed.
+		// And a changed document must be rejected.
 		tampered := append([]byte(nil), document...)
 		tampered[len(tampered)/2] ^= 0x01
 		bad := filepath.Join(f.dir, "tampered.json")
@@ -171,11 +160,8 @@ func TestRunGenerateInventoryCmd_ProducesADocumentOpenSSLAccepts(t *testing.T) {
 	})
 }
 
-// TestRunGenerateInventoryCmd_RefusesOneTokenForBoth is the security
-// property the whole document rests on. A list of trusted keys signed by a
-// key on the same token authorises whoever holds that token to add their
-// own key — so the two tokens have to actually be two, measured by serial
-// rather than by the label an operator typed.
+// TestRunGenerateInventoryCmd_RefusesOneTokenForBoth: a list signed by a
+// key on the same token authorises whoever holds it. Measured by serial.
 func TestRunGenerateInventoryCmd_RefusesOneTokenForBoth(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		f := newInventoryFixture(t, b)
@@ -194,10 +180,9 @@ func TestRunGenerateInventoryCmd_RefusesOneTokenForBoth(t *testing.T) {
 	})
 }
 
-// TestRunGenerateInventoryCmd_RefusesToOverwriteWithoutTheCurrentDocument
-// protects the two fields that only exist in the previous file: the version
-// counter and every valid_from. Regenerating without reading it would reset
-// both, which silently turns a rotation into a rollback.
+// TestRunGenerateInventoryCmd_RefusesToOverwriteWithoutTheCurrentDocument:
+// the version counter and every valid_from exist only in the previous
+// file.
 func TestRunGenerateInventoryCmd_RefusesToOverwriteWithoutTheCurrentDocument(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		f := newInventoryFixture(t, b)
@@ -222,11 +207,9 @@ func TestRunGenerateInventoryCmd_RefusesToOverwriteWithoutTheCurrentDocument(t *
 	})
 }
 
-// TestRunGenerateInventoryCmd_RotationBumpsVersionAndKeepsHistory walks the
-// lifecycle the key lifecycle describes: a new version arrives active, the
-// previous one becomes verify-only, and signatures it already made keep
-// verifying. The version counter has to advance, or a verifier cannot tell
-// a rollback from an update.
+// TestRunGenerateInventoryCmd_RotationBumpsVersionAndKeepsHistory: a new
+// version arrives active, the previous one becomes verify-only, and the
+// version counter advances.
 func TestRunGenerateInventoryCmd_RotationBumpsVersionAndKeepsHistory(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		f := newInventoryFixture(t, b)
@@ -238,9 +221,7 @@ func TestRunGenerateInventoryCmd_RotationBumpsVersionAndKeepsHistory(t *testing.
 			t.Fatalf("Parse: %v", err)
 		}
 
-		// Rotate the image key: v2 is already on the token (the fixture
-		// made it), so this is the inventory half of the lifecycle — v1
-		// becomes verify-only, v2 becomes active.
+		// v2 is already on the token; this is the inventory half.
 		v2 := f.imageLabelV2
 		args := replaceFlag(f.args, "-key", "image:"+f.imageLabel+":verify-only")
 		args = append(args, "-key", "image:"+v2+":active", "-in", f.documentPath())
@@ -255,16 +236,14 @@ func TestRunGenerateInventoryCmd_RotationBumpsVersionAndKeepsHistory(t *testing.
 		if after.Version != before.Version+1 {
 			t.Errorf("version = %d, want %d", after.Version, before.Version+1)
 		}
-		// The new version signs; the old one only verifies. That gap is
-		// the entire reason a verifier reads a list rather than a key.
+		// The new version signs; the old one only verifies.
 		if got := after.Active(inventory.PurposeImage); len(got) != 1 || got[0].Label != v2 {
 			t.Errorf("Active(image) = %+v, want just %s", got, v2)
 		}
 		if got := after.Verifiable(inventory.PurposeImage); len(got) != 2 {
 			t.Errorf("Verifiable(image) = %d entries, want 2 (v1 verify-only and v2 active)", len(got))
 		}
-		// valid_from is a historical fact and must survive regeneration,
-		// or every key looks as though it were provisioned today.
+		// valid_from survives regeneration.
 		for _, e := range after.Keys {
 			if e.Label != f.imageLabel {
 				continue
@@ -282,11 +261,8 @@ func TestRunGenerateInventoryCmd_RotationBumpsVersionAndKeepsHistory(t *testing.
 	})
 }
 
-// TestRunGenerateInventoryCmd_RefusesToCallALiveKeyRetired is the check
-// that keeps the document from asserting something about the token that is
-// not true. "Retired" means destroyed on the token;
-// publishing the claim while the private key is still there would make the
-// inventory a statement nobody measured.
+// TestRunGenerateInventoryCmd_RefusesToCallALiveKeyRetired: retired means
+// destroyed on the token.
 func TestRunGenerateInventoryCmd_RefusesToCallALiveKeyRetired(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		f := newInventoryFixture(t, b)
@@ -307,9 +283,8 @@ func TestRunGenerateInventoryCmd_RefusesToCallALiveKeyRetired(t *testing.T) {
 	})
 }
 
-// TestRunGenerateInventoryCmd_RefusesARetiredKeyItHasNeverSeen covers the
-// other half: a retired key's public half can only come from the document
-// that listed it while it existed, because the key itself is gone.
+// TestRunGenerateInventoryCmd_RefusesARetiredKeyItHasNeverSeen: a retired
+// key's public half comes only from the document that listed it.
 func TestRunGenerateInventoryCmd_RefusesARetiredKeyItHasNeverSeen(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		f := newInventoryFixture(t, b)
@@ -337,8 +312,7 @@ func TestKeySpecs_Set(t *testing.T) {
 	if len(k) != 1 || k[0].purpose != inventory.PurposeImage || k[0].status != inventory.StatusActive {
 		t.Fatalf("parsed spec = %+v", k)
 	}
-	// A status this tool defaulted would be a lifecycle decision made by a
-	// default value, so an incomplete spec is refused rather than filled in.
+	// An incomplete spec is refused, not filled in.
 	for _, bad := range []string{"image:image-signing-key-v1", "image::active", ":label:active", "image:label:active:extra", ""} {
 		var k keySpecs
 		if err := k.Set(bad); err == nil {
@@ -366,8 +340,7 @@ func mustRead(t *testing.T, path string) []byte {
 	return data
 }
 
-// replaceFlag returns args with the first occurrence of name's value
-// replaced, so a test can change one thing about a valid flag set.
+// replaceFlag returns args with name's value replaced.
 func replaceFlag(args []string, name, value string) []string {
 	out := append([]string(nil), args...)
 	for i, a := range out {

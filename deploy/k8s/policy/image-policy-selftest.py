@@ -125,7 +125,7 @@ def check_ephemeral_unsigned():
             input=json.dumps(live), capture_output=True, text=True)
         msg = (r.stderr or r.stdout).strip().replace("\n", " ")
         if r.returncode == 0:
-            return False, "ATTACHED — an unsigned image joined a running pod"
+            return False, "ATTACHED: an unsigned image joined a running pod"
         if "signature by a key" in msg:
             return True, "refused, naming the signature rule"
         return False, f"refused for the wrong reason: {msg[:110]}"
@@ -146,7 +146,7 @@ def ensure_namespace():
         "metadata": {
             "name": NAMESPACE,
             "annotations": {
-                "hsm-pki.io/purpose": "deliberately unlabelled, so Kyverno is "
+                "hsm-pki.io/purpose": "left unlabelled, so Kyverno is "
                 "the only thing that can refuse a pod here"
             },
         },
@@ -163,7 +163,7 @@ def main():
         if want is None:
             ok, detail = admitted, ("admitted" if admitted else f"REFUSED: {message[:110]}")
         elif admitted:
-            ok, detail = False, "ADMITTED — this rule does not fire"
+            ok, detail = False, "ADMITTED: this rule does not fire"
         elif want in message:
             ok, detail = True, "refused, naming its own rule"
         else:

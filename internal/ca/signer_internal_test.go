@@ -1,14 +1,10 @@
 package ca
 
-// A white-box (package ca, not ca_test) test file, for the one thing this
-// package's black-box tests structurally cannot reach: forcing a session
-// to already be expired by the time Sign uses it. NewSigner itself opens a
-// session with whatever SessionOptions it is given, so constructing a
-// Signer with an already-expired budget fails during construction, before
-// Sign is ever reached — there is no way to reproduce "the session Sign
-// opens turns out to be expired" from outside the package without either a
-// real sleep racing a timeout (flaky) or reaching into the unexported
-// sessionOpts field this way (deterministic).
+// A white-box test, for the one case the black-box tests cannot reach:
+// a session that is already expired when Sign uses it. NewSigner opens a
+// session with the options it is given, so an expired budget fails
+// during construction. This test sets the unexported sessionOpts after
+// construction, which is deterministic where a real sleep would be flaky.
 
 import (
 	"context"
@@ -32,16 +28,14 @@ func requireSoftHSM2Internal(t *testing.T) string {
 		modulePath = "/usr/lib/softhsm/libsofthsm2.so"
 	}
 	if _, err := os.Stat(modulePath); err != nil {
-		t.Skip("SoftHSM2 module not found — run inside the dev container (see CONTRIBUTING.md)")
+		t.Skip("SoftHSM2 module not found; run inside the dev container (see CONTRIBUTING.md)")
 	}
 	return modulePath
 }
 
-// TestSigner_Sign_ExpiredSessionFailsClosed covers Phase 2 sub-task 2.7's
-// session-expiry failure path: a Sign call whose freshly opened session has
-// already exceeded its budget by the time Login touches it must fail
-// closed with an error identifiable as a session-expiry failure, never
-// hang or panic.
+// TestSigner_Sign_ExpiredSessionFailsClosed: a Sign call whose fresh
+// session is already past its budget fails with a session-expiry error
+// and never hangs.
 func TestSigner_Sign_ExpiredSessionFailsClosed(t *testing.T) {
 	modulePath := requireSoftHSM2Internal(t)
 
@@ -84,7 +78,7 @@ func TestSigner_Sign_ExpiredSessionFailsClosed(t *testing.T) {
 	if ws.Label == "" {
 		t.Fatalf("workspace %q not found among %+v", label, wss)
 	}
-	// Establish the anchor login once, exactly as Bootstrap does.
+	// The anchor login, once.
 	if err := adapter.LoginToken(ctx, ws, []byte(pin), pk11.RoleUser); err != nil {
 		t.Fatalf("LoginToken: %v", err)
 	}
@@ -99,14 +93,13 @@ func TestSigner_Sign_ExpiredSessionFailsClosed(t *testing.T) {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
 
-	// Built with a normal budget, so construction (which opens its own
-	// session to read the public key) succeeds.
+	// Built with a normal budget, so construction succeeds.
 	signer, err := NewSigner(ctx, adapter, ws, pk11.SessionOptions{}, keyLabel, pk11.P256)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
 
-	// Force every subsequent session Sign opens to already be past budget.
+	// Every session Sign opens is now already past budget.
 	signer.sessionOpts = pk11.SessionOptions{IdleTimeout: time.Nanosecond, MaxTTL: time.Nanosecond}
 
 	digest := sha256.Sum256([]byte("hsm-pki-platform phase 2 session-expiry test"))
