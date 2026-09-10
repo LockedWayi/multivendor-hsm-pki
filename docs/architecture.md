@@ -347,11 +347,15 @@ too: ProtectServer only — it would make the repository unreproducible for
 anyone without a Thales entitlement, and a portfolio piece nobody can run is a
 claim rather than a demonstration.
 
-Chosen: both, behind one interface. SoftHSM2 carries CI and reproducibility;
-ProtectServer carries the proof. The evidence is specifically that *one
-interface satisfies both without changing* — that is what distinguishes a real
-abstraction from a wrapper around a single vendor, and it is the single most
-load-bearing claim in this repository.
+Chosen: both, behind one interface. SoftHSM2 carries CI and
+reproducibility; ProtectToolkit-C software emulation is the second
+implementation. Both adapters wrap the shared implementation with no
+overrides. Two spec-conformant implementations needing no vendor-specific
+code is evidence that the interface is usable across vendors. It is not
+proof that the abstraction is complete. nShield and Luna are untested, and
+that is where differences are expected: the login and key protection
+model, `CKA_ID` and label handling, EC point encoding, session limits,
+error codes.
 
 The cost is accepted deliberately: the ProtectServer path cannot run in public
 CI, because the SDK is proprietary and is never vendored here. Phase 1's

@@ -115,9 +115,12 @@ exception to the every-backend rule in `cmd/`.
 
 What a vendor must provide before it can join `hsmtest`'s registry:
 
-1. **An adapter** implementing `pkcs11.VendorAdapter`. If the existing core
-   suffices — it did for ProtectServer, which needed zero vendor-specific
-   overrides — this is a constructor and a name.
+1. **An adapter** implementing `pkcs11.VendorAdapter`. If the shared
+   implementation suffices, as it did for SoftHSM2 and ProtectToolkit-C
+   software emulation, this is a constructor and a name. Expect nShield
+   and Luna to need more: their login and key protection model, `CKA_ID`
+   and label handling, EC point encoding, session limits and error codes
+   are untested here.
 2. **Two user tokens**, provisioned out of band by the maintainer, each with
    a label and a user PIN. Two, not one: the ceremony refuses to put root
    and intermediate on the same token.
