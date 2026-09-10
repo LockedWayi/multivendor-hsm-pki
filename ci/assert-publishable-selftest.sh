@@ -52,9 +52,15 @@ refuses "a fork's pull_request_target never publishes" "not 'push'" \
     PUBLISH_EVENT=pull_request_target PUBLISH_REF=refs/heads/main PUBLISH_GATES="$ALL_GREEN"
 refuses "an unset event never publishes" "<unset>" \
     PUBLISH_EVENT= PUBLISH_REF=refs/heads/main PUBLISH_GATES="$ALL_GREEN"
-refuses "a push to another branch never publishes" "not 'refs/heads/main'" \
+refuses "a push to another branch never publishes" "not 'refs/heads/main' or a release tag" \
     PUBLISH_EVENT=push PUBLISH_REF=refs/heads/feature PUBLISH_GATES="$ALL_GREEN"
-refuses "a tag push never publishes" "not 'refs/heads/main'" \
+refuses "a pre-release tag never publishes" "not 'refs/heads/main' or a release tag" \
+    PUBLISH_EVENT=push PUBLISH_REF=refs/tags/v9.9.9-rc1 PUBLISH_GATES="$ALL_GREEN"
+refuses "a tag of another shape never publishes" "not 'refs/heads/main' or a release tag" \
+    PUBLISH_EVENT=push PUBLISH_REF=refs/tags/release-9 PUBLISH_GATES="$ALL_GREEN"
+
+echo "== the release-tag accept =="
+accepts "push of a release tag with every gate green" \
     PUBLISH_EVENT=push PUBLISH_REF=refs/tags/v9.9.9 PUBLISH_GATES="$ALL_GREEN"
 
 echo "== a gate that did not pass =="
