@@ -1,27 +1,23 @@
 #!/usr/bin/env bash
 #
-# Run the CA service locally, end to end, with no HSM hardware and no
-# proprietary SDK -- one command, from a clean checkout.
+# Run the CA service locally, end to end, with no HSM and no proprietary
+# SDK, from a clean checkout.
 #
-# This script exists because of a decision and its cost. No PKCS#11 module
-# ships in the service image , which keeps the published artifact free of any key
-# store but also means the image cannot start on its own. this project’s priority says
-# any reader must be able to reproduce this repository without hardware, so
-# the burden that left the image lands here instead of on the reader.
+# No PKCS#11 module ships in the service image, so the image cannot start
+# on its own. This script supplies what the image leaves out.
 #
 # What it does, in order:
 #   1. builds the service image and the SoftHSM2 dev image
-#   2. initializes two SoftHSM2 tokens -- a root and an intermediate
+#   2. initializes two SoftHSM2 tokens, a root and an intermediate
 #   3. runs the offline root ceremony against them (cmd/hsm-pki-keytool)
 #   4. moves the root token out of the store the service can reach
 #   5. starts the service, read-only and non-root, against what is left
 #
-# Step 4 is the one to read twice. The two-tier hierarchy's guarantee is
-# that a compromised service cannot reach the root, and on real hardware
-# that is a token in a safe. Here it is a directory moved out of the
-# token store before the service ever starts, so the same guarantee holds
-# for the same reason rather than by assertion: the root's token is not in
-# the filesystem the service is given.
+# Step 4 is the important one. The two-tier hierarchy's guarantee is that
+# a compromised service cannot reach the root. In production that is a
+# token in a safe. Here it is a directory moved out of the token store
+# before the service starts: the root's token is not in the filesystem the
+# service is given.
 #
 # Usage:
 #   deploy/docker/run-local.sh          start (creates state on first run)
@@ -142,7 +138,7 @@ EOF
     # Identify the root's token directory by the label stored in it, and
     # refuse to act on anything but exactly one match. Resolving an
     # ambiguous match to the first hit would let enumeration order decide
-    # which token goes in the safe, which is nobody's decision
+    # which token goes in the safe.
     #
     #
     # This runs in a container rather than on the host because SoftHSM2

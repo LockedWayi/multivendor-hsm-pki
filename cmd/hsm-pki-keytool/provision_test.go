@@ -17,13 +17,9 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
 )
 
-// provisionArgs builds a complete, valid flag set so each test can change
-// exactly the one thing it is about.
-//
-// It releases the harness's adapter for the same reason ceremonyArgs does:
-// the command opens the module itself, and ProtectToolkit refuses a second
-// C_Initialize in one process. Anything a test needs to put on the token
-// must therefore happen before this is called.
+// provisionArgs builds a complete, valid flag set and releases the
+// harness's adapter, because the command opens the module itself.
+// Anything a test puts on the token happens before this is called.
 func provisionArgs(t *testing.T, b *hsmtest.Backend, dir, keyLabel string) []string {
 	t.Helper()
 	const pinEnv = "KEYTOOL_TEST_SIGNING_PIN"
@@ -40,10 +36,8 @@ func provisionArgs(t *testing.T, b *hsmtest.Backend, dir, keyLabel string) []str
 }
 
 // TestRunProvisionSigningKeyCmd_WritesAPublicKeyAVerifierCanUse runs the
-// command the way an operator does and then reads its output the way a
-// verifier will — through the standard library's generic PKIX path, not
-// through anything that knows how this repository wrote it (the engineering contract
-// independent verification).
+// command as an operator does and reads its output through the standard
+// library's generic PKIX path, as a verifier would.
 func TestRunProvisionSigningKeyCmd_WritesAPublicKeyAVerifierCanUse(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		dir := t.TempDir()
@@ -69,8 +63,7 @@ func TestRunProvisionSigningKeyCmd_WritesAPublicKeyAVerifierCanUse(t *testing.T)
 		if !ok || pub.Curve != elliptic.P256() {
 			t.Fatalf("exported key is %T on %v, want an *ecdsa.PublicKey on P-256", parsed, pub)
 		}
-		// The file is public by design and worthless if it is not: a private
-		// half on disk would defeat the entire reason the key lives on a token.
+		// No private half on disk.
 		if strings.Contains(string(out), "PRIVATE") {
 			t.Error("the exported file mentions PRIVATE")
 		}
@@ -78,17 +71,13 @@ func TestRunProvisionSigningKeyCmd_WritesAPublicKeyAVerifierCanUse(t *testing.T)
 }
 
 // TestRunProvisionSigningKeyCmd_RejectsAnUnversionedLabelBeforeTouchingTheToken
-// pins the ordering, not just the refusal. Key generation is irreversible,
-// so a typo has to be caught while it still costs nothing
-// — the evidence that it was is that no output file was created and no PIN
-// was ever needed.
+// pins the ordering: no output file is created and no PIN is needed.
 func TestRunProvisionSigningKeyCmd_RejectsAnUnversionedLabelBeforeTouchingTheToken(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		dir := t.TempDir()
 		args := provisionArgs(t, b, dir, b.Label("image-signing-key"))
-		// Unset the PIN variable the valid flag set exports: if the command
-		// reaches the token at all, it now fails for that reason instead,
-		// and this assertion would not be proving what it claims.
+		// With the PIN unset, reaching the token would fail for that reason
+		// instead.
 		t.Setenv("KEYTOOL_TEST_SIGNING_PIN", "")
 
 		err := runProvisionSigningKeyCmd(args)
@@ -104,10 +93,8 @@ func TestRunProvisionSigningKeyCmd_RejectsAnUnversionedLabelBeforeTouchingTheTok
 	})
 }
 
-// TestRunProvisionSigningKeyCmd_RefusesToOverwriteAnExistingPublicKey covers
-// the case where the file on disk is the *only* record of an earlier key
-// whose label is now taken: overwriting it would destroy the only published
-// way to verify anything that key has signed.
+// TestRunProvisionSigningKeyCmd_RefusesToOverwriteAnExistingPublicKey: the
+// file may be the only record of a key whose label is taken.
 func TestRunProvisionSigningKeyCmd_RefusesToOverwriteAnExistingPublicKey(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		dir := t.TempDir()
@@ -129,16 +116,14 @@ func TestRunProvisionSigningKeyCmd_RefusesToOverwriteAnExistingPublicKey(t *test
 	})
 }
 
-// TestRunProvisionSigningKeyCmd_RefusesTheCAsToken is Phase 4.8's
-// third-token decision enforced where an operator will actually meet it:
-// at the command line, before the key exists.
+// TestRunProvisionSigningKeyCmd_RefusesTheCAsToken: the separate-token
+// rule, enforced at the command line before the key exists.
 func TestRunProvisionSigningKeyCmd_RefusesTheCAsToken(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
 		dir := t.TempDir()
 
-		// Put a CA key on the token first, through the harness's own
-		// adapter — provisionArgs releases the module afterwards.
+		// A CA key on the token first, through the harness's adapter.
 		caLabel := b.Label("ca-intermediate-key-v1")
 		s, err := b.Adapter.OpenSession(ctx, b.Primary, pk11.SessionOptions{})
 		if err != nil {
@@ -170,13 +155,10 @@ func TestRunProvisionSigningKeyCmd_RefusesTheCAsToken(t *testing.T) {
 	})
 }
 
-// TestRun_RoutesTheProvisionSubcommand keeps the dispatch honest: a
-// subcommand that exists in a file but not in run's switch is a command
-// nobody can invoke. No token, so this does not multiply per backend.
+// TestRun_RoutesTheProvisionSubcommand: a subcommand missing from run's
+// switch cannot be invoked. No token.
 func TestRun_RoutesTheProvisionSubcommand(t *testing.T) {
-	// Missing every required flag, so it fails inside the subcommand rather
-	// than at dispatch — which is exactly what distinguishes "routed" from
-	// "unknown command".
+	// Missing every required flag, so it fails inside the subcommand.
 	err := run([]string{"provision-signing-key"})
 	if err == nil {
 		t.Fatal("run(provision-signing-key) with no flags succeeded, want an error")
@@ -186,22 +168,11 @@ func TestRun_RoutesTheProvisionSubcommand(t *testing.T) {
 	}
 }
 
-// TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey is the operator's
-// real sequence: provision the image key, then provision the artifact key,
-// each its own invocation and therefore its own C_Initialize.
-//
-// It exists because that sequence produced *one key under two labels* on a
-// real backend. ProtectToolkit-C 7.3.3 in software emulation seeds its RNG
-// per C_Initialize, so the first key pair generated after each library
-// initialisation is byte-for-byte identical (measured 2026-09-04,
-// ). Every attribute of the result was correct —
-// distinct labels, distinct CKA_ID, sensitive, non-extractable — and the
-// platform's purpose separation was gone.
-//
-// So this asserts the property rather than an outcome: two runs either
-// produce two different keys, or the second run refuses. What it must never
-// do is quietly hand back a duplicate, which is what it did before
-// signingkey.Provision started checking.
+// TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey: provision the
+// image key, then the artifact key, each its own invocation and its own
+// C_Initialize. On ProtectToolkit-C 7.3.3 software emulation this produced
+// one key under two labels, with every attribute correct. Two runs either
+// produce two keys or the second refuses.
 func TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		dir := t.TempDir()
@@ -229,13 +200,9 @@ func TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey(t *testing.T) {
 					"a compromise of the image key would also sign releases")
 			}
 		case errors.Is(err, signingkey.ErrDuplicateKey):
-			// The token repeated itself and the platform refused. Two
-			// things must then be true, and the second is the one worth
-			// testing: no public key was published for a key the platform
-			// rejected, and the rejected key is *gone from the token*.
-			// Leaving it would take a label that could then never be
-			// provisioned — a failed run that permanently burns a version
-			// number is a worse outcome than the collision it refused.
+			// No public key was published for the rejected key, and the
+			// rejected key is gone from the token, so its label can be used
+			// again.
 			if _, statErr := os.Stat(filepath.Join(secondDir, "signing.pub")); !os.IsNotExist(statErr) {
 				t.Error("a public key file was written for a rejected duplicate")
 			}
@@ -247,8 +214,7 @@ func TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey(t *testing.T) {
 }
 
 // assertLabelIsFree reopens the module and confirms neither half of a key
-// pair survives under label. Used after a refusal, to prove the rollback
-// actually removed what it destroyed rather than reporting that it had.
+// pair exists under label.
 func assertLabelIsFree(t *testing.T, b *hsmtest.Backend, label string) {
 	t.Helper()
 	ctx := context.Background()
@@ -283,21 +249,11 @@ func assertLabelIsFree(t *testing.T, b *hsmtest.Backend, label string) {
 	}
 }
 
-// TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt states
-// the property the platform actually depends on, rather than asserting a
-// behaviour one backend happens to have.
-//
-// Provisioning is one key per process, so each key is the first key after
-// its own C_Initialize. A token that reseeds gives two different keys; a
-// token that does not gives the same key twice — measured on
-// ProtectToolkit-C 7.3.3 in software emulation, where C_GenerateRandom
-// repeats byte for byte too. Either is survivable. What
-// is not survivable is the third outcome: two labels quietly naming one key
-// pair, which is the key reuse purpose separation forbids.
-//
-// So this asserts the disjunction and logs which branch the backend took,
-// so a new vendor's behaviour is recorded by running the suite rather than
-// by someone remembering to check.
+// TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt: a
+// token that reseeds gives two different keys; ProtectToolkit-C 7.3.3
+// software emulation gives the same key twice, and C_GenerateRandom
+// repeats too. Either is fine. Two labels naming one key pair is not. The
+// test asserts the disjunction and logs which branch the backend took.
 func TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		firstDir, secondDir := t.TempDir(), t.TempDir()
@@ -322,7 +278,7 @@ func TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt(t *testing
 			if string(first) == string(second) {
 				t.Fatal("two processes produced one key pair and the duplicate check did not catch it")
 			}
-			t.Logf("%s: the token reseeds across C_Initialize — two processes, two keys", b.Name)
+			t.Logf("%s: the token reseeds across C_Initialize; two processes, two keys", b.Name)
 		case errors.Is(err, signingkey.ErrDuplicateKey):
 			t.Logf("%s: the token repeated its first key across C_Initialize; the duplicate check refused it, "+
 				"which is why this backend must not be used to provision keys anyone relies on", b.Name)

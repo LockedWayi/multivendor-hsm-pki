@@ -3,14 +3,10 @@
 # Bring up the dev cluster: k3d, the node prerequisite, the operator-created
 # objects, and the overlay.
 #
-# THE REASON THIS IS A SCRIPT AND NOT A README STEP. k3d runs the node as a
-# container, so everything the node holds dies with `k3d cluster delete` --
-# including the CA's SQLite store. That reintroduces, at the cluster level,
-# exactly the regression Phase 3b.3 removed at the process level: a
-# certificate revoked during an incident comes back valid, because the store
-# that remembered the revocation is gone. A host-backed node directory plus
-# fixed-path PersistentVolumes move that state out of the cluster, and
-# getting that right by hand every time is not something to rely on.
+# k3d runs the node as a container, so everything the node holds dies with
+# k3d cluster delete, the CA's SQLite store included. A certificate revoked
+# during an incident would come back valid. A host-backed node directory
+# plus fixed-path PersistentVolumes move that state out of the cluster.
 #
 #   deploy/k8s/overlays/dev/k3d-up.sh            create (or reuse) and apply
 #   deploy/k8s/overlays/dev/k3d-up.sh --recreate delete the cluster first,
@@ -32,10 +28,9 @@ NODE="k3d-${CLUSTER}-server-0"
 NS=hsm-pki-dev
 LOCAL="$REPO_ROOT/.local/dev"
 
-# The registry exists because cosign stores an image signature *in the
-# registry* -- there is no local-only signing path -- so Phase 4.10 cannot
-# verify anything at admission without one. It is k3d-managed and separate
-# from the cluster, so `k3d cluster delete` leaves the signed image alone.
+# cosign stores an image signature in the registry, so admission cannot
+# verify anything without one. It is k3d-managed and separate from the
+# cluster, so k3d cluster delete leaves the signed image alone.
 REGISTRY_NAME="${HSM_PKI_K3D_REGISTRY:-hsm-pki-registry}"
 REGISTRY_HOST_PORT=5000
 # Two names for one registry, and the difference matters exactly once. The
@@ -152,21 +147,15 @@ kubectl apply -f "$REPO_ROOT/deploy/k8s/policy/pod-hardening.yaml" >/dev/null
 # correctly refusing its own workload, which reads as a broken policy rather
 # than as an unsigned image.
 #
-# Signing needs the supply-chain token's PIN, which is deliberately not
-# something this script can invent. With it, the chain runs end to end in one
-# command; without it, the cluster comes up with pod hardening enforced and
-# the image rule absent, and says so rather than pretending.
+# Signing needs the supply-chain token's PIN. With it, the chain runs end
+# to end; without it, the cluster comes up with pod hardening enforced and
+# the image rule absent, and says so.
 if [ -n "${COSIGN_PKCS11_PIN:-}" ]; then
     log "signing the image and installing the image-signature policy"
     "$REPO_ROOT/ci/sign-image.sh" "$REGISTRY_FROM_HOST/$IMAGE_REPO@$DIGEST" >/dev/null
-    # Rendered here rather than applied from the repository, because the k3d
-    # registry speaks plaintext HTTP and the committed policy deliberately
-    # does not carry that concession. Measured before this line existed: with
-    # the committed policy, Kyverno spoke HTTPS to the HTTP registry, could
-    # not verify, and refused the pod -- `ReplicaFailure: ... http: server
-    # gave HTTP response to HTTPS client`. Fail-closed and correct, and the
-    # cluster does not start, so the concession is made explicitly and only
-    # here.
+    # Rendered here, because the k3d registry speaks plaintext HTTP and the
+    # committed policy does not carry that concession. With the committed
+    # policy, Kyverno spoke HTTPS to the HTTP registry and refused the pod.
     devpolicy="$(mktemp)"
     go run "$REPO_ROOT/ci/generate-image-policy" -allow-insecure-registry \
         -inventory "$REPO_ROOT/docs/keys/key-inventory.json" > "$devpolicy"
@@ -182,9 +171,8 @@ else
 fi
 
 log "creating the two operator-supplied objects"
-# Neither can live in the repository: one is the ceremony's output, the other
-# is a PIN. Recreated on every cluster because they are cluster state, unlike
-# the CA store, which deliberately is not.
+# Neither can live in the repository: one is the ceremony's output, the
+# other is a PIN. Recreated on every cluster, unlike the CA store.
 kubectl -n "$NS" delete configmap hsm-pki-config --ignore-not-found >/dev/null
 kubectl -n "$NS" create configmap hsm-pki-config \
     --from-file=config.yaml="$LOCAL/etc/config.yaml" \

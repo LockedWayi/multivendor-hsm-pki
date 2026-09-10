@@ -1,10 +1,10 @@
 # Copy to config.yaml and fill in real values. config.yaml is gitignored.
-# This example file is safe to commit — it contains no real secrets.
+# This example file is safe to commit. It contains no real secrets.
 #
 # Note the pattern used for PINs below: this file never holds a PIN, it holds
 # the NAME of the environment variable the PIN is read from at startup. That
 # keeps the secret out of the config file, out of the image, and out of any
-# backup of either — and it means a leaked config.yaml leaks nothing. Do not
+# backup of either, and it means a leaked config.yaml leaks nothing. Do not
 # "simplify" this into a literal `pin:` field.
 
 server:
@@ -12,7 +12,7 @@ server:
 
 pkcs11:
   # Which vendor adapter to use: "softhsm2" or "protectserver".
-  # Both implement the same VendorAdapter interface — see
+  # Both implement the same VendorAdapter interface. See
   #
   adapter: "softhsm2"
 
@@ -22,20 +22,20 @@ pkcs11:
     idle_timeout: "15m"
     max_ttl: "8h"
 
-  # SoftHSM2 — the universal baseline. No hardware, no proprietary SDK, so
+  # SoftHSM2, the universal baseline. No hardware, no proprietary SDK, so
   # this is what CI runs. Install with your distribution's `softhsm2` package,
   # or use ci/softhsm2-dev.Dockerfile.
   softhsm2:
     module_path: "/usr/lib/softhsm/libsofthsm2.so"
     # Token label, as passed to `softhsm2-util --init-token --label`.
     workspace_label: "CHANGE_ME"
-    # Environment variable holding the user PIN — not the PIN itself.
+    # Environment variable holding the user PIN, not the PIN itself.
     pin_env: "SOFTHSM2_PIN"
 
   # Thales ProtectServer, via the ProtectToolkit-C PKCS#11 module. Requires
   # your own ProtectToolkit entitlement; for
   # installation, token initialization, and how to verify the module loads.
-  # This path cannot run in public CI — the SDK is proprietary and is never
+  # This path cannot run in public CI. The SDK is proprietary and is never
   # vendored into this repository.
   protectserver:
     # The software-emulation module. A hardware ProtectServer uses
@@ -45,7 +45,7 @@ pkcs11:
     # A freshly installed ProtectToolkit leaves slot 0 unlabelled and
     # uninitialized, so this has no working default.
     workspace_label: "CHANGE_ME"
-    # Environment variable holding the user PIN — not the PIN itself.
+    # Environment variable holding the user PIN, not the PIN itself.
     # uses a throwaway dev PIN for local
     # emulator setup; never reuse it anywhere real.
     pin_env: "PROTECTSERVER_PIN"
@@ -65,7 +65,7 @@ ca:
   # that absence is the security property, not an omission: the root lives
   # on a separate token reachable only from the offline ceremony
   # (cmd/hsm-pki-keytool), so compromising this service cannot reach it.
-  # Both values below come from a ceremony run — see
+  # Both values below come from a ceremony run. See
   #
 
   # CKA_LABEL of the intermediate key pair the ceremony created. Versioned,
@@ -104,7 +104,7 @@ ca:
   # certificate signed since. A trailing slash is tolerated; a path prefix
   # is kept ("https://pki.example.com/ca" gives ".../ca/crl").
   #
-  # No OCSP URL is issued at all until the responder exists (Phase 5b):
+  # No OCSP URL is issued at all until a responder exists:
   # pointing at a responder that is not there is worse than omitting it.
   base_url: "https://pki.example.test"
 
@@ -131,7 +131,7 @@ ca:
   # lost; an operator who does know it puts it here.
   # crl_number_floor: "1756384000000"
 
-# Vault settings are unused until Phase 6.
+# Vault settings are unused until Vault integration lands.
 vault:
   address: "https://vault.example.local:8200"
   role: "pki-ca-service"

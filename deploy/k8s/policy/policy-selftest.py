@@ -3,7 +3,7 @@
 
 Run:  deploy/k8s/policy/policy-selftest.py
 
-A policy that has only ever been shown to reject the deliberately-insecure
+A policy that has only ever been shown to reject the insecure
 pod has been shown very little. That manifest violates every rule at once,
 so admission reports the first one and the other seven are untested -- a
 rule with a typo in its CEL would sit there passing everything for as long
@@ -102,7 +102,7 @@ def case_host_ipc(p):
 
 
 def case_privileged(p):
-    # Both flags, deliberately: see the module docstring.
+    # Both flags: see the module docstring.
     p["spec"]["containers"][0]["securityContext"].update(
         {"privileged": True, "allowPrivilegeEscalation": True}
     )
@@ -227,7 +227,7 @@ def ensure_namespace():
             # Named in the object so nobody has to guess why a namespace
             # with no Pod Security Admission labels is allowed to exist.
             "annotations": {
-                "hsm-pki.io/purpose": "deliberately unlabelled, so Kyverno is "
+                "hsm-pki.io/purpose": "left unlabelled, so Kyverno is "
                 "the only thing that can refuse a pod here"
             },
         },
@@ -324,7 +324,7 @@ def check_ephemeral_container_subresource():
         )
         message = (result.stderr or result.stdout).strip().replace("\n", " ")
         if result.returncode == 0:
-            return False, "ATTACHED — the subresource is not matched by the policy"
+            return False, "ATTACHED: the subresource is not matched by the policy"
         if "privileged container" in message:
             return True, "refused, naming its own rule"
         return False, f"refused for the wrong reason: {message[:110]}"
@@ -345,7 +345,7 @@ def check_compliant_ephemeral_container():
     and refused every compliant `kubectl debug` in any covered namespace --
     for no security reason at all. Measured, after the rule had been in
     place and the suite had been green: the case that would have caught it
-    did not exist, because every ephemeral case here was deliberately
+    did not exist, because every ephemeral case here was
     insecure.
     """
     target = dict(COMPLIANT_POD)
@@ -395,7 +395,7 @@ def main():
             detail = "admitted" if ok else f"REFUSED: {message[:110]}"
         elif admitted:
             ok = False
-            detail = "ADMITTED — this rule does not fire"
+            detail = "ADMITTED: this rule does not fire"
         elif want in message:
             ok = True
             detail = "refused, naming its own rule"

@@ -18,10 +18,8 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
 )
 
-// These tests touch no token — an inventory is a document, and the key that
-// signs it in production lives on an HSM but the format does not. So they
-// deliberately do not multiply per backend (and
-// docs/test-matrix.md §4).
+// These tests touch no token: an inventory is a document. They do not
+// multiply per backend.
 
 func pubPEM(t *testing.T, pub *ecdsa.PublicKey) string {
 	t.Helper()
@@ -90,11 +88,8 @@ func TestInventory_RoundTripsThroughParse(t *testing.T) {
 	}
 }
 
-// TestInventory_MarshalIsStable pins that regenerating an unchanged
-// inventory produces identical bytes. It matters because the document is
-// committed and reviewed in diffs: an encoder that reordered keys or
-// reformatted numbers would make every rotation an unreadable diff, which
-// is most of what checking the file in is supposed to buy.
+// TestInventory_MarshalIsStable: an unchanged inventory regenerates to
+// identical bytes, so a rotation is a readable diff.
 func TestInventory_MarshalIsStable(t *testing.T) {
 	inv := validInventory(t)
 	first, err := inv.Marshal()
@@ -110,11 +105,8 @@ func TestInventory_MarshalIsStable(t *testing.T) {
 	}
 }
 
-// TestInventory_RejectsTwoLabelsOnOneKey is the assertion this type exists
-// for. Every field of this document is individually well-formed; the defect
-// is that the image and artifact purposes resolve to one key pair, so a
-// compromise of "the image key" also signs releases. Comparing labels sees
-// two distinct entries and nothing wrong.
+// TestInventory_RejectsTwoLabelsOnOneKey: every field is well-formed and
+// two purposes resolve to one key pair. Comparing labels sees nothing.
 func TestInventory_RejectsTwoLabelsOnOneKey(t *testing.T) {
 	inv := validInventory(t)
 	inv.Keys[1].PublicKeyPEM = inv.Keys[0].PublicKeyPEM
@@ -123,8 +115,7 @@ func TestInventory_RejectsTwoLabelsOnOneKey(t *testing.T) {
 	if !errors.Is(err, inventory.ErrInvalid) {
 		t.Fatalf("Validate with one key under two labels = %v, want ErrInvalid", err)
 	}
-	// Both labels must be named: "duplicate key" without saying which two
-	// entries collide leaves an operator to find them by hand.
+	// Both labels must be named.
 	for _, label := range []string{inv.Keys[0].Label, inv.Keys[1].Label} {
 		if !strings.Contains(err.Error(), label) {
 			t.Errorf("error does not name %q: %v", label, err)
@@ -143,8 +134,7 @@ func TestInventory_ValidateRejects(t *testing.T) {
 		"a version that cannot be compared against a previous one": func(inv *inventory.Inventory) {
 			inv.Version = 0
 		},
-		// Without an expiry an attacker who withholds updates replays this
-		// document forever, and a retired key never dies.
+		// Without an expiry a withheld update keeps a retired key alive.
 		"no expiry": func(inv *inventory.Inventory) {
 			inv.ValidUntil = time.Time{}
 		},
@@ -194,8 +184,7 @@ func TestInventory_ValidateRejects(t *testing.T) {
 			if err := inv.Validate(); !errors.Is(err, inventory.ErrInvalid) {
 				t.Fatalf("Validate accepted %s: %v", name, err)
 			}
-			// Marshal must refuse too, or an invalid document reaches disk
-			// and gets signed, which is the failure that matters.
+			// Marshal must refuse too, or an invalid document gets signed.
 			if _, err := inv.Marshal(); err == nil {
 				t.Error("Marshal produced bytes for an invalid inventory")
 			}
@@ -203,9 +192,8 @@ func TestInventory_ValidateRejects(t *testing.T) {
 	}
 }
 
-// TestParse_RejectsAnUnknownField fails closed on a document this build
-// does not fully understand: an unrecognised field may be saying something
-// about a key that changes whether it should be trusted.
+// TestParse_RejectsAnUnknownField: a field this build does not understand
+// may change whether a key should be trusted.
 func TestParse_RejectsAnUnknownField(t *testing.T) {
 	inv := validInventory(t)
 	data, err := inv.Marshal()
@@ -245,18 +233,16 @@ func TestInventory_ActiveAndVerifiableSeparateTheLifecycle(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 
-	// A verify-only key signs nothing new — that is the whole content of
-	// the middle lifecycle state.
+	// A verify-only key signs nothing new.
 	if got := inv.Active(inventory.PurposeImage); len(got) != 0 {
 		t.Errorf("Active(image) = %d entries, want 0 (v1 is verify-only, v0 retired)", len(got))
 	}
-	// ...but signatures it already made still verify, which is what makes
-	// rotation something other than a flag day.
+	// Signatures it already made still verify.
 	if got := inv.Verifiable(inventory.PurposeImage); len(got) != 1 || got[0].Label != "image-signing-key-v1" {
 		t.Errorf("Verifiable(image) = %+v, want just image-signing-key-v1", got)
 	}
-	// The retired key verifies nothing, and the purposes do not leak into
-	// each other.
+	// The retired key verifies nothing, and purposes do not leak into each
+	// other.
 	if got := inv.Active(inventory.PurposeArtifact); len(got) != 1 {
 		t.Errorf("Active(artifact) = %d entries, want 1", len(got))
 	}
@@ -278,29 +264,22 @@ func TestVerify_AcceptsAGoodSignatureAndRejectsTampering(t *testing.T) {
 		t.Fatalf("Verify on a good signature: %v", err)
 	}
 
-	// One byte. The point of signing the document rather than a canonical
-	// re-encoding is that any change at all is a different document.
+	// One changed byte is a different document.
 	tampered := append([]byte(nil), document...)
 	tampered[len(tampered)/2] ^= 0x01
 	if err := inventory.Verify(tampered, sig, &signer.PublicKey); err == nil {
 		t.Error("Verify accepted a document with one byte changed")
 	}
 
-	// A different key must not verify, or the inventory authorises whoever
-	// holds any key rather than the one it names.
+	// A different key must not verify.
 	if err := inventory.Verify(document, sig, &newKey(t).PublicKey); err == nil {
 		t.Error("Verify accepted a signature from an unrelated key")
 	}
 }
 
-// TestVerify_AgreesWithOpenSSL is the check that matters most here
-// . Everything above proves this package agrees with
-// itself, which it would do just as convincingly if the digest, the
-// signature encoding, or the bytes being signed were all wrong together.
-// The published contract is that anyone holding the inventory, the
-// signature and the public key can verify it with ordinary tools, so that
-// claim is tested against an implementation that has never seen this
-// repository.
+// TestVerify_AgreesWithOpenSSL: the published contract is that anyone with
+// the inventory, the signature and the public key can verify it with
+// openssl. Everything above shows this package agrees with itself.
 func TestVerify_AgreesWithOpenSSL(t *testing.T) {
 	openssl, err := exec.LookPath("openssl")
 	if err != nil {
@@ -332,9 +311,7 @@ func TestVerify_AgreesWithOpenSSL(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Exactly the command the package comment publishes as the recipe. If
-	// this ever needs a flag the documentation does not mention, the
-	// documentation is wrong.
+	// The command the package comment publishes.
 	out, err := exec.Command(openssl, "dgst", "-sha256", "-verify", pubPath,
 		"-signature", sigPath, docPath).CombinedOutput()
 	if err != nil {
@@ -344,8 +321,7 @@ func TestVerify_AgreesWithOpenSSL(t *testing.T) {
 		t.Fatalf("openssl output = %q, want \"Verified OK\"", out)
 	}
 
-	// And it must reject a tampered document, or the check above only
-	// proves openssl says yes to everything.
+	// And it must reject a changed document.
 	tampered := append([]byte(nil), document...)
 	tampered[len(tampered)/2] ^= 0x01
 	if err := os.WriteFile(docPath, tampered, 0644); err != nil {

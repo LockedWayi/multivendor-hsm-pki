@@ -6,31 +6,24 @@ var (
 	// ErrEmptyPIN is returned by Login when the PIN is zero-length.
 	ErrEmptyPIN = errors.New("pkcs11: PIN must not be empty")
 
-	// ErrSessionClosed is returned by any operation on a session that has
-	// already been closed (explicitly, or by idle/TTL expiry).
+	// ErrSessionClosed is returned by any operation on a closed session.
 	ErrSessionClosed = errors.New("pkcs11: session is closed")
 
 	// ErrSessionExpired is returned when a session's idle timeout or
-	// maximum TTL has been exceeded. Fail closed: the
-	// session is force-closed the moment this is detected, never silently
-	// extended.
+	// maximum TTL has passed. The session is closed, never extended.
 	ErrSessionExpired = errors.New("pkcs11: session idle timeout or max TTL exceeded")
 
-	// ErrAdapterClosed is returned by any operation attempted after the
-	// adapter's Close method has been called.
+	// ErrAdapterClosed is returned by any operation after Close.
 	ErrAdapterClosed = errors.New("pkcs11: adapter is closed")
 
-	// ErrUnsupportedCurve is returned by GenerateKeyPair for an ECCurve
-	// value this adapter does not implement.
+	// ErrUnsupportedCurve is returned by GenerateKeyPair for an unknown ECCurve.
 	ErrUnsupportedCurve = errors.New("pkcs11: unsupported EC curve")
 
-	// ErrUnsupportedKeySize is returned by GenerateSecretKey for a
-	// SecretKeyRequest.KeyBits value that is not a valid AES key size.
+	// ErrUnsupportedKeySize is returned by GenerateSecretKey for a KeyBits
+	// value that is not a valid AES key size.
 	ErrUnsupportedKeySize = errors.New("pkcs11: unsupported AES key size")
 
 	// ErrTokenAlreadyLoggedIn is returned by LoginToken when this adapter
-	// already holds the token authenticated. It is an error rather than a
-	// no-op so that two callers cannot end up disagreeing about which of
-	// them owns the logout.
+	// already holds the token authenticated.
 	ErrTokenAlreadyLoggedIn = errors.New("pkcs11: token is already logged in")
 )

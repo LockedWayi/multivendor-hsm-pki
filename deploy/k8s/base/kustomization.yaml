@@ -2,9 +2,9 @@
 # behind it or which cluster it lands on. An overlay supplies the image, the
 # PKCS#11 module, the token store and the namespace.
 #
-# Two resources are deliberately NOT here:
-#   - the Secret holding the token PIN. No secrets in this repository, ever
-#; the overlay documents how an operator creates it.
+# Two resources are not here:
+#   - the Secret holding the token PIN. No secrets in this repository, ever.
+#     The overlay documents how an operator creates it.
 #   - the ConfigMap named below. It carries the ceremony's output --
 #     intermediate.pem, root.pem, root-crl.pem -- which is produced by an
 #     operator running the ceremony, not by anything checked in.

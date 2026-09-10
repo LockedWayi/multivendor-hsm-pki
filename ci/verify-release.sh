@@ -1,196 +1,201 @@
 #!/usr/bin/env bash
 #
-# Verify a published image the way somebody who does not trust this
-# repository has to (Phase 5.9).
+# Verify a published image without trusting this repository.
 #
+#   HSM_PKI_TRUST_ANCHOR_REPO=<owner/name> \
+#   HSM_PKI_TRUST_ANCHOR_COMMIT=<commit> \
+#   HSM_PKI_TRUST_ANCHOR_SHA256=<digest of the anchor file> \
 #   ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
 #
-# # The question this answers
+#   ci/verify-release.sh --inventory-only      links 1 to 3 only
 #
-# "The maintainer published a key and a signature, and the signature checks
-# out against the key" is worth nothing on its own. Whoever can write to this
-# repository can replace the inventory, its signature and the public key that
-# verifies it in one commit, and the check still passes -- it proves the three
-# files agree with each other. That is the self-consistency failure
-# CLAUDE.md 3.10 names, and it is the reason a verification recipe pointing
-# at docs/keys/ alone is theatre.
+# The chain:
 #
-# What makes this different is where step 1 gets its anchor. The key that
-# signs the inventory lives in a *separate, separately protected* repository
-# (LockedWayi/hsm-pki-trust-anchor), pinned here by commit and by content
-# digest, and its private half is on an offline token that no pipeline can
-# reach. So forging the chain below needs a compromise of two repositories
-# and a token that is in neither of them -- not one push.
+#   1. anchor      fetched from the anchor repository at the commit and with
+#                  the SHA-256 the caller supplies. Never read from this
+#                  tree. An unreachable anchor is a refusal, not a fallback.
+#   2. inventory   docs/keys/key-inventory.json checked against the anchor
+#                  with openssl.
+#   3. keys        read out of the verified inventory by ci/select-key. An
+#                  expired inventory is refused. A key that is not yet valid
+#                  or is retired is left out.
+#   4. image       the signature, the CycloneDX SBOM attestation and the
+#                  SLSA provenance attestation, each verified against a key
+#                  from step 3 with no token mounted. All three must be
+#                  present. An image with only the pipeline's keyless
+#                  signature fails here.
 #
-# # The chain, and why each link is where it is
+# What this proves depends on where the anchor inputs came from. Changing
+# the anchor file in place needs write access to the anchor repository.
+# Replacing the anchor needs the consumer to accept new inputs. A consumer
+# who copies the inputs from this repository's README trusts this
+# repository for that step.
 #
-#   1. anchor        fetched from the other repository, pinned twice.
-#                    Fails closed: an unreachable anchor NEVER falls back
-#                    to the copy in this tree, because that copy is exactly
-#                    what this script exists to stop trusting.
-#   2. inventory     verified against the anchor with openssl -- an
-#                    implementation that is not this repository's code and
-#                    did not produce the signature (CLAUDE.md 3.10).
-#   3. the key       taken FROM the verified inventory, never hardcoded.
-#                    That is what makes rotation work: a signature made by
-#                    a previous version still verifies while that version
-#                    is listed verify-only (CLAUDE.md 3.7).
-#   4. the image     verified by digest, with no token mounted anywhere.
-#
-# Every step is a refusal on failure. There is no partial success.
+# Environment:
+#   HSM_PKI_TRUST_ANCHOR_REPO, _COMMIT, _SHA256   required
+#   HSM_PKI_KEYS_DIR              directory holding the inventory, default docs/keys
+#   HSM_PKI_REGISTRY_ALLOW_HTTP   plaintext registry, default false
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
 WORK="$REPO_ROOT/.local/verify"
 
 die() { echo "verify-release: $*" >&2; exit 1; }
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
-# --inventory-only checks links 1-3 and stops: the anchor is reachable, the
-# inventory verifies against it, and it names at least one usable image key.
-#
-# That is the half CI can assert on every push. The image half cannot be:
-# an ordinary `main` build carries only the pipeline's ephemeral signature
-# by design, so requiring a release signature on every commit would make
-# this gate red for the normal case -- and a gate that is red normally is a
-# gate people learn to ignore.
-#
-# What it still catches is the attack the anchor exists for: anybody
-# rewriting docs/keys/ in this tree fails link 2, because the key that
-# would have to re-sign the inventory is on an offline token in another
-# repository.
+usage() {
+    cat >&2 <<'USAGE'
+usage: HSM_PKI_TRUST_ANCHOR_REPO=<owner/name> \
+       HSM_PKI_TRUST_ANCHOR_COMMIT=<40-hex commit> \
+       HSM_PKI_TRUST_ANCHOR_SHA256=<64-hex digest of the anchor file> \
+       ci/verify-release.sh [--inventory-only] <image>@sha256:<digest>
+
+The three anchor inputs are required. They are not read from this tree.
+Take them from a source you trust more than this repository.
+USAGE
+    exit 2
+}
+
 INVENTORY_ONLY=0
 if [ "${1:-}" = "--inventory-only" ]; then
     INVENTORY_ONLY=1
     shift
 fi
-
 REF="${1:-}"
+
+[ -n "${HSM_PKI_TRUST_ANCHOR_REPO:-}" ] || usage
+[ -n "${HSM_PKI_TRUST_ANCHOR_COMMIT:-}" ] || usage
+[ -n "${HSM_PKI_TRUST_ANCHOR_SHA256:-}" ] || usage
 if [ "$INVENTORY_ONLY" = "1" ]; then
     REF="(inventory only)"
 else
-    [ -n "$REF" ] || die "usage: ci/verify-release.sh [--inventory-only] <image-reference>@sha256:<digest>"
+    [ -n "$REF" ] || usage
+    case "$REF" in
+        *@sha256:*) ;;
+        *) die "refusing to verify a tag: $REF
+Pass the digest form. A tag is a pointer somebody can move, so verifying
+one says nothing about the bytes anybody else will pull." ;;
+    esac
 fi
 
-# A tag is a pointer somebody can move; a digest is the bytes. Verifying
-# "whatever this name points at right now" attests to nothing that survives
-# the next push, so the tag form is refused rather than resolved -- resolving
-# it would silently re-introduce the very indirection being rejected.
-case "${INVENTORY_ONLY}${REF}" in
-    1*) ;;
-    *@sha256:*) ;;
-    *) die "refusing to verify a tag: $REF
-Pass the digest form. A tag is a pointer somebody can move, so verifying one
-says nothing about the bytes anybody else will pull (CLAUDE.md 3.8)." ;;
+ALLOW_HTTP="${HSM_PKI_REGISTRY_ALLOW_HTTP:-false}"
+KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
+case "$KEYS_DIR" in
+    "$REPO_ROOT"/*) KEYS_DIR_REL="${KEYS_DIR#"$REPO_ROOT"/}" ;;
+    *) die "HSM_PKI_KEYS_DIR must be inside $REPO_ROOT: the key selector runs in a container that mounts only the repository" ;;
 esac
 
-# Refused unless somebody says otherwise. false is right for every real
-# registry; a local one over HTTP is how this script is exercised.
-ALLOW_HTTP="${HSM_PKI_REGISTRY_ALLOW_HTTP:-false}"
-
-mkdir -p "$WORK"
+# The key selector runs as root in a container. The directory it writes
+# into is created here first, so it stays owned by the caller and can be
+# emptied by the next run.
 ANCHOR="$WORK/anchor.pub"
+SELECTED="$WORK/keys"
+rm -rf "$SELECTED"
+mkdir -p "$SELECTED"
 
 log "1/4  fetching the trust anchor from outside the tree being verified"
 "$REPO_ROOT/ci/fetch-trust-anchor.sh" "$ANCHOR"
 
 log "2/4  verifying the key inventory against that anchor, with openssl"
-# openssl, not this repository's Go. A signature checked only by the library
-# that produced it proves the code agrees with itself.
-INVENTORY="$REPO_ROOT/docs/keys/key-inventory.json"
-INVENTORY_SIG="$REPO_ROOT/docs/keys/key-inventory.json.sig"
+INVENTORY="$KEYS_DIR/key-inventory.json"
+INVENTORY_SIG="$KEYS_DIR/key-inventory.json.sig"
 [ -f "$INVENTORY" ] || die "no inventory at $INVENTORY"
 [ -f "$INVENTORY_SIG" ] || die "no inventory signature at $INVENTORY_SIG"
 
 openssl dgst -sha256 -verify "$ANCHOR" \
     -signature "$INVENTORY_SIG" "$INVENTORY" \
-    || die "the key inventory does not verify against the out-of-band anchor.
-Either this tree's docs/keys/ has been changed without the offline inventory
-token, or the pinned anchor is stale. Both are refusals, not warnings."
+    || die "the key inventory does not verify against the anchor.
+Either $KEYS_DIR_REL/ was changed without the offline inventory token, or
+the anchor inputs are wrong for this tree. Both are refusals."
 
-log "3/4  reading the image-signing keys out of the verified inventory"
-# From the inventory, never hardcoded. Retired keys are excluded: a key the
-# inventory says is retired must not verify anything, or retirement means
-# nothing. verify-only keys ARE accepted -- that state exists precisely so a
-# signature made before a rotation keeps verifying during the transition.
-mapfile -t KEY_FILES < <(python3 - "$INVENTORY" "$WORK" <<'PY'
-import json, sys, os
-inventory_path, work = sys.argv[1], sys.argv[2]
-inv = json.load(open(inventory_path))
-out = []
-for k in inv.get("keys", []):
-    if k.get("purpose") != "image":
-        continue
-    if k.get("status") not in ("active", "verify-only"):
-        continue
-    path = os.path.join(work, k["label"] + ".pub")
-    with open(path, "w") as fh:
-        fh.write(k["public_key"])
-    out.append("%s\t%s\t%s" % (path, k["label"], k["status"]))
-print("\n".join(out))
-PY
-)
-
-[ "${#KEY_FILES[@]}" -gt 0 ] && [ -n "${KEY_FILES[0]}" ] || die \
-    "the verified inventory lists no usable image-signing key.
-An inventory with nothing to verify against is a refusal, not a pass."
-
-for entry in "${KEY_FILES[@]}"; do
-    printf '    %s (%s)\n' "$(cut -f2 <<<"$entry")" "$(cut -f3 <<<"$entry")"
+log "3/4  selecting the image-signing keys from the verified inventory"
+# One selection for every consumer. It refuses an expired inventory and
+# leaves out keys that are not yet valid or are retired.
+mapfile -t SELECTION < <(goRun ./ci/select-key \
+    -inventory "/repo/$KEYS_DIR_REL/key-inventory.json" \
+    -purpose image \
+    -out-dir "/repo/${SELECTED#"$REPO_ROOT"/}") || die "key selection failed; see the message above"
+[ "${#SELECTION[@]}" -gt 0 ] || die "the verified inventory lists no usable image-signing key"
+for line in "${SELECTION[@]}"; do
+    printf '    %s (%s)\n' "$(cut -f1 <<<"$line")" "$(cut -f2 <<<"$line")"
 done
 
 if [ "$INVENTORY_ONLY" = "1" ]; then
-    cat <<EOF
+    cat <<EOT
 
 INVENTORY VERIFIED (links 1-3 of 4)
 
 The anchor was reachable, the inventory verifies against it, and it names a
-usable image-signing key. The image half was not checked: pass a digest
-instead of --inventory-only to check a specific release.
-EOF
+usable image-signing key. The image was not checked. Pass a digest instead
+of --inventory-only to check a release.
+EOT
     exit 0
 fi
 
-log "4/4  verifying the image signature, with no token mounted"
-# cosign v2: the layout Kyverno's verifier also reads, so what passes here
-# is what admission will accept.
+log "4/4  verifying the signature and both attestations, with no token mounted"
+# cosign v2 reads the layout Kyverno reads, so what passes here is what
+# admission accepts.
 export HSM_PKI_COSIGN_VERSION=v2
 "$REPO_ROOT/ci/cosign.sh" fetch >/dev/null
 
-verified=""
-for entry in "${KEY_FILES[@]}"; do
-    key_path="$(cut -f1 <<<"$entry")"
-    label="$(cut -f2 <<<"$entry")"
-    rel="${key_path#"$REPO_ROOT"/}"
-    if HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" verify \
-            --key "/repo/$rel" --insecure-ignore-tlog=true \
-            --allow-http-registry="$ALLOW_HTTP" \
-            "$REF" >/dev/null 2>&1; then
-        verified="$label"
-        break
-    fi
-done
+# find_signer <subcommand> [extra args]: prints the label of the first
+# selected key that verifies, or nothing.
+find_signer() {
+    local sub="$1"; shift
+    local line label key_rel
+    for line in "${SELECTION[@]}"; do
+        label="$(cut -f1 <<<"$line")"
+        key_rel="${SELECTED#"$REPO_ROOT"/}/$label.pub"
+        if HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" "$sub" \
+                --key "/repo/$key_rel" --insecure-ignore-tlog=true \
+                --allow-http-registry="$ALLOW_HTTP" "$@" \
+                "$REF" >/dev/null 2>&1; then
+            echo "$label"
+            return 0
+        fi
+    done
+    return 1
+}
 
-[ -n "$verified" ] || die \
-    "no key in the verified inventory produced this signature.
+SIGNED_BY="$(find_signer verify || true)"
+[ -n "$SIGNED_BY" ] || die \
+    "no key in the verified inventory produced this image's signature.
 
-The image is not vouched for by any key this project publishes. If it came
-from a pipeline run, that is expected: CI signs with an ephemeral key that
-exists only for the length of the build, which proves the signing mechanism
-and says nothing about custody. Such an image is deliberately not
-deployable -- see the README."
+The image is not vouched for by any key this project publishes. A build of
+main carries only the pipeline's keyless signature, which admission ignores
+and this script does not accept. A release digest is counter-signed by the
+maintainer with ci/countersign-release.sh."
+echo "    signature       $SIGNED_BY"
 
-cat <<EOF
+SBOM_BY="$(find_signer verify-attestation --type cyclonedx || true)"
+PROV_BY="$(find_signer verify-attestation --type slsaprovenance1 || true)"
+missing=""
+[ -n "$SBOM_BY" ] || missing="$missing CycloneDX-SBOM"
+[ -n "$PROV_BY" ] || missing="$missing SLSA-provenance"
+[ -z "$missing" ] || die \
+    "the image is signed by $SIGNED_BY, but these attestations are missing or not
+signed by a key in the verified inventory:$missing
+
+A release carries all three: the signature, the SBOM attestation and the
+provenance attestation, all made by the durable key. The pipeline's keyless
+attestations do not count here. Run ci/countersign-release.sh, which
+re-attests both with the durable key."
+echo "    SBOM            $SBOM_BY"
+echo "    provenance      $PROV_BY"
+
+cat <<EOT
 
 VERIFIED
 
-  image      $REF
-  signed by  $verified
-  listed in  docs/keys/key-inventory.json
-  vouched by $(sed -n 's/^TRUST_ANCHOR_REPO="\(.*\)"$/\1/p' "$REPO_ROOT/ci/scanner-pins.sh") @ $(sed -n 's/^TRUST_ANCHOR_COMMIT="\(.*\)"$/\1/p' "$REPO_ROOT/ci/scanner-pins.sh" | cut -c1-12)
+  image        $REF
+  signed by    $SIGNED_BY
+  SBOM by      $SBOM_BY
+  provenance   $PROV_BY
+  listed in    $KEYS_DIR_REL/key-inventory.json
+  anchor       $HSM_PKI_TRUST_ANCHOR_REPO @ $(cut -c1-12 <<<"$HSM_PKI_TRUST_ANCHOR_COMMIT")
 
-Nothing in this chain was taken on the word of this repository alone: the
-anchor came from a separately protected repository, the inventory was checked
-against it by openssl rather than by code shipped here, and the key was read
-out of the inventory rather than hardcoded.
-EOF
+The anchor came from outside this tree, the inventory was checked against
+it with openssl, and the keys were read out of the inventory.
+EOT

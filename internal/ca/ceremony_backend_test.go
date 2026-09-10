@@ -1,17 +1,9 @@
 package ca_test
 
-// Backend scaffolding for this package's HSM-touching tests.
-//
-// Every one of them runs against every backend the environment provides
-//. The iteration, the skip policy, the token provisioning
-// and the one-C_Initialize-per-process handling all live in
-// internal/hsmtest; this file is the thin naming layer over it, because
-// within the CA the two tokens are "root" and "intermediate" rather than
-// "primary" and "secondary".
-//
-// The point of the indirection: adding nShield or Luna (Phase 7) is a new
-// entry in hsmtest's registry plus an adapter, and no change at all here or
-// in any test that uses this.
+// Backend scaffolding for this package's token-touching tests. Every one
+// runs against every backend the environment provides. The iteration, the
+// skip policy and the token provisioning live in internal/hsmtest; this
+// file only names the two tokens "root" and "intermediate".
 
 import (
 	"testing"
@@ -21,7 +13,7 @@ import (
 )
 
 // ceremonyBackend names a hsmtest.Backend's two tokens for the CA tiers
-// they hold. The field names are what this package's tests already speak.
+// they hold.
 type ceremonyBackend struct {
 	name              string
 	adapter           pk11.VendorAdapter
@@ -43,8 +35,8 @@ func fromHSMTest(hb *hsmtest.Backend) *ceremonyBackend {
 	return &ceremonyBackend{
 		name:    hb.Name,
 		adapter: hb.Adapter,
-		// The root goes on the secondary token: the whole point of the
-		// two-token layout is that the service's token never holds it.
+		// The root goes on the secondary token; the service's token never
+		// holds it.
 		rootWS:   hb.Secondary,
 		interWS:  hb.Primary,
 		rootPIN:  hb.SecondaryPIN,
@@ -63,9 +55,8 @@ func forEachCeremonyBackend(t *testing.T, fn func(t *testing.T, b *ceremonyBacke
 	})
 }
 
-// setupSoftHSM2CeremonyBackend builds the SoftHSM2 backend specifically,
-// for tests that are about SoftHSM2's own behaviour rather than about the
-// abstraction — see hsmtest.SoftHSM2 for when that is legitimate.
+// setupSoftHSM2CeremonyBackend builds the SoftHSM2 backend, for tests
+// about SoftHSM2's own behaviour.
 func setupSoftHSM2CeremonyBackend(t *testing.T) *ceremonyBackend {
 	t.Helper()
 	return fromHSMTest(hsmtest.SoftHSM2(t))

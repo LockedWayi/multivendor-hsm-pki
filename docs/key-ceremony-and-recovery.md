@@ -1,21 +1,21 @@
 # Key ceremony and disaster recovery
 
-Phase 3b sub-task 3b.6. The companion to [`threat-model.md`](threat-model.md):
-that document says what an attacker gets and does not get; this one says what
-an *operator* does — how the root and intermediate come into existence, what
-record that leaves, and what to do when a token is lost, stolen, or simply
-reaches the end of its rotation window.
+The companion to [`threat-model.md`](threat-model.md). That document says
+what an attacker gets and does not get. This one says what an operator
+does: how the root and intermediate come into existence, what record that
+leaves, and what to do when a token is lost, stolen, or reaches the end
+of its rotation window.
 
 ## 1. How to read this
 
 Three audiences, three sections:
 
-- Running the root ceremony for the first time, or refreshing the root CRL:
-  §2.
+- Running the root ceremony for the first time, or refreshing the root
+  CRL: §2.
 - A token was lost, destroyed, or is suspected compromised: §4.
-- Designing what this platform does not yet build — wrap-based backup,
-  vendor-native ceremony hardware, CA rotation: §5–§7, all labelled
-  **documented-design** per the verified-claim split where they have not been run.
+- Designing what this platform does not yet build. Wrap-based backup,
+  vendor-native ceremony hardware, CA rotation: §5 to §7, all labelled
+  **documented-design** where they have not been run.
 
 Every artifact this document describes is public: certificates and a CRL.
 Nothing here ever writes a private key, a PIN, or a wrapped key blob to a
@@ -25,34 +25,32 @@ log line or a plaintext file.
 
 ### 2.1 Who, and with what access
 
-One operator, run locally against real hardware or the software emulator —
-this repository demonstrates a **single-operator** ceremony, which
-§7's non-goal in `threat-model.md` states plainly: it provides no separation
+One operator, run locally against SoftHSM2 or ProtectToolkit-C software
+emulation. This repository demonstrates a **single-operator** ceremony.
+§7 of `threat-model.md` states the consequence: it provides no separation
 of duties. The operator needs:
 
-- PINs for **two** tokens: the root's and the intermediate's
-  . Never the same token — `RunCeremony`
-  refuses to run if the two workspaces resolve to the same serial.
+- PINs for **two** tokens, the root's and the intermediate's. Never the
+  same token. `RunCeremony` refuses to run if the two workspaces resolve
+  to the same serial.
 - The vendor module path and adapter name (`softhsm2` or `protectserver`).
 - Every certificate parameter decided **before** the ceremony starts,
-  because a ceremony is irreversible: subject names, the
-  EC curve, and — the one that is easiest to get wrong — the root CRL and
-  root certificate distribution URLs. Those two URLs are baked into the
-  intermediate's extensions at signature time and can never be changed
-  without bringing the offline root back out to re-sign. Validity periods
-  are the one exception worth flagging: `CeremonyParams` supports
+  because a ceremony is irreversible: subject names, the EC curve, and the
+  root CRL and root certificate distribution URLs. Those two URLs are
+  baked into the intermediate's extensions at signature time and can never
+  be changed without bringing the offline root back out to re-sign.
+  Validity periods are the one exception. `CeremonyParams` supports
   `RootValidity`, `IntermediateValidity` and `RootCRLValidity`, but
-  `hsm-pki-keytool ceremony` does not expose them as flags today — every
-  ceremony run through the CLI gets the platform defaults (ten years,
-  five years, five years) whether that is what the operator wanted or not.
-  `CeremonyParams.validate()` still rejects an intermediate that would
-  outlive its root even at the default values, so this is a missing
+  `hsm-pki-keytool ceremony` does not expose them as flags. Every ceremony
+  run through the CLI gets the platform defaults (ten years, five years,
+  five years). `CeremonyParams.validate()` still rejects an intermediate
+  that would outlive its root at the default values, so this is a missing
   option, not a missing safety check.
 
 `cmd/hsm-pki-keytool`'s `ceremony` subcommand validates every one of these
 before it generates the first key (`internal/ca/ceremony.go`,
-`CeremonyParams.validate`) — a malformed URL or a validity mismatch is
-rejected before any key exists on either token, not after.
+`CeremonyParams.validate`). A malformed URL or a validity mismatch is
+rejected before any key exists on either token.
 
 ### 2.2 Running it
 
@@ -74,10 +72,9 @@ hsm-pki-keytool ceremony \
   -intermediate-cert-out intermediate.pem
 ```
 
-Against ProtectServer, see
-[`protectserver-setup.md`](protectserver-setup.md) §3b for provisioning the
-two tokens and §3c for migrating a Phase 2-era single-tier token — there is
-no upgrade path, by design; a single-tier key was never certified by a root,
+Against ProtectServer, the two tokens are provisioned first with the
+ProtectToolkit tools (`ctconf`, `ctkmu`). There is no upgrade path from an
+older single-tier token. A single-tier key was never certified by a root,
 so it cannot become an intermediate.
 
 ### 2.3 What comes out, and what does not
@@ -87,182 +84,132 @@ Three files, all PEM, all public:
 - The root certificate (`pathlen:1`, self-signed).
 - The intermediate certificate (`pathlen:0`, signed by the root), carrying
   the CDP and AIA extensions built from the two URLs above.
-- The root's initial CRL — long-lived (`DefaultRootCRLValidity`, five
-  years), covering exactly the intermediate, with zero revoked entries. The
-  reasoning for a long-lived CRL rather than a recurring "root online"
-  schedule is in, "How the root CRL
-  is produced while the root is offline."
+- The root's initial CRL, long-lived (`DefaultRootCRLValidity`, five
+  years), covering exactly the intermediate, with zero revoked entries. It
+  is long-lived because the root stays offline between ceremonies (§2.4).
 
 No private key material of any kind. Both key pairs are generated on, and
-never leave, their respective tokens — `RunCeremony` asserts
-`adapter.TokenLoggedIn() == false` after it returns, on every path, and the
-CLI's success output prints that explicitly:
+never leave, their respective tokens. `RunCeremony` asserts
+`adapter.TokenLoggedIn() == false` after it returns, on every path, and
+the CLI's success output prints that:
 
 ```
-no private key material was written anywhere — both key pairs remain on their respective HSM tokens
-root private key: CKA_EXTRACTABLE=true — eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)
+no private key material was written anywhere; both key pairs remain on their respective HSM tokens
+root private key: CKA_EXTRACTABLE=true; eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)
 ```
 
-That second line is the operator-facing echo of §6.2's decision below —
-printed so it is part of the ceremony's own record, not something an
-operator has to separately remember they chose.
+The second line echoes the §5.2 decision. It is printed so it is part of
+the ceremony's own record.
 
-**Certificates are written before the error is checked, deliberately.** If
-signing succeeds but the root token's logout then fails, the key pairs
-already exist — the ceremony's own overwrite guard means a second attempt
-cannot recreate them under the same labels — so discarding the certificates
-at that point would be unrecoverable. `cmd/hsm-pki-keytool` writes the three
+**Certificates are written before the error is checked.** If signing
+succeeds but the root token's logout then fails, the key pairs already
+exist. The ceremony's overwrite guard means a second attempt cannot
+recreate them under the same labels, so discarding the certificates at
+that point would be unrecoverable. `cmd/hsm-pki-keytool` writes the three
 files first and reports the logout error alongside them.
 
 ### 2.4 Refreshing the root CRL
 
-The root stays offline between ceremonies by design (§2.1), so there is no
-"publish an updated root CRL" operation that does not involve the root
-token. Refreshing it — extending its validity, or (see §4.2) actually
-revoking the intermediate — means **running the ceremony again**: a fresh
-root key, a fresh intermediate signed under it, a fresh CRL. This is not a
-limitation to work around; it is the operational consequence of choosing a
-long-lived CRL over a recurring "root online" moment
-, and it is why §4's disaster
-recovery procedures and a routine CRL refresh are, mechanically, the same
-event — the ceremony does not distinguish "the root's CRL is due for
-renewal" from "the intermediate was compromised."
+The root stays offline between ceremonies, so there is no "publish an
+updated root CRL" operation that does not involve the root token.
+Refreshing it, whether to extend its validity or to revoke the
+intermediate (§4.2), means bringing the root out. §4's disaster recovery
+procedures and a routine CRL refresh are the same event mechanically. The
+ceremony does not distinguish "the root's CRL is due for renewal" from
+"the intermediate was compromised".
 
 ## 3. The ceremony manifest
 
 ### 3.1 What it is, and why it exists
 
-A real key ceremony leaves a written record of what was produced, on which
-physical token, by whom, and when — evidence a later operator uses to
-confirm they are looking at the same token the root was generated on, not
-one that merely shares its label. `threat-model.md` §A7
-names exactly why this matters: the one attacker the ceremony's own design
-cannot stop is the operator running it, and the mitigation for that is
-procedural, not cryptographic — a written record and, eventually,
-multi-person control this repository does not implement (§7's non-goal).
-The manifest is the written half.
+A key ceremony leaves a written record of what was produced, on which
+token, by whom, and when. A later operator uses it to confirm they are
+looking at the same token the root was generated on, not one that merely
+shares its label. `threat-model.md` §A7 names why this matters: the one
+attacker the ceremony's own design cannot stop is the operator running it.
+The mitigation is procedural: a written record and, eventually,
+multi-person control this repository does not implement (§7 of the threat
+model). The manifest is the written half.
 
 ### 3.2 Fields
 
-Everything here is public — no PIN, no private key, no wrapped key blob:
+Everything here is public. No PIN, no private key, no wrapped key blob.
 
 | Field | Source | Why it is in the manifest |
 |---|---|---|
-| Root token label and serial | `pkcs11.Workspace` | Serial is identity, label is address — both are recorded so a later operator can resolve either |
+| Root token label and serial | `pkcs11.Workspace` | Serial is identity, label is address. Both are recorded so a later operator can resolve either |
 | Intermediate token label and serial | `pkcs11.Workspace` | Same reasoning, other tier |
 | Root key label | operator-supplied flag | What `C_FindObjects` resolves at signing time |
 | Intermediate key label | operator-supplied flag | Same, intermediate tier |
-| Root key `CKA_EXTRACTABLE` | `-root-key-extractable` | Whether this root is backup-eligible — see §6.2; a later operator must not have to re-derive this from the token itself when deciding whether a restore is even possible |
-| Root certificate serial number | `CeremonyResult` (parsed) | The value a relying party's chain-building actually keys on |
+| Root key `CKA_EXTRACTABLE` | `-root-key-extractable` | Whether this root is backup-eligible (§5.2). A later operator must not have to re-derive this from the token when deciding whether a restore is possible |
+| Root certificate serial number | `CeremonyResult` (parsed) | The value a relying party's chain-building keys on |
 | Intermediate certificate serial number | `CeremonyResult` (parsed) | Same, intermediate tier |
 | Root and intermediate subject DNs | operator-supplied flags | What the certificates assert, for a human cross-check against what was intended |
-| Root and intermediate validity windows | `CeremonyParams` (defaults or flags) | When each certificate — and therefore the chain — stops being valid |
-| Root CRL validity | `CeremonyParams` (default or flag) | When the root's CRL must be refreshed (the every-backend rule) |
+| Root and intermediate validity windows | `CeremonyParams` (defaults or flags) | When each certificate, and therefore the chain, stops being valid |
+| Root CRL validity | `CeremonyParams` (default or flag) | When the root's CRL must be refreshed |
 | Root CRL URL / root certificate URL | operator-supplied flags | The values baked into the intermediate's extensions, irreversibly, at signature time |
 | Timestamp | ceremony run time | When this happened, in absolute terms |
-| Operator identity | outside this tool's scope | Who ran it — a procedural fact, not something PKCS#11 can attest to; recorded by whatever process wraps the ceremony (sign-off sheet, ticket, commit) |
+| Operator identity | outside this tool's scope | Who ran it. A procedural fact PKCS#11 cannot attest to, recorded by whatever process wraps the ceremony (sign-off sheet, ticket, commit) |
 
 ### 3.3 Current state, and what is deferred
 
 Not all of this is captured automatically today. Token labels, key labels,
-the CDP/AIA URLs, and (since the tag convention) the root's `CKA_EXTRACTABLE` choice are
-either what the operator typed on the command line or printed by
-`hsm-pki-keytool ceremony`'s own stdout (the verified-claim split's output block). Certificate
-serial numbers, subject DNs, and validity windows are **not** printed
-anywhere today — the operator has to read them off the written PEM files
-themselves (`openssl x509 -text -in root.pem`, and likewise for the
-intermediate) and assemble the manifest by hand from the command line used,
-the stdout output, and that inspection. What does not exist yet is a
-**structured file** — JSON or YAML — that the ceremony emits automatically,
-parsing its own output the way an operator currently has to. That is
-recorded as a Phase 4.8 item , alongside
-that phase's other `hsm-pki-keytool` extensions, rather than bolted onto
-the CLI here ahead of the format being exercised by real use.
+the CDP and AIA URLs, and the root's `CKA_EXTRACTABLE` choice are either
+what the operator typed on the command line or printed by
+`hsm-pki-keytool ceremony`'s own stdout. Certificate serial numbers,
+subject DNs, and validity windows are **not** printed anywhere. The
+operator reads them off the written PEM files (`openssl x509 -text -in
+root.pem`, and likewise for the intermediate) and assembles the manifest
+by hand from the command line used, the stdout output, and that
+inspection. A **structured file**, JSON or YAML, that the ceremony emits
+automatically does not exist yet. It is future work.
 
 ## 4. Disaster recovery, by tier
 
 "Lost" covers the same set of events regardless of cause: the token is
 destroyed, the hardware fails, or a compromise means the key can no longer
-be trusted — `threat-model.md` A6 and A7 name the relevant attackers. The
+be trusted. `threat-model.md` A6 and A7 name the relevant attackers. The
 recovery path differs by which tier is lost, and that difference is the
-entire reason this platform has two tiers rather than one
-.
+reason this platform has two tiers rather than one.
 
-### 4.1 Losing the intermediate token — the routine case
+### 4.1 Losing the intermediate token, the routine case
 
 This is the incident the two-tier hierarchy exists to make cheap. The root
-is untouched; every certificate the root ever signed, including the old
+is untouched. Every certificate the root ever signed, including the old
 intermediate, is still valid until explicitly revoked. The recovery is:
 
-1. ~~Revoke the old intermediate on the root's CRL — which, per the every-backend rule, means
-   running the ceremony again, since the root is offline. The new run
-   signs a *new* intermediate under a *new* root key, because `RunCeremony`
-   generates both tiers together (see the gap noted in §4.1.1 below) — so
-   today this path is mechanically identical to §4.2's "lose the root"
-   path, even though the root itself was never touched.~~
-   **Corrected 2026-09-05:** the root is no longer regenerated for this.
-   Bring the root out, run `hsm-pki-keytool reissue-intermediate` to sign
-   a new intermediate under the existing root key, and re-run the ceremony
-   only to publish an updated root CRL revoking the old intermediate. See
-   §4.1.2.
+1. Bring the root out and run `hsm-pki-keytool reissue-intermediate` to
+   sign a new intermediate under the existing root key (§4.1.1). Then
+   re-run the ceremony's CRL step to publish an updated root CRL revoking
+   the old intermediate.
 2. Re-issue every leaf that was still validly issued under the old
    intermediate, under the new one. The service cannot do this
-   automatically: a leaf's issuer is fixed at signature time (the engineering contract
-   validating before mutating), so this is a re-issuance campaign, not a configuration change.
+   automatically. A leaf's issuer is fixed at signature time, so this is a
+   re-issuance campaign.
 3. Point the service at the new intermediate certificate and key label
-   (`ca.intermediate_cert_path`, `ca.intermediate_key_label`) and restart —
-   `ca.LoadIntermediate`'s startup checks (
-   phase-3b-pki-hardening.md`, 3b.2) refuse to start against anything that
-   is not a validly-chained, non-self-signed, correctly-`pathlen:0`
-   certificate whose public key matches the configured key label, so a
-   mismatched pairing fails loudly at startup rather than issuing
-   certificates nothing can verify.
+   (`ca.intermediate_cert_path`, `ca.intermediate_key_label`) and restart.
+   `ca.LoadIntermediate`'s startup checks refuse to start against anything
+   that is not a validly chained, non-self-signed, `pathlen:0` certificate
+   whose public key matches the configured key label. A mismatched pairing
+   fails at startup rather than issuing certificates nothing can verify.
 
-#### 4.1.1 ~~The gap: there is no "re-issue the intermediate alone" path yet~~ — CLOSED 2026-09-05
+#### 4.1.1 Routine intermediate rotation
 
-> **Superseded by the `reissue-intermediate` work (Phase 4, 2026-09-05).**
-> The gap this section describes is closed: `ca.ReissueIntermediate`
-> (`internal/ca/reissue.go`) and `hsm-pki-keytool reissue-intermediate`
-> sign a new intermediate under the **existing** root, and the command
-> cannot generate a root at all — a missing root key is a hard
-> `ErrKeyNotFound`, verified by a test that asserts no key was created
-> after the failure.
->
-> So §4.1's step 1 above no longer requires a full ceremony, and losing
-> only the intermediate is no longer mechanically identical to §4.2.
-> The corrected procedure is §4.1.2 below.
->
-> The analysis that follows is left exactly as written: it is the
-> reasoning that produced the command, and rewriting it would make this
-> document look as though the gap had never existed.
-
-the key lifecycle describes the intermediate rotating by "re-issuing the
-intermediate (routine)" — implying the root key is *reused*, not
-regenerated, for what should be the cheap, frequent case. `RunCeremony`
-does not support that today: `signRootAndIntermediate`
-(`internal/ca/ceremony.go`) always calls `GenerateKeyPair` for the root, so
-every ceremony run mints a fresh root whether one was needed or not. Until
-a `reissue-intermediate` subcommand exists (tracked in
-), losing *only* the
-intermediate token is handled exactly like §4.2 — which is safe (nothing
-about re-running the full ceremony is incorrect) but more expensive than it
-needs to be: every relying party that pinned the old root now has to trust
-a new one, for an incident that never touched the root at all.
-
-#### 4.1.2 Routine intermediate rotation, as it works now
-
-Added 2026-09-05, when `reissue-intermediate` landed. This is the procedure
-the key lifecycle calls "re-issuing the intermediate (routine)" — for a planned
+`ca.ReissueIntermediate` (`internal/ca/reissue.go`) and
+`hsm-pki-keytool reissue-intermediate` sign a new intermediate under the
+**existing** root. The command cannot generate a root at all. A missing
+root key is a hard `ErrKeyNotFound`, verified by a test that asserts no
+key was created after the failure. This is the procedure for a planned
 rotation, or for the loss of the intermediate token alone.
 
-The root still has to come out of storage: it holds the only key that can
-sign an intermediate. What changed is that it is *used* rather than
-*replaced*, so every relying party keeps the root it already trusts.
+The root still has to come out of storage. It holds the only key that can
+sign an intermediate. It is used rather than replaced, so every relying
+party keeps the root it already trusts.
 
 ```sh
 # The root token is attached; the new intermediate key is generated on the
 # intermediate's own token, which is never the root's (checked by serial,
-# and then confirmed empirically by an object search — the identity rule).
+# and then confirmed by an object search).
 hsm-pki-keytool reissue-intermediate \
   -module "$PKCS11_MODULE" \
   -root-workspace hsm-pki-root -root-pin-env ROOT_PIN \
@@ -275,315 +222,273 @@ hsm-pki-keytool reissue-intermediate \
   -intermediate-cert-out /secure/intermediate-v2.pem
 ```
 
-Four things this does *not* do, each deliberate:
+Four things this does not do:
 
 - **It does not generate a root key.** A root key that cannot be found is
   `ErrKeyNotFound`, never a fresh key pair. A typo in `-root-key-label`
   that silently minted a second root would produce an intermediate
-  verifying against a root nobody trusts — a failure that appears at every
+  verifying against a root nobody trusts, a failure that appears at every
   relying party at once, long after the HSM went back in the safe.
 - **It does not overwrite the previous intermediate's key label.** `-v2`
-  is provisioned alongside `-v1`, per the key lifecycle. The old key keeps
-  working, which is what makes the next step a transition rather than an
-  outage.
-- **It does not revoke the old intermediate.** Overlap is the point.
+  is provisioned alongside `-v1`. The old key keeps working, which is what
+  makes the next step a transition rather than an outage.
+- **It does not revoke the old intermediate.** Overlap is required.
   Revoking is a separate, explicit act at the end of the transition
-  window, and it means publishing an updated root CRL — still a
-  root-online operation.
-- **It does not write private key material anywhere.** Both key pairs stay
-  on their tokens.
+  window, and it means publishing an updated root CRL, still a root-online
+  operation.
+- **It does not write private key material anywhere.** Both key pairs
+  stay on their tokens.
 
 Then, in order:
 
 1. Point the service at the new certificate and key label
    (`ca.intermediate_cert_path`, `ca.intermediate_key_label`) and restart.
-   `ca.LoadIntermediate`'s startup checks refuse to come up on a mismatched
-   pairing, so a wrong pairing fails loudly instead of issuing
-   certificates nothing can verify.
+   `ca.LoadIntermediate`'s startup checks refuse a mismatched pairing.
 2. Re-issue leaves under the new intermediate over the transition window.
-   A leaf's issuer is fixed at signature time, so this is a campaign, not
-   a configuration change.
+   A leaf's issuer is fixed at signature time, so this is a campaign.
 3. At the end of the window, revoke the old intermediate and publish an
-   updated root CRL — the root comes out once more for this.
-4. Retire the old key by destroying it on the token, per the key lifecycle's
-   provision → verify-only → retire lifecycle.
+   updated root CRL. The root comes out once more for this.
+4. Retire the old key by destroying it on the token, per the provision,
+   verify-only, retire lifecycle.
 
 Verified on SoftHSM2, 2026-09-05: after a ceremony and a re-issue,
 `openssl verify -CAfile root.pem` accepts **both** `intermediate-v1.pem`
 and `intermediate-v2.pem`, the two carry different public keys, and the v2
-certificate carries `CA:TRUE, pathlen:0` with the root's CDP and AIA. The
-ProtectServer half of that claim is not yet made — see
-4.11.
+certificate carries `CA:TRUE, pathlen:0` with the root's CDP and AIA. That
+has not been run on ProtectToolkit-C software emulation.
 
-### 4.2 Losing the root token — the exceptional case
+### 4.2 Losing the root token, the exceptional case
 
-The root cannot be recovered from a backup unless §6's wrap-based design
-was actually used for it (§6.2 — an explicit, per-ceremony operator
-choice, not a given). Absent that, recovery is a **fresh ceremony**: a new
-root key, on a new or wiped token, and a decision about the existing
-intermediate:
+The root cannot be recovered from a backup unless §5's wrap-based design
+was used for it (§5.2, an explicit per-ceremony operator choice). Absent
+that, recovery is a **fresh ceremony**: a new root key, on a new or wiped
+token, and a decision about the existing intermediate:
 
-- **Cross-sign it.** Have the new root also sign the *existing* intermediate
-  certificate's public key, producing a second intermediate certificate
-  (same key, same subject, a different issuer and serial) that chains to
-  the new root. Relying parties that already trust the old root keep
-  working through the old chain during a transition window; new
-  verification uses the new chain. This is the standard technique real CAs
-  use for a root rollover without a "flag day" where every relying party
-  must update simultaneously.
+- **Cross-sign it.** Have the new root also sign the existing
+  intermediate certificate's public key, producing a second intermediate
+  certificate (same key, same subject, a different issuer and serial) that
+  chains to the new root. Relying parties that already trust the old root
+  keep working through the old chain during a transition window. New
+  verification uses the new chain. This is the standard technique for a
+  root rollover without a flag day where every relying party must update
+  simultaneously.
 - **Re-issue the intermediate fresh under the new root**, and treat this
   identically to §4.1 (revoke, re-issue every leaf, repoint the service).
-  Simpler, but loses continuity: nothing chains through the old root any
-  more, so any relying party that only trusts the old root is locked out
-  until it updates.
+  Simpler, and it loses continuity. Nothing chains through the old root
+  any more, so any relying party that only trusts the old root is locked
+  out until it updates.
 
-Cross-signing is **not implemented** in this repository — `RunCeremony`
+Cross-signing is **not implemented** in this repository. `RunCeremony`
 signs one intermediate under the root key pair it just generated in the
-same run; there is no path that takes an *existing* intermediate public key
-and signs it under a *newly generated* root. It is recorded here as
-documented-design: the mechanism is ordinary
+same run. There is no path that takes an existing intermediate public key
+and signs it under a newly generated root. The mechanism is ordinary
 `x509.CreateCertificate` with an existing public key and a new issuer,
-identical in shape to what `signRootAndIntermediate` already does for the
-first-ever intermediate, but no operator-facing command exists to invoke it
-against a *pre-existing* key. Building it is future work, not scoped to any
-phase file yet.
+identical in shape to what `signRootAndIntermediate` does for the
+first-ever intermediate, but no operator-facing command exists to invoke
+it against a pre-existing key. Building it is future work.
 
 ### 4.3 Losing both tokens
 
-No cross-signing is possible — there is no existing intermediate key left
+No cross-signing is possible. There is no existing intermediate key left
 to sign. This is a full restart: a fresh two-tier ceremony, a new trust
 anchor distributed to every relying party out of band, and every
 certificate ever issued under the old hierarchy re-issued from scratch.
-There is no shortcut, and none should be invented — a CA's trust anchor
-being unrecoverable except by starting over is not a defect in the design,
-it is what "the root is the root" means.
+There is no shortcut. A CA's trust anchor being unrecoverable except by
+starting over is what "the root is the root" means.
 
 ## 5. Wrap-based backup design
 
 ### 5.1 The mechanism
 
-PKCS#11's `C_WrapKey` / `C_UnwrapKey` pair (Phase 1's `Wrap`/`Unwrap` on
+PKCS#11's `C_WrapKey` / `C_UnwrapKey` pair (`Wrap` and `Unwrap` on
 `VendorAdapter`) lets one HSM-held key export another **only in encrypted
 form**, and only if the exported key's `CKA_EXTRACTABLE` is `true`. The
-plaintext key material never enters application memory at any point — it is
-encrypted inside the token and decrypted inside a token (the same one, or a
-different one) that holds the matching unwrapping key. That is the entire
-value proposition: a backup that is useless without also holding the
-wrapping key, which is itself an HSM-held object, ordinarily kept under
-separate custody from the key it protects.
+plaintext key material never enters application memory. It is encrypted
+inside the token and decrypted inside a token (the same one, or a
+different one) that holds the matching unwrapping key. A backup is useless
+without also holding the wrapping key, which is itself an HSM-held object,
+ordinarily kept under separate custody from the key it protects.
 
 `internal/pkcs11`'s
 `TestConformance/WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip` proves the
 mechanics: generate an EC key pair with `Extractable: true`, sign with it,
 wrap its private key under an AES wrapping key, **destroy the original
-object** (simulating the token it lived on being lost), unwrap the ciphertext
-back into a new object, and sign again — the second signature verifies
-against the same public key the first one did. It runs on both backends per
-the every-backend rule and is the sub-task's optional demo, built because
-`DestroyObject` (3b.8) made the "simulate loss" step possible.
+object** (simulating the token it lived on being lost), unwrap the
+ciphertext back into a new object, and sign again. The second signature
+verifies against the same public key the first one did. It runs on both
+backends.
 
 **What this is not**: a working restore procedure by itself. It proves the
-primitive round-trips on one token; a real backup unwraps onto a
-*different* token under separate custody, which `C_UnwrapKey` does not
-care about (it is symmetric in which token performs which half) but which
-this repository's test harness has no third token to actually exercise.
+primitive round-trips on one token. A real backup unwraps onto a different
+token under separate custody. `C_UnwrapKey` does not care about that (it
+is symmetric in which token performs which half), but this repository's
+test harness has no third token to exercise it.
 
 ### 5.2 Deciding root-key extractability
 
-`CKA_EXTRACTABLE=false` — this platform's default for every key it
+`CKA_EXTRACTABLE=false` is this platform's default for every key it
 generates, including the root (`internal/pkcs11/types.go`,
-`KeyPairRequest.Extractable`'s doc comment) — and a wrap-based backup of
-that same key are mutually exclusive. A non-extractable key has no door
-`C_WrapKey` can use. So the root ceremony faces a genuine fork with no
-default that is obviously correct for every deployment:
+`KeyPairRequest.Extractable`). A wrap-based backup of that same key and a
+non-extractable key are mutually exclusive. A non-extractable key has no
+door `C_WrapKey` can use. The root ceremony faces a fork with no default
+that is correct for every deployment:
 
-- **Non-extractable root.** Matches every other key on this platform, and
-  the strongest reading of the key-and-PIN rule. No wrap-based backup exists for
-  the root; losing the token means §4.2 or §4.3, unconditionally.
-- **Extractable root.** A wrapped backup becomes possible, at a real cost:
+- **Non-extractable root.** Matches every other key on this platform. No
+  wrap-based backup exists for the root. Losing the token means §4.2 or
+  §4.3, unconditionally.
+- **Extractable root.** A wrapped backup becomes possible, at a cost.
   `CKA_EXTRACTABLE=true` does not distinguish a legitimate backup operator
   from `threat-model.md`'s A7 (a malicious ceremony operator) or a
-  successful A6 token attack — either can wrap the key out under a
-  wrapping key of their own choosing, during the same session that has the
-  root authenticated anyway. The wrapped bytes stay meaningfully protected
-  only if the wrapping key is under *separate* custody the same attacker
-  does not also control — a second HSM, ideally under quorum, which is
-  exactly what §6's vendor-native mechanisms provide and this repository's
-  own AES-wrap demo, run on one token, does not.
+  successful A6 token attack. Either can wrap the key out under a wrapping
+  key of their own choosing, during the same session that has the root
+  authenticated. The wrapped bytes stay protected only if the wrapping key
+  is under separate custody the same attacker does not also control: a
+  second HSM, ideally under quorum, which is what §6's vendor-native
+  mechanisms provide and this repository's own AES-wrap demo, run on one
+  token, does not.
 
-**Decided 2026-08-31 by the maintainer:** neither hard-coded default.
-Asked at ceremony time, as an explicit per-run operator choice —
-`CeremonyParams.RootKeyExtractable` and `hsm-pki-keytool ceremony`'s
-`-root-key-extractable` flag — **defaulting to `true`**. The reasoning for
-defaulting on rather than off: a disposable development token has nothing
-worth restoring, so an off-by-default would make the case that actually
-matters — a real root, meant to last years — the one an operator has to
-remember to opt into, at exactly the one moment (ceremony time) that choice
-can ever be made. `TestRunCeremony_RootKeyExtractableIsOperatorControlled`
-proves the flag reaches the token's `CKA_EXTRACTABLE` attribute in both
-directions, read back rather than assumed from the request (the engineering contract
-independent verification), on both backends. The choice is echoed in the ceremony's own
-output (the verified-claim split) so it becomes part of that run's record rather than a fact
-an operator has to separately remember.
+**Decided 2026-08-31 by the maintainer:** neither hard-coded default. It
+is asked at ceremony time, as an explicit per-run operator choice
+(`CeremonyParams.RootKeyExtractable` and `hsm-pki-keytool ceremony`'s
+`-root-key-extractable` flag), **defaulting to `true`**. A disposable
+development token has nothing worth restoring, so an off-by-default would
+make the case that matters, a real root meant to last years, the one an
+operator has to remember to opt into, at the one moment that choice can be
+made. `TestRunCeremony_RootKeyExtractableIsOperatorControlled` proves the
+flag reaches the token's `CKA_EXTRACTABLE` attribute in both directions,
+read back rather than assumed from the request, on both backends. The
+choice is echoed in the ceremony's own output so it becomes part of that
+run's record.
 
-This does not weaken `CKA_SENSITIVE`, which `GenerateKeyPair` forces `true`
-unconditionally regardless of `Extractable` (3b.7) — `C_GetAttributeValue`
+This does not weaken `CKA_SENSITIVE`, which `GenerateKeyPair` forces
+`true` unconditionally regardless of `Extractable`. `C_GetAttributeValue`
 still refuses to disclose the key in the clear either way.
-`CKA_EXTRACTABLE` and `CKA_SENSITIVE` govern two different doors
-, and only the wrap door is ever opened by this decision.
+`CKA_EXTRACTABLE` and `CKA_SENSITIVE` govern two different doors, and only
+the wrap door is opened by this decision.
 
-### 5.3 Verify after restore — a measured requirement, not a suggestion
+### 5.3 Verify after restore, a measured requirement
 
-Building the demo in the commit convention found a real divergence, not a hypothetical one:
-restoring a key via `C_UnwrapKey` does **not** guarantee the restored
-object actually carries the restrictive attributes the unwrap template
-asked for.
+Building the demo found a divergence. Restoring a key via `C_UnwrapKey`
+does **not** guarantee the restored object carries the restrictive
+attributes the unwrap template asked for.
 
 | Backend | Restored private key's `CKA_EXTRACTABLE`, template asked for `false` |
 |---|---|
-| SoftHSM2 2.6.1 | `false` — the template is honored |
-| ProtectToolkit 7.3.3 | **`true`** — the template's request is silently ignored |
+| SoftHSM2 2.6.1 | `false`. The template is honored |
+| ProtectToolkit-C 7.3.3 software emulation | **`true`**. The template's request is silently ignored |
 
-Both are conformant . This is
-the same class of finding as 3b.7's `CKA_SENSITIVE` disclosure — a
-caller-requested restriction the standard does not obligate any vendor to
-honor — and it cannot be closed the same way that one was: `GenerateKeyPair`
-could force `CKA_SENSITIVE=true` unconditionally because no legitimate
-caller anywhere in this platform wants a readable private key, but `Unwrap`
-is a generic primitive with legitimately different needs per call (the
-AES payload-key round trip in the same conformance suite needs
-`Extractable: true` to survive the restore), so there is no single default
-this platform's own code can force.
+Both are conformant. This is the same class of finding as the
+`CKA_SENSITIVE` disclosure in `test-matrix.md`, a caller-requested
+restriction the standard does not obligate any vendor to honor. It cannot
+be closed the same way. `GenerateKeyPair` could force `CKA_SENSITIVE=true`
+unconditionally because no legitimate caller anywhere in this platform
+wants a readable private key. `Unwrap` is a generic primitive with
+different needs per call (the AES payload-key round trip in the same
+conformance suite needs `Extractable: true` to survive the restore), so
+there is no single default this platform's own code can force.
 
 **The operational rule this produces:** after restoring any key from a
 wrapped backup, on any vendor, read its attributes back off the token and
-confirm them before trusting the restored key with anything — never trust
-the template that was sent. This is independent verification's "ask the token, not
-the request" discipline, applied to a restore instead of a generation.
+confirm them before trusting the restored key with anything. Never trust
+the template that was sent.
 
 ### 5.4 What this must never be used for
 
-The wrapping key's purpose is narrow, and widening it is exactly the
-mistake this section exists to head off:
+The wrapping key's purpose is narrow:
 
-- **Never a bulk-export key.** A wrapping key that can wrap *any* object on
+- **Never a bulk-export key.** A wrapping key that can wrap any object on
   the token is a single point of failure that recreates the disclosure
-  risk the key-and-PIN rule exists to prevent, just moved one layer over — compromise the
-  wrapping key and every extractable private key on the token is
-  recoverable. Scope it (`CKA_WRAP` / `CKA_UNWRAP` set only on the
-  purpose-built wrapping key, used only for the specific backup-eligible
-  key it exists to protect) rather than treating it as a general escape
-  hatch.
+  risk one layer over. Compromise the wrapping key and every extractable
+  private key on the token is recoverable. Scope it: `CKA_WRAP` and
+  `CKA_UNWRAP` set only on the purpose-built wrapping key, used only for
+  the specific backup-eligible key it exists to protect.
 - **Never a transport mechanism to an untrusted token.** Unwrapping a key
   onto a token this platform does not control is indistinguishable, from
   the source token's perspective, from handing the plaintext to whoever
-  controls that token — the ciphertext's confidentiality is entirely a
+  controls that token. The ciphertext's confidentiality is entirely a
   function of who holds the unwrapping key.
 - **Never a substitute for §5.3's verification step.** A backup that
   restores into an unexpectedly extractable key (as measured on
-  ProtectToolkit above) has quietly widened the very door it existed to
-  guard, unless someone checks.
+  ProtectToolkit-C above) has widened the door it existed to guard, unless
+  someone checks.
 
 ## 6. Vendor-native mechanisms (documented-design)
 
-**Labelled per the verified-claim split: none of this has been run.** What follows is
-what each vendor's published documentation states its own mechanism
-provides — not a claim this repository has exercised, verified, or can
-currently afford the hardware/licensing to exercise. Where this repository
-*has* measured vendor behavior directly, it is in
-, not here.
+**None of this has been run.** What follows is what each vendor's
+published documentation states its own mechanism provides. It is not a
+claim this repository has exercised or verified. Where this repository has
+measured vendor behaviour directly, it is in
+[`test-matrix.md`](test-matrix.md).
 
-- **nShield Security World / ACS quorum (Thales, Phase 7).** A Security
-  World defines an Administrator Card Set (ACS) with a configurable
-  quorum (`K` of `N` cards required). Keys are protected by the Security
-  World rather than by a single token, and can be backed up as an
-  encrypted archive restorable onto replacement hardware belonging to the
-  same Security World. The quorum is the separation-of-duties mechanism
-  this repository's own single-operator ceremony (§7's non-goal in
-  `threat-model.md`) explicitly does not provide.
-- **Luna cloning domains (Thales/SafeNet, Phase 7).** Partitions in the
+- **nShield Security World / ACS quorum (Thales, planned).** A Security
+  World defines an Administrator Card Set (ACS) with a configurable quorum
+  (`K` of `N` cards required). Keys are protected by the Security World
+  rather than by a single token, and can be backed up as an encrypted
+  archive restorable onto replacement hardware belonging to the same
+  Security World. The quorum is the separation-of-duties mechanism this
+  repository's own single-operator ceremony does not provide.
+- **Luna cloning domains (Thales/SafeNet, planned).** Partitions in the
   same cloning domain can clone key material directly between HSMs sharing
   that domain, authenticated by a domain identifier known only to
-  authorized partitions — a different mechanism from PKCS#11's
+  authorized partitions. That is a different mechanism from PKCS#11's
   `Wrap`/`Unwrap` (domain membership rather than a wrapping key object),
   used for the same purpose: moving key material between physically
   separate HSMs without it ever existing in the clear outside a token.
-- **ProtectServer backup (Thales ProtectToolkit).** ProtectToolkit provides
-  vendor tooling (`ctbackup`/`ctrestore`-class utilities) to back up and
-  restore token contents, typically split-knowledge, multi-custodian
-  procedures for the SO/backup credentials involved — a different surface
-  again from the PKCS#11-level `Wrap`/`Unwrap` this repository exercises
-  directly in §5.
+- **ProtectServer backup (Thales ProtectToolkit).** ProtectToolkit
+  provides vendor tooling (`ctbackup`/`ctrestore`-class utilities) to back
+  up and restore token contents, typically split-knowledge, multi-custodian
+  procedures for the SO and backup credentials involved. That is a
+  different surface again from the PKCS#11-level `Wrap`/`Unwrap` this
+  repository exercises directly in §5.
 
-All three exist specifically to solve the separation-of-custody problem
-the tag convention identifies with a bare AES wrapping key on one token: the backup
-credential and the operational credential are different people, different
-cards, or different domains, so no single compromised session can both
-create and exfiltrate a usable copy of the key.
+All three exist to solve the separation-of-custody problem §5.2 identifies
+with a bare AES wrapping key on one token. The backup credential and the
+operational credential are different people, different cards, or
+different domains, so no single compromised session can both create and
+exfiltrate a usable copy of the key.
 
-## 7. CA-key rotation design (documented-design)
+## 7. CA-key rotation design
 
-the key lifecycle states the rule this section designs for: every signing key
-has a lifecycle, and the CA hierarchy rotates by "re-issuing the
-intermediate (routine) or by root roll-over with cross-signing (exceptional,
-ceremony-governed)". Mechanically, both are exactly §4.1 and §4.2 above —
-rotation and disaster recovery are the same two procedures, run
-electively instead of in response to loss. Restated briefly, for the
-rotation framing specifically:
+Every signing key has a lifecycle. The CA hierarchy rotates by re-issuing
+the intermediate (routine) or by root roll-over with cross-signing
+(exceptional, ceremony-governed). Mechanically, both are §4.1 and §4.2
+above. Rotation and disaster recovery are the same two procedures, run
+electively instead of in response to loss.
 
 - **Intermediate re-issue (routine).** A new intermediate key pair, signed
-  under the *existing, unchanged* root, on a schedule the operator picks —
-  not in response to any incident. ~~Blocked today on the same gap §4.1.1
-  names: no code path signs a fresh intermediate under an existing root
-  without also regenerating the root.~~ **Implemented 2026-09-05**:
-  `hsm-pki-keytool reissue-intermediate`, procedure in §4.1.2.
-- **Root roll-over with cross-signing (exceptional).** A new root, with the
-  *existing* intermediate cross-signed under it during a transition
-  window so relying parties are not forced to update atomically. Blocked
-  today on the gap §4.2 names: no code path signs an existing intermediate
-  public key under a newly generated root.
+  under the existing, unchanged root, on a schedule the operator picks.
+  Implemented: `hsm-pki-keytool reissue-intermediate`, procedure in
+  §4.1.1.
+- **Root roll-over with cross-signing (exceptional).** A new root, with
+  the existing intermediate cross-signed under it during a transition
+  window so relying parties are not forced to update atomically. Not
+  implemented. No code path signs an existing intermediate public key
+  under a newly generated root. It is the harder of the two, because it
+  signs a public key that arrives from outside the run rather than one
+  just generated, and that is a different trust question from anything
+  this codebase does today.
 
-~~Neither gap is scoped to a phase file yet; both are natural extensions of
-the `hsm-pki-keytool` work Phase 4.8 already does for the image/artifact
-signing keys; §4.1.1 and this section are the record that they are needed,
-for whoever picks them up.~~ **Updated 2026-09-05:** the routine one is
-built (§4.1.2). Cross-signing remains open and unscoped — it is the harder
-of the two, because it signs a public key that arrives from outside the
-run rather than one just generated, and that is a different trust question
-than anything this codebase does today. The *signing keys'* (image, artifact) own
-rotation — distinct from the CA hierarchy this section covers — is
-implemented in Phases 4.8 and 5.9 per the key lifecycle, with a mechanical
-rotation drill in CI.
-
-**As of 2026-09-04 that half exists in code**, and it is worth reading
-before picking up the CA-hierarchy gaps above, because it is the shape they
-should take. `hsm-pki-keytool provision-signing-key` creates the next
-version under a new versioned label — it never overwrites one, and it
-refuses a token that already holds a CA-hierarchy key — and
-`hsm-pki-keytool generate-inventory -in <current>` republishes the signed
-list with the previous version marked `verify-only`. Retirement is the step
-that still has no command: the inventory refuses to call a key retired
-while its private half is on the token, so destroying it is currently a
-manual `C_DestroyObject`. That missing subcommand is tracked in
-4.8, alongside the
-`reissue-intermediate` gap this section describes — the two are the same
-piece of work seen from two tiers.
+The signing keys (image, artifact) rotate under the same lifecycle, and
+their rotation is the shape the CA-hierarchy gaps should take.
+`hsm-pki-keytool provision-signing-key` creates the next version under a
+new versioned label. It never overwrites one, and it refuses a token that
+already holds a CA-hierarchy key. `hsm-pki-keytool generate-inventory -in
+<current>` republishes the signed list with the previous version marked
+`verify-only`. Retirement is the step that still has no command. The
+inventory refuses to call a key retired while its private half is on the
+token, so destroying it is a manual `C_DestroyObject`. A rotation drill in
+CI is planned, not built.
 
 ## 8. Cross-references
 
-- Threat model — what each key is worth, what each attacker gets:
+- Threat model, what each key is worth and what each attacker gets:
   [`threat-model.md`](threat-model.md)
 - Blast-radius reasoning behind the two-tier hierarchy:
   [`architecture.md`](architecture.md), "Two-tier hierarchy rather than a
   single online CA"
-- Vendor behavior actually measured, not merely claimed:
-  [`pkcs11-vendor-notes.md`](pkcs11-vendor-notes.md)
-- ProtectServer token provisioning and the two-token setup:
-  [`protectserver-setup.md`](protectserver-setup.md) §3b, §3c
-- The ceremony as built: `internal/ca/ceremony.go`,
-  `cmd/hsm-pki-keytool/main.go`, and
-  [`phases/phase-3b-pki-hardening.md`](phases/phase-3b-pki-hardening.md)
-  sub-task 3b.1
-- Signing-key (not CA-hierarchy) rotation and the CI rotation drill:
-  [`phases/phase-4-container-k8s.md`](phases/phase-4-container-k8s.md) 4.8,
-  [`phases/phase-5-cicd.md`](phases/phase-5-cicd.md) 5.9
+- Vendor behaviour measured on both backends:
+  [`test-matrix.md`](test-matrix.md), "Expected divergences to look for"
+- The ceremony as built: `internal/ca/ceremony.go` and
+  `cmd/hsm-pki-keytool/main.go`
+- Signing-key (not CA-hierarchy) rotation:
+  [`architecture.md`](architecture.md), "The key inventory"

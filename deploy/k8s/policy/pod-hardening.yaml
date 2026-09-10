@@ -1,4 +1,4 @@
-# Cluster-wide pod hardening, enforced by Kyverno (Phase 4.7).
+# Cluster-wide pod hardening, enforced by Kyverno.
 #
 # # Why this exists when Pod Security Admission already enforces `restricted`
 #
@@ -7,8 +7,8 @@
 # constrained; a namespace created tomorrow without that label is
 # constrained by nothing, and nothing about creating a namespace prompts
 # anyone to add it. PSA is opt-in per namespace by construction. This policy
-# is the opposite default: every namespace except the ones deliberately
-# excluded below.
+# is the opposite default: every namespace except the ones excluded
+# below.
 #
 # The two mechanisms are also different *kinds* of control, which is why one
 # is not a redundant copy of the other:
@@ -19,7 +19,8 @@
 #             standard.
 #   Kyverno   an admission webhook running expressions this repository
 #             writes. It can express what `restricted` cannot, and it is
-#             what Phase 4.10 extends to "an image nobody signed cannot run".
+#             what image-signature.yaml extends to "an image nobody signed
+#             cannot run".
 #
 # A defence that exists once is a defence with a single point of failure:
 # PSA is disabled by a flag on the API server, Kyverno by deleting a webhook.
@@ -27,7 +28,7 @@
 #
 # # Which API this repository targets, and why
 #
-# Kyverno 1.19.0 serves two policy APIs, and both are v1 — measured against
+# Kyverno 1.19.0 serves two policy APIs, and both are v1, measured against
 # the running cluster, not read from a blog:
 #
 #   kyverno.io/v1            ClusterPolicy (validate, mutate, generate,
@@ -38,9 +39,9 @@
 # This repository targets **policies.kyverno.io/v1**. The rules here are CEL,
 # the same expression language as Kubernetes' own ValidatingAdmissionPolicy,
 # so the expressions below say what they mean to a reader who has never used
-# Kyverno and would largely transfer to a cluster that does not run it. And
-# Phase 4.10 needs image verification, which that group gives a kind of its
-# own (`ImageValidatingPolicy`) rather than a mode of a general policy.
+# Kyverno and would largely transfer to a cluster that does not run it.
+# Image verification is a kind of its own in that group
+# (`ImageValidatingPolicy`) rather than a mode of a general policy.
 #
 # ClusterPolicy was the alternative and it is not a bad one: far more prior
 # art, and it is not deprecated. It lost because choosing it would mean
@@ -92,7 +93,7 @@ spec:
   variables:
     # Named once so each rule below reads as the property it checks rather
     # than as a traversal. initContainers and ephemeralContainers are
-    # included deliberately: a privileged init container has the same access
+    # included: a privileged init container has the same access
     # as a privileged container, and "we only checked the main containers"
     # is how this class of policy is usually wrong.
     - name: allContainers

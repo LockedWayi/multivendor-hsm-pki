@@ -19,9 +19,8 @@ import (
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
-// runCeremonyForLoad runs a ceremony and writes its intermediate certificate
-// to disk, returning the backend and the path — the starting point every
-// LoadIntermediate test needs.
+// runCeremonyForLoad runs a ceremony and writes its intermediate
+// certificate to disk.
 func runCeremonyForLoad(t *testing.T, b *ceremonyBackend) (interCertPath string, result *ca.CeremonyResult) {
 	t.Helper()
 	result, err := ca.RunCeremony(context.Background(), b.adapter, pk11.SessionOptions{}, testCeremonyParams(b))
@@ -70,9 +69,8 @@ func TestLoadIntermediate_LoadsCeremonyOutput(t *testing.T) {
 	})
 }
 
-// TestLoadIntermediate_RefusesRootCertificate is the guard this whole phase
-// exists for: pointing the online service at a self-signed (root)
-// certificate must stop it from starting, not merely warn.
+// TestLoadIntermediate_RefusesRootCertificate: pointing the online
+// service at a self-signed certificate stops it from starting.
 func TestLoadIntermediate_RefusesRootCertificate(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		ctx := context.Background()
@@ -95,8 +93,7 @@ func TestLoadIntermediate_RefusesRootCertificate(t *testing.T) {
 }
 
 // TestLoadIntermediate_RejectsUnsuitableCertificates covers the remaining
-// tier constraints, using software-generated certificates so each defect can
-// be produced in isolation.
+// tier constraints with software-generated certificates.
 func TestLoadIntermediate_RejectsUnsuitableCertificates(t *testing.T) {
 	b := setupSoftHSM2CeremonyBackend(t)
 	ctx := context.Background()
@@ -122,8 +119,7 @@ func TestLoadIntermediate_RejectsUnsuitableCertificates(t *testing.T) {
 		{
 			name: "well-formed intermediate for a different key",
 			cert: func(t *testing.T) []byte { return foreignCertDER(t, true, true) },
-			// Signed by an unrelated issuer, pathlen:0, IsCA — passes every
-			// certificate-shape check and is caught only by the key match.
+			// Passes every certificate-shape check; caught by the key match.
 			wantErr: ca.ErrKeyCertMismatch,
 		},
 	}
@@ -150,9 +146,8 @@ func TestLoadIntermediate_MissingCertFileFails(t *testing.T) {
 	ctx := context.Background()
 	resolvePIN := func() ([]byte, error) { return []byte(b.interPIN), nil }
 
-	// No ceremony has run and no file exists. The service must report a
-	// configuration error rather than create a CA to fill the gap, which is
-	// exactly what the removed Bootstrap would have done.
+	// No ceremony has run and no file exists. The service reports a
+	// configuration error rather than creating a CA.
 	missing := filepath.Join(t.TempDir(), "does-not-exist.pem")
 	_, err := ca.LoadIntermediate(ctx, b.adapter, b.interWS, pk11.SessionOptions{}, resolvePIN, loadParams(b, missing))
 	t.Cleanup(func() { _ = b.adapter.LogoutToken(ctx) })
@@ -160,8 +155,7 @@ func TestLoadIntermediate_MissingCertFileFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("LoadIntermediate with no certificate file succeeded, want an error")
 	}
-	// The error must be recognizably "this file is not there" and must name
-	// the path, so an operator can act on it without reading the source.
+	// The error must name the path and be recognizable as not-found.
 	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("error does not wrap fs.ErrNotExist, so a caller cannot tell a missing file from a malformed one: %v", err)
 	}
@@ -170,10 +164,8 @@ func TestLoadIntermediate_MissingCertFileFails(t *testing.T) {
 	}
 }
 
-// foreignCertDER builds a certificate signed by an unrelated, software-held
-// issuer, with the CA and pathlen properties the caller asks for. It never
-// stands in for HSM-backed custody — it exists only to produce certificates
-// with specific defects.
+// foreignCertDER builds a certificate signed by an unrelated software
+// issuer, with the CA and pathlen properties the caller asks for.
 func foreignCertDER(t *testing.T, isCA, pathLenZero bool) []byte {
 	t.Helper()
 	issuerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

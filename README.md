@@ -3,334 +3,246 @@
 ![coverage](docs/coverage.svg)
 
 A vendor-agnostic **PKCS#11 abstraction layer** with a **Certificate
-Authority** built on top of it, containerized, deployed to Kubernetes, and
-shipped by a pipeline whose security checks are gates rather than reports.
-Private keys are generated on, and never leave, a hardware security module.
-
-Written as a reference for one question that comes up in every HSM
-integration and is usually answered badly: *how do you build on a hardware
-security module without welding your codebase to one vendor's driver?*
-
----
-
-The design reasoning — why one interface over three vendors, why the keys
-are purpose-separated, why the hierarchy is two-tier, and what was rejected
-along the way — is in **[docs/architecture.md](docs/architecture.md)**.
+Authority** built on it, containerized, deployed to Kubernetes, and shipped
+by a pipeline whose security checks block merges. Private keys never leave
+the HSM. The design reasoning is in
+**[docs/architecture.md](docs/architecture.md)**.
 
 ## Why this is unusual
 
-Most HSM integrations hard-code a single vendor. The PKCS#11 standard is
-supposed to prevent that, and in practice does not — vendors disagree about
-attribute defaults, session semantics, object search behaviour and error
-codes, in ways that only surface against real hardware.
-
-So the interesting claim is not "this code calls PKCS#11". It is that the
-same interface drives **two independent backends** with no vendor-specific
-branches in the calling code, and that this was proven by running a second,
-real vendor against an interface designed before it arrived.
+Most HSM integrations hard-code one vendor. This one drives two PKCS#11
+implementations through one interface with no vendor-specific code.
 
 | Backend | Status |
 |---|---|
 | **SoftHSM2** | Runs in CI on every push. No hardware, no SDK, reproducible by anyone. |
-| **Thales ProtectServer** | Runs locally against the maintainer's own token. |
+| **Thales ProtectServer** | Thales ProtectToolkit-C 7.3.3 software emulation (`libctsw.so`, token model `SW:SWEMUL`), on the maintainer's own installation. Not an appliance. |
 
-Two, not five. A list of vendor names in a README costs nothing; an
-abstraction implemented once is a guess, and this repository does not claim
-support it has not run.
+Two spec-conformant implementations needed no vendor-specific code. That is
+not proof the abstraction is complete. nShield and Luna are untested, and
+differences are expected in the login and key protection model, `CKA_ID`
+and label handling, EC point encoding, session limits and error codes.
 
-## The PKCS#11 core
-
-`internal/pkcs11` is the centre of the project, not a detail of it.
-
-- **One interface, one shared core.** Both adapters delegate to a common
-  implementation (`base.go`). The interface needed *zero* vendor-specific
-  overrides once the second, real vendor was run against it — which is the
-  evidence that the abstraction generalizes rather than the assertion.
+- **One interface, one shared core.** Both adapters wrap a common
+  implementation (`base.go`) with no overrides.
 - **One conformance suite, run per backend.** Every test that touches a
   token runs as its own subtest against every backend the environment
-  provides, so a pass or a skip is visible per vendor in the log. A backend
-  the environment lacks skips; it never fails. Adding a vendor is a registry
-  entry and an adapter, not an edit to every test file.
-- **PINs live in C-heap memory.** A PIN in a Go `[]byte` can be copied by
-  the garbage collector during a stack or heap move, leaving a copy nothing
-  can overwrite. `SecurePIN` holds it in memory that does not move, so
-  zeroization can guarantee the bytes it wrote over were the only ones.
+  provides. A backend the environment lacks skips. Adding a vendor is a
+  registry entry and an adapter.
+- **PINs live in C-heap memory.** `SecurePIN` holds the PIN in memory the
+  Go garbage collector does not move or copy. One copy is outside this
+  code: [docs/threat-model.md](docs/threat-model.md) §6.3.
 - **A token is identified by its serial number, never its label.** PKCS#11
-  defines `CKA_LABEL` as a description and never requires it to be unique,
-  and permits slot IDs to change. Labels address; serials identify. A lookup
-  that matches more than one token is ambiguous and fails closed rather than
-  resolving to the first hit — because "the first hit" is a decision made by
-  enumeration order, which is nobody's decision.
+  defines `CKA_LABEL` as a description and permits slot IDs to change. A
+  lookup that matches more than one token fails closed.
 
 ## The Certificate Authority
 
-A two-tier hierarchy, where the separation is structural rather than
-procedural.
-
-- The **root** lives on its own token, is created by an offline,
-  operator-driven ceremony, and signs exactly two things: the intermediate's
-  certificate and the root CRL. The online service has no configuration
-  field capable of naming the root's token — enforced by a test, so it
-  cannot regress into a warning.
+- The **root** lives on its own token, created by an offline ceremony. It
+  signs the intermediate's certificate and the root CRL. The online service
+  has no configuration field that can name the root's token. A test
+  enforces that.
 - The **intermediate** signs end-entity certificates and the leaf CRL. The
-  service refuses to start if handed a self-signed certificate, so a
-  misconfiguration that would put a root online is rejected rather than
-  logged.
+  service refuses to start if handed a self-signed certificate.
 - **Revocation is decided before the signature.** A certificate's CRL
-  distribution point and AIA pointer are fixed the moment it is signed, so
-  the CA refuses to issue at all when it has nowhere to publish revocation.
-  A certificate issued without a distribution point can never gain one.
+  distribution point and AIA pointer are fixed when it is signed. The CA
+  refuses to issue when it has nowhere to publish revocation.
 - **Its own authority is checked at the point of use.** Before signing, the
   CA verifies that its issuing certificate asserts the key usage the
-  operation needs, is inside its own validity window, and can cover the
-  lifetime about to be granted. Startup validation does not discharge this:
-  a process correctly configured an hour ago is still running after its
-  issuer expired.
+  operation needs, is inside its validity window, and covers the lifetime
+  about to be granted.
 
 ## The signing layer
 
-The PKCS#11 core is the platform's single signing foundation, not just the
-CA's key store. Certificates, container images and release artifacts are
-each signed by a **separate** HSM-held key over the same custody boundary.
-
-Purpose separation is about blast radius: a compromised image-signing key
-must not be able to issue a certificate, and a compromised CA key must not
-be able to sign a release. Every key carries a **versioned label**
+Certificates, container images and release artifacts are each signed by a
+**separate** HSM-held key over the same custody boundary. A compromised
+image-signing key cannot issue a certificate. A compromised CA key cannot
+sign a release. Every key carries a **versioned label**
 (`image-signing-key-v1`), and verifiers consume a published, signed **key
-inventory** rather than a hard-coded key — so rotation means provisioning
-the next version, keeping the previous one verify-only for a stated window,
-then destroying it on the token. Overwriting a label in place would make
-rotation a breaking change, which in practice means it never happens.
+inventory**. Rotation provisions the next version, keeps the previous one
+verify-only for a stated window, then destroys it on the token.
 
-The Kubernetes admission policy is **generated from that inventory**, never
-hand-written, and the generator verifies the inventory's signature before
-rendering it. Images are admitted by digest, never by tag: a signature is
-over a digest, and a tag is a pointer that can be repointed after admission
-has already approved it.
+The Kubernetes admission policy is **generated from that inventory**, and
+the generator verifies the inventory's signature first. Images are admitted
+by digest.
 
 ## The pipeline
 
-Eight checks, and they are not eight opinions about one thing. Each reads a
-different artifact, and a finding from one is invisible to the others:
+Eight checks. Each reads a different artifact, and a finding from one is
+invisible to the others:
 
 | Check | Reads | Answers | Required |
 |---|---|---|---|
 | Suite + coverage floor | the code, against SoftHSM2 | does it work against a real token? | yes |
 | Semgrep | the code you wrote | did we introduce a defect? | yes |
 | gitleaks | every commit in history | did we commit a secret, ever? | yes |
-| `trivy fs` + `govulncheck` | what you imported | is a vulnerable version present — and do we reach it? | yes |
+| `trivy fs` + `govulncheck` | what you imported | is a vulnerable version present, and do we reach it? | yes |
 | `trivy image` | what was assembled | is the shipped image vulnerable? | yes |
 | `trivy config` + OpenTofu | what would be provisioned | is the infrastructure misconfigured? | yes |
 | trust chain | the key inventory, against an anchor in another repository | can this tree still say which key is which? | yes |
-| run verification | every signature this run made, holding no key material | are they checkable by something that did not make them? | after merge |
+| run verification | the keyless signature, both attestations and the binary bundle this run made | are they checkable from a clean checkout, for this run's exact identity? | after merge |
 
 Every check is a script in `ci/`, run the same way locally and in the
-pipeline, so a red check is reproducible without pushing again.
+pipeline. Seven of the eight are **required** on `main`, including for the
+repository owner. `enforce_admins` is on. No pull-request review is
+required. See A10 in the threat model. Counted from the branch-protection
+API on 2026-09-09.
 
-Seven of the eight are **required** on `main`, including for the repository
-owner — a gate the owner can wave through is a report, not a gate.
-`enforce_admins` is on, force-pushes and deletions are refused.
+The eighth, run verification, checks the signatures on an image that has
+already been published, which only happens on a merge to `main`. It is
+skipped on pull requests, runs after the merge, and a failure turns `main`
+red. `ci/verify-release.sh` and admission refuse a wrongly signed image.
 
-The eighth is the honest row, and it is not an oversight. Run verification
-checks the signatures on an image that has *already been published*, which
-only happens on a merge to `main` — so there is nothing for it to verify
-while a pull request is open, and it is skipped there. Marking it required
-would block every merge on a check that never reports. It runs after the
-merge instead, and a failure turns `main` red.
-
-That is a real gap and it is left visible rather than closed by wording: a
-signature defect is caught minutes after landing, not before. What prevents
-it reaching a consumer is downstream — an unsigned or wrongly signed image
-is refused by `ci/verify-release.sh` and by admission.
-
-That is demonstrated rather than asserted:
-**[PR #4](https://github.com/LockedWayi/multivendor-hsm-pki/pull/4)**
-deliberately swaps `crypto/rand` for `math/rand` in the request-id
-generator, with the reasoning someone would genuinely have. Semgrep turns
-red, the merge is refused (`the base branch policy prohibits the merge`),
-and a second commit on the same branch turns it green. The detail worth
-reading is which checks *passed*: build, vet, tests and coverage were all
-green throughout. The test suite cannot see that defect, which is the
-entire argument for having a scanner as well as tests. Accepted
-findings live in **one** reviewed allowlist and must carry a written reason
-and an expiry date — an exception nobody has to renew is a forgotten risk,
-not an accepted one.
+**[PR #4](https://github.com/LockedWayi/multivendor-hsm-pki/pull/4)** shows a
+gate blocking. It swaps `crypto/rand` for `math/rand` in the request-id
+generator. Semgrep turns red, the merge is refused (`the base branch policy
+prohibits the merge`), and a second commit turns it green. Tests were green
+throughout. Accepted findings live in **one** reviewed allowlist and must
+carry a written reason and an expiry date.
 
 ## The published image, and how to verify it
 
 A push to `main` that clears every gate publishes the service image to
-`ghcr.io/lockedwayi/multivendor-hsm-pki` with a signed CycloneDX SBOM
-attestation. Two tags are written and no more: `sha-<commit>`, and
-`v<x.y.z>` when the commit carries that release tag. There is deliberately
-no `latest` and no moving `main` — both are pointers somebody can move, and
-the argument this repository makes about identity is that a name is not one.
-**The digest is the identity.** Pull the digest form.
+`ghcr.io/lockedwayi/multivendor-hsm-pki`, signed keyless, with a CycloneDX
+SBOM attestation and a SLSA provenance attestation. The bytes are pushed
+under the moving tag `staging`, the digest is signed, and only then are
+`sha-<commit>` and, on a release tag, `v<x.y.z>` applied. `staging` names
+the most recent build pushed, signed or not. Nothing should pull it. There
+is no `latest`. **The digest is the identity.**
 
 ### Verifying a release
 
 ```sh
-ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+HSM_PKI_TRUST_ANCHOR_REPO=... HSM_PKI_TRUST_ANCHOR_COMMIT=... HSM_PKI_TRUST_ANCHOR_SHA256=... \
+    ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
 ```
 
-That script exists because the obvious thing would prove nothing. If a
-project publishes an inventory, a signature over it, and the public key that
-verifies that signature, all in one repository, then checking them against
-each other only establishes that the three files agree — and whoever can
-write to the repository can change all three in one commit. A verification
-recipe pointing at `docs/keys/` alone is theatre.
-
-So the chain starts somewhere else:
+Three files that agree in one repository prove nothing. The chain starts
+with inputs the verifier supplies:
 
 | # | Link | Why it is where it is |
 |---|---|---|
-| 1 | **anchor** | fetched from `LockedWayi/hsm-pki-trust-anchor`, a separate repository with its own protection, pinned by commit *and* content digest. An unreachable anchor **refuses** — it never falls back to the copy in this tree, because that copy is what the step exists to stop trusting. |
-| 2 | **inventory** | `docs/keys/key-inventory.json` verified against that anchor **by openssl** — an implementation that is not this project's code and did not produce the signature. |
-| 3 | **the key** | read *out of* the verified inventory, never hardcoded. This is what makes rotation work: a signature from a previous key version keeps verifying while that version is listed `verify-only`. |
+| 1 | **anchor** | fetched from the anchor repository at the commit and with the SHA-256 the verifier supplies in `HSM_PKI_TRUST_ANCHOR_REPO`, `_COMMIT` and `_SHA256`. Nothing in this tree names them. An unreachable or mismatched anchor refuses. There is no fallback to the copy in this tree. |
+| 2 | **inventory** | `docs/keys/key-inventory.json` verified against that anchor **by openssl**, an implementation that did not produce the signature. |
+| 3 | **the key** | read out of the verified inventory, never hardcoded. A signature from a previous key version keeps verifying while that version is listed `verify-only`. |
 | 4 | **the image** | verified by digest, with no token mounted anywhere. |
 
-Forging that chain needs a compromise of two separately protected
-repositories **and** an offline token that is in neither of them. That is the
-property being bought — not that the pins are unreachable, but that one push
-is not enough.
+Changing the anchor file in place needs write access to
+`LockedWayi/hsm-pki-trust-anchor`, where force-pushes are refused. A consumer
+who copies the three values from this README trusts this repository for
+that step. That is the residual. The values today are:
 
-You can also do it by hand; it is four commands and worth reading once:
+```
+HSM_PKI_TRUST_ANCHOR_REPO=LockedWayi/hsm-pki-trust-anchor
+HSM_PKI_TRUST_ANCHOR_COMMIT=13a8d605df7379f247ab3643b769552a206c6d22
+HSM_PKI_TRUST_ANCHOR_SHA256=afc3febd028c566b30a04e2dfd38f4a8740ca2dada5bdb12e2eb5e701913d888
+```
+
+By hand, it is four commands:
 
 ```sh
-curl -fsSL "https://raw.githubusercontent.com/LockedWayi/hsm-pki-trust-anchor/<pinned-commit>/inventory-signing-key-v1.pub" -o anchor.pub
-sha256sum anchor.pub                       # compare with ci/scanner-pins.sh
+curl -fsSL "https://raw.githubusercontent.com/$HSM_PKI_TRUST_ANCHOR_REPO/$HSM_PKI_TRUST_ANCHOR_COMMIT/inventory-signing-key-v1.pub" -o anchor.pub
+sha256sum anchor.pub                       # must equal HSM_PKI_TRUST_ANCHOR_SHA256
 openssl dgst -sha256 -verify anchor.pub \
     -signature docs/keys/key-inventory.json.sig docs/keys/key-inventory.json
 cosign verify --key <the image key listed in that inventory> \
     --insecure-ignore-tlog=true ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+cosign verify-attestation --key <same key> --type cyclonedx       --insecure-ignore-tlog=true <same ref>
+cosign verify-attestation --key <same key> --type slsaprovenance1 --insecure-ignore-tlog=true <same ref>
 ```
 
 ### The release binary
 
-The pipeline also signs the server binary, with `artifact-signing-key-v1` —
-never the image key, because a compromise of one must not be able to do the
-other's job. The binary is *extracted from the image that was just signed*
-rather than rebuilt, so the two signatures cover the same bytes.
-
-Its signature is checked by a program that holds only the public key and
-shares no code with the signer:
+The pipeline extracts the server binary from the image it just signed and
+signs it keyless. On a `v<x.y.z>` tag the binary, its Sigstore bundle and
+its SHA-256 are attached to a GitHub Release after a separate job has
+verified them.
 
 ```sh
-go run ./ci/verify-artifact \
-    -key <the run's artifact-signing-key-v1.pub> \
-    -bundle hsm-pki-server.bundle \
+gh release download v<x.y.z> --repo LockedWayi/multivendor-hsm-pki \
+    --pattern 'hsm-pki-server*'
+sha256sum --check hsm-pki-server.sha256
+cosign verify-blob --bundle hsm-pki-server.sigstore.json \
+    --certificate-identity 'https://github.com/LockedWayi/multivendor-hsm-pki/.github/workflows/ci.yml@refs/tags/v<x.y.z>' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     hsm-pki-server
 ```
 
-It exits zero only when the bundle names that key, the digest it carries is
-the digest of the bytes actually supplied, and the signature verifies over
-them. Anything else — including a bundle it does not recognise — is
-non-zero. A signature checked only by the tool that produced it proves the
-tool agrees with itself, which it would do just as convincingly if the whole
-encoding were wrong.
+No release exists yet. Until one does, each run on `main` keeps the same
+three files as the `release-binary-<sha>` workflow artifact for 90 days.
 
-The binary and its bundle are attached to each pipeline run as the
-`release-binary-<sha>` artifact, and the key that signs them is in
-`ephemeral-signing-keys-<sha>` beside it — which is the same honesty problem
-the image has, and the same answer:
+### The two signatures, and which one you can verify today
 
-### The two signatures, and why only one is for you
+**No published image has been counter-signed yet.** Every digest published
+from now on carries the pipeline's keyless signature: a short-lived Fulcio
+certificate for the workflow run's GitHub OIDC identity, recorded in Rekor.
+The two attestations are made the same way. A consumer can verify that today
+from a machine holding no file from this repository:
 
-Every published image carries a **pipeline signature**, made with a SoftHSM2
-token and keys that the run provisions for itself and destroys with the
-runner. It proves the signing mechanism works end to end over a real PKCS#11
-token — which is worth proving — and it proves *nothing whatever* about
-custody, because the key came from the same build that produced the artifact.
-**Do not verify against it.** `ci/verify-release.sh` deliberately refuses an
-image that carries only this signature, and the Kyverno policy in
-`deploy/k8s/policy/` refuses to admit one. An image whose only signature
-comes from a trust root that died with the build should not be deployable
-anywhere, including here.
+```sh
+cosign verify \
+    --certificate-identity 'https://github.com/LockedWayi/multivendor-hsm-pki/.github/workflows/ci.yml@refs/heads/main' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+cosign verify-attestation --type cyclonedx       <same identity flags> <same ref>
+cosign verify-attestation --type slsaprovenance1 <same identity flags> <same ref>
+```
 
-A **release signature** is added deliberately, by the maintainer, with
-`image-signing-key-v1` on their own token
+For a release tag the identity ends in `@refs/tags/v<x.y.z>`. The identity
+is not in the key inventory, so admission ignores the keyless signature and
+`ci/verify-release.sh` does not accept it.
+
+The **durable path** is what releases use. The maintainer counter-signs a
+release digest with `image-signing-key-v1` on their own token and re-attests
+the SBOM and the provenance with the same key
 (`ci/countersign-release.sh <digest>`). That key is listed in the inventory,
-which is signed by an offline token, whose public half lives in the other
-repository. It is the signature the table above verifies and the one
-admission enforces.
+the inventory is signed by an offline token, and the anchor lives in another
+repository. Admission accepts only this signature. `ci/verify-release.sh`
+requires it and both attestations by a key from the inventory. No digest has
+this yet. CI does not hold the durable key.
 
-CI cannot hold that key without either committing key material or exposing
-the development machine to pipeline execution, and both were rejected with
-reasons. So ordinary `main` builds are development artifacts, and releases
-are the digests a consumer is meant to pull — which is what an
-offline-ish signing key is for, rather than a gap in the automation.
-
-## What is verified, and how
-
-This project makes claims automation cannot check, so the two are labelled
-separately and never averaged:
+## Status
 
 - **CI-verified.** Build, vet, race-detector suite and coverage floor
   against SoftHSM2; SAST; full-history secret scan; dependency, reachability
-  and image scanning; infrastructure scanning. Reproducible by anyone with
-  Docker and no hardware.
-- **Maintainer-verified.** Everything involving the Thales ProtectServer
-  token: the conformance suite against a second real vendor, CA issuance and
-  revocation end to end, and durable-key signing. Run on the maintainer's own
-  hardware and reported as such.
+  and image scanning; infrastructure scanning. Reproducible with Docker.
+- **Maintainer-verified.** Everything involving the ProtectServer backend,
+  run against Thales ProtectToolkit-C 7.3.3 software emulation on the
+  maintainer's own installation.
 
-A release that blurs those two is the version of this repository that
-damages its own credibility, so it does not.
+Built and running: the PKCS#11 core, the two-tier CA, the container and its
+Kubernetes deployment with a generated admission policy, the
+infrastructure-as-code modules, the scanning pipeline, and the signing
+layer. In progress: authentication on the write endpoints (mTLS, using this
+platform's own CA to issue the client certificates), the key-rotation drill
+in CI, and Vault-based key custody.
 
 ## Running it
 
-Everything runs in a container; no HSM required.
+Everything runs in a container. No HSM is required.
 
 ```sh
-# Build the dev environment (Go + a real SoftHSM2 module)
-docker build -f ci/softhsm2-dev.Dockerfile -t hsm-pki-dev .
-
-# The full suite against a real PKCS#11 token
+docker build -f ci/softhsm2-dev.Dockerfile -t hsm-pki-dev .            # Go + SoftHSM2
 docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev go test -race -p 1 ./...
-
-# The gates the pipeline runs
 ci/scan-code.sh          # Semgrep
 ci/scan-deps.sh          # trivy fs + govulncheck
 ci/terraform-scan.sh     # OpenTofu fmt, validate, trivy
 ```
 
-`deploy/docker/run-local.sh` brings up the service against a throwaway
-SoftHSM2 token, and `CONTRIBUTING.md` has the rest.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 
 ## Security posture
 
-- Private keys are generated on the HSM and never leave it. No private key
-  is written to disk, returned by an API, or emitted to a log at any level.
-  PINs follow the same rule and live in memory for the minimum window.
+- No private key is written to disk, returned by an API, or emitted to a
+  log at any level. PINs follow the same rule.
 - No secrets in the repository or its history. `gitleaks` scans every commit
-  on every push, with its exceptions committed and reviewed.
-- The `ghp_…` token in the OpenTofu history is **deliberate, fake, and
-  worthless**: a realistic-looking credential planted to demonstrate that
-  the scanner catches one, removed in the following commit, and allowlisted
-  by a single commit-pinned fingerprint rather than a rule or path
-  exemption. It authenticates nothing.
-- Cryptographic primitives come from the Go standard library
-  (`crypto/x509`, `crypto/ecdsa`, `crypto/rand`) and PKCS#11 from the mature
-  `miekg/pkcs11` binding. No hand-rolled crypto. P-256 by default.
-- Every ambiguous security decision fails closed, and all enforcement is
-  server-side; client-side checks exist for user experience only.
-
-## Status
-
-The PKCS#11 core, the CA and its two-tier hierarchy, the container and its
-Kubernetes deployment with a generated admission policy, the
-infrastructure-as-code modules, the scanning pipeline, and the signing gate
-— image and release binary signed over PKCS#11, SLSA provenance, and an
-independent verifier holding no key material — are built and running.
-
-In progress: authentication on the write endpoints (mTLS, using this
-platform's own CA to issue the client certificates), the key-rotation drill
-in CI, and Vault-based key custody.
-
-Six of the eight checks block a merge, `enforce_admins` included. The two
-newest — the trust-chain check and the run verification — report but do not
-yet block, because marking a check required is a repository setting rather
-than a file, and they were added after that set was configured. See "The
-pipeline" above; the distinction is kept there rather than smoothed over.
+  on every push, with its exceptions committed and reviewed. The `ghp_…`
+  token in the OpenTofu history is **fake**, planted to show the scanner
+  catches one, and allowlisted by a single commit-pinned fingerprint.
+- Cryptographic primitives come from the Go standard library and PKCS#11
+  from the `miekg/pkcs11` binding. P-256 by default.
+- Every ambiguous security decision fails closed. All enforcement is
+  server-side.
 
 ## License
 
