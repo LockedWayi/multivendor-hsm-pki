@@ -16,6 +16,7 @@ implementation, but it is built to real contribution standards.
    docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev go test -race -p 1 ./...
    docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev bash ci/coverage.sh -race -p 1
    ci/scan-code.sh                                    # semgrep (SAST)
+   ci/scan-secrets.sh                                 # gitleaks over the full history
    ci/scan-deps.sh                                    # trivy fs + govulncheck
    docker build -f deploy/docker/Dockerfile -t hsm-pki-server:local .
    ci/scan-image.sh hsm-pki-server:local              # trivy image + SBOM
@@ -101,10 +102,10 @@ go test ./internal/pkcs11 -run TestConformance -race -v
 ```
 
 With only SoftHSM2 available, its subtests run and ProtectServer's skip. If
-you have your own ProtectToolkit entitlement (see
-), set `PROTECTSERVER_MODULE` (and
-`PROTECTSERVER_WORKSPACE`, `PROTECTSERVER_PIN`) to also run that backend's
-subtests — never in CI, always locally, against your own SDK.
+you have your own ProtectToolkit-C entitlement, set `PROTECTSERVER_MODULE`
+and the workspace and PIN variables listed below to run that backend's
+subtests as well. Never in CI, always locally, against your own SDK. The
+maintainer runs ProtectToolkit-C 7.3.3 in software emulation.
 
 `internal/ca`'s **ceremony** suite follows the same two-backend pattern but
 needs *two* tokens rather than one, because the root and the intermediate
@@ -114,18 +115,17 @@ live on separate tokens by design:
 go test ./internal/ca -run TestRunCeremony -race -v
 ```
 
-For ProtectServer it takes its own variables —
-`PROTECTSERVER_ROOT_WORKSPACE`, `PROTECTSERVER_INTERMEDIATE_WORKSPACE`, and a
-PIN for each. With any of them unset those subtests skip. Provisioning the
-second token is a one-time manual step;b has
-the commands.
+For ProtectServer it takes `PROTECTSERVER_MODULE`,
+`PROTECTSERVER_ROOT_WORKSPACE`, `PROTECTSERVER_INTERMEDIATE_WORKSPACE`,
+`PROTECTSERVER_ROOT_PIN` and `PROTECTSERVER_INTERMEDIATE_PIN`. With any of
+them unset those subtests skip. Provisioning the two tokens is a one-time
+manual step with the ProtectToolkit tools (`ctconf`, `ctkmu`).
 
-Both backends can run in one invocation by mounting the ProtectToolkit module
-and its token store into the dev container —
-§5. That is how the Phase 3b results were produced, and it is worth doing
-before opening a PR that touches `internal/pkcs11` or `internal/ca`: the two
-backends have disagreed before, and a green SoftHSM2-only run does not tell
-you they still agree.
+Both backends can run in one invocation by mounting the ProtectToolkit
+module and its token store into the dev container; `docs/test-matrix.md`
+§6 has the command. Run it before opening a PR that touches
+`internal/pkcs11` or `internal/ca`. The two backends have disagreed before,
+and a green SoftHSM2-only run does not show they still agree.
 
 ## Running the service locally
 
@@ -190,10 +190,8 @@ finding go away.
 
 ## Non-negotiables
 - No secrets in commits or history. `gitleaks` scans every commit on every
-  PR and push, and a finding turns the check red. It does not yet *block*
-  the merge — that needs a repository setting no file here can make — so
-  Treat a red check as blocking anyway — that is the standard here, and it
-  is the only thing making it true today.
+  PR and push. The check is required on `main`, so a finding blocks the
+  merge, for the repository owner too.
 - Private keys and PINs never hit plaintext disk or logs.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - Develop and test against SoftHSM2. Vendor backends are exercised only
