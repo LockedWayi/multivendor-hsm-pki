@@ -108,7 +108,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the digest is the identity and a tag is a pointer somebody can move. The
   registry credential is the run's own `GITHUB_TOKEN`, so no long-lived
   registry password is stored anywhere.
-  - The publish job is downstream of all six gates *in the same workflow
+  - The publish job is downstream of all seven gates *in the same workflow
     run*, and re-checks their results through `ci/assert-publishable.sh`
     rather than trusting the `needs:`/`if:` interaction to be read
     correctly. That guard refuses an unknown gate, a missing gate, a
