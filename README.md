@@ -318,11 +318,11 @@ In progress: authentication on the write endpoints (mTLS, using this
 platform's own CA to issue the client certificates), the key-rotation drill
 in CI, and Vault-based key custody.
 
-Six of the eight checks block a merge, `enforce_admins` included. The two
-newest — the trust-chain check and the run verification — report but do not
-yet block, because marking a check required is a repository setting rather
-than a file, and they were added after that set was configured. See "The
-pipeline" above; the distinction is kept there rather than smoothed over.
+Seven of the eight checks are required on `main`, `enforce_admins`
+included: suite, SAST, secret scan, dependency scan, image scan,
+infrastructure scan and trust chain. Counted from the branch-protection
+API on 2026-09-09. The eighth, run verification, runs only after a publish
+and cannot gate a merge; see "The pipeline" above.
 
 ## License
 
