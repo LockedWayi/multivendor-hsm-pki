@@ -64,7 +64,7 @@ Three properties of the harness matter for a new vendor:
 | `internal/api` HTTP surface | 27 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness |
 | `internal/signingkey` | 16 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
 | `cmd/hsm-pki-keytool` | 16 | The ceremony, the supply-chain key provisioning, and the signed key-inventory generation as an operator runs them, through the CLI's own adapter — including the two-token refusal and the openssl check of an HSM-made inventory signature |
-| `cmd/hsm-pki-server` | — | Startup: workspace resolution, anchor login, ambiguous-label refusal |
+| `cmd/hsm-pki-server` | 3 | Startup: workspace resolution and anchor login, an unknown workspace refused, a wrong PIN refused |
 
 Counted per backend, a full run executes **87 vendor-parameterised subtests
 on each configured backend**, plus the conformance suite — 88 top-level
@@ -102,10 +102,12 @@ nothing:
   — properties of a certificate, built in software
 - URL composition, error mapping, PEM/DER handling in `internal/api`
 
-Two tests are **SoftHSM2-specific on purpose**, because they are about a
-token layout no well-behaved backend would hand a test: the ambiguous-label
-refusals in `cmd/hsm-pki-server` and `cmd/hsm-pki-keytool` provision two
-tokens sharing one label. They use `hsmtest.SoftHSM2` and say why.
+Two tests are **SoftHSM2-only**, because they need a token layout no
+vendor backend provides: the ambiguous-label refusals in
+`cmd/hsm-pki-server` and `cmd/hsm-pki-keytool` provision two tokens sharing
+one label. The server test provisions them through
+`hsmtest.NewSoftHSM2Tokens` and says why in its comment. That is the one
+exception to the every-backend rule in `cmd/`.
 
 ---
 
