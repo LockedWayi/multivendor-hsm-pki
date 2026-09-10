@@ -6,6 +6,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0], 2026-09-10
+
 ### Fixed
 - **The pinning claim in `ci.yml` was false in six places, and nothing
   checked it.** The header has asserted since the first gate landed that every
