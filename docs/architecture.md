@@ -316,8 +316,8 @@ pipeline: a Fulcio certificate for the workflow's GitHub OIDC identity,
 recorded in Rekor. The PKCS#11 path is proved on every publish against a
 throwaway SoftHSM2 token and a throwaway registry, and nothing it signs is
 published. The durable signature, with `image-signing-key-v1` on the
-maintainer's token, is added to release digests by hand. No published
-digest carries it yet.
+maintainer's token, is added to release digests by hand. It covers the
+image, the SBOM attestation and the provenance attestation.
 
 ---
 

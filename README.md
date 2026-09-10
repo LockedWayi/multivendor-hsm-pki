@@ -83,10 +83,9 @@ invisible to the others:
 | run verification | the keyless signature, both attestations and the binary bundle this run made | are they checkable from a clean checkout, for this run's exact identity? | after merge |
 
 Every check is a script in `ci/`, run the same way locally and in the
-pipeline. Seven of the eight are **required** on `main`, including for the
-repository owner. `enforce_admins` is on. No pull-request review is
-required. See A10 in the threat model. Counted from the branch-protection
-API on 2026-09-09.
+pipeline. Seven of the eight are **required** on `main`, the repository
+owner included, and `enforce_admins` is on. No pull-request review is
+required. See A10 in the threat model.
 
 The eighth, run verification, checks the signatures on an image that has
 already been published, which only happens on a merge to `main`. It is
@@ -168,15 +167,14 @@ cosign verify-blob --bundle hsm-pki-server.sigstore.json \
     hsm-pki-server
 ```
 
-No release exists yet. Until one does, each run on `main` keeps the same
-three files as the `release-binary-<sha>` workflow artifact for 90 days.
+No release exists yet. Each run on `main` keeps those three files as the
+`release-binary-<sha>` workflow artifact for 90 days.
 
-### The two signatures, and which one you can verify today
+### The two signatures
 
-**No published image has been counter-signed yet.** Every digest published
-from now on carries the pipeline's keyless signature: a short-lived Fulcio
+Every digest carries the pipeline's keyless signature: a short-lived Fulcio
 certificate for the workflow run's GitHub OIDC identity, recorded in Rekor.
-The two attestations are made the same way. A consumer can verify that today
+The two attestations are made the same way, and a consumer can check them
 from a machine holding no file from this repository:
 
 ```sh
@@ -188,34 +186,36 @@ cosign verify-attestation --type cyclonedx       <same identity flags> <same ref
 cosign verify-attestation --type slsaprovenance1 <same identity flags> <same ref>
 ```
 
-For a release tag the identity ends in `@refs/tags/v<x.y.z>`. The identity
-is not in the key inventory, so admission ignores the keyless signature and
-`ci/verify-release.sh` does not accept it.
+For a release tag the identity ends in `@refs/tags/v<x.y.z>`. That identity
+is not in the key inventory, so admission ignores the keyless signature.
 
 The **durable path** is what releases use. The maintainer counter-signs a
 release digest with `image-signing-key-v1` on their own token and re-attests
 the SBOM and the provenance with the same key
 (`ci/countersign-release.sh <digest>`). That key is listed in the inventory,
 the inventory is signed by an offline token, and the anchor lives in another
-repository. Admission accepts only this signature. `ci/verify-release.sh`
-requires it and both attestations by a key from the inventory. No digest has
-this yet. CI does not hold the durable key.
+repository. Admission accepts only this signature, and CI cannot make it.
+
+One digest carries it today. Check it with the anchor inputs above:
+
+```sh
+HSM_PKI_TRUST_ANCHOR_REPO=... HSM_PKI_TRUST_ANCHOR_COMMIT=... HSM_PKI_TRUST_ANCHOR_SHA256=... \
+    ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:0848e76a2236b177b890efb9c7e41050904622a9edc075c7dee18fee58266e0a
+```
 
 ## Status
 
-- **CI-verified.** Build, vet, race-detector suite and coverage floor
-  against SoftHSM2; SAST; full-history secret scan; dependency, reachability
-  and image scanning; infrastructure scanning. Reproducible with Docker.
+- **CI-verified.** Build, vet, race suite and coverage floor against
+  SoftHSM2; SAST; full-history secret scan; dependency, reachability and
+  image scanning; infrastructure scanning. Reproducible with Docker.
 - **Maintainer-verified.** Everything involving the ProtectServer backend,
-  run against Thales ProtectToolkit-C 7.3.3 software emulation on the
-  maintainer's own installation.
+  run against Thales ProtectToolkit-C 7.3.3 software emulation.
 
 Built and running: the PKCS#11 core, the two-tier CA, the container and its
 Kubernetes deployment with a generated admission policy, the
 infrastructure-as-code modules, the scanning pipeline, and the signing
-layer. In progress: authentication on the write endpoints (mTLS, using this
-platform's own CA to issue the client certificates), the key-rotation drill
-in CI, and Vault-based key custody.
+layer. In progress: authentication on the write endpoints (mTLS, issued by
+this platform's own CA), the key-rotation drill in CI, and Vault custody.
 
 ## Running it
 
@@ -236,9 +236,9 @@ ci/terraform-scan.sh     # OpenTofu fmt, validate, trivy
 - No private key is written to disk, returned by an API, or emitted to a
   log at any level. PINs follow the same rule.
 - No secrets in the repository or its history. `gitleaks` scans every commit
-  on every push, with its exceptions committed and reviewed. The `ghp_…`
-  token in the OpenTofu history is **fake**, planted to show the scanner
-  catches one, and allowlisted by a single commit-pinned fingerprint.
+  on every push. The `ghp_…` token in the OpenTofu history is **fake**,
+  planted to show the scanner catches one, and allowlisted by one
+  commit-pinned fingerprint.
 - Cryptographic primitives come from the Go standard library and PKCS#11
   from the `miekg/pkcs11` binding. P-256 by default.
 - Every ambiguous security decision fails closed. All enforcement is
