@@ -15,7 +15,7 @@
 #               GO-YYYY-NNNN and trivy names them CVE-YYYY-NNNNN; vuln-gate
 #               matches an entry against a finding's identifier *and* its
 #               aliases, so either spelling works and only one is needed.
-#   statement   why this finding is accepted. Not "false positive" — what
+#   statement   why this finding is accepted. Not "false positive", but what
 #               makes it one here: the code path is unreachable, the
 #               affected feature is not built, the fix is not released yet.
 #   expired_at  the date the exception dies (YYYY-MM-DD), at most 180 days

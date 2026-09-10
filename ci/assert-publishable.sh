@@ -1,50 +1,27 @@
 #!/usr/bin/env bash
 #
-# Refuse to publish unless this run is the one the gates actually gated.
+# Refuse to publish unless every gate passed in this run.
 #
 #   ci/assert-publishable.sh
 #
-# Reads its inputs from the environment so the workflow can hand it
+# Reads its inputs from the environment, so the workflow can pass
 # ${{ needs.<job>.result }} directly:
 #
 #   PUBLISH_EVENT     github.event_name
 #   PUBLISH_REF       github.ref
 #   PUBLISH_GATES     "suite=success sast=success ..." for every gate job
 #
-# # Why this exists when the job already has an `if:`
+# The if: on the publish job is the real control. This is the check that
+# survives somebody editing it, and it catches three things the if: does
+# not: a gate that did not run (needs and if interact in ways that are
+# easy to read wrongly), a gate that was deleted (REQUIRED_GATES is written
+# out here, so removing a job fails this check), and a gate that was added
+# but never required (an unknown name is refused).
 #
-# The `if:` on the publish job is the real control and this does not replace
-# it. This is the check that survives somebody editing it.
-#
-# Three failures it is built to catch, none of which the `if:` sees:
-#
-#   1. A gate that did not run. GitHub skips a dependent job when a needed
-#      job fails -- but `needs` and `if` interact in ways that are easy to
-#      get wrong (a status function such as always() in the condition
-#      replaces the implicit success requirement outright), and the way that
-#      goes wrong is a publish step that runs anyway. Rather than depend on
-#      reading those semantics correctly, the results are passed in and
-#      compared here.
-#
-#   2. A gate that was deleted. REQUIRED_GATES is written out below rather
-#      than derived from whatever the workflow happened to pass in, so
-#      removing a job from ci.yml fails this check instead of silently
-#      shrinking the set of things being enforced. That is the difference
-#      between a gate and a list.
-#
-#   3. A gate that was added but never required. An unrecognised name is
-#      refused for the mirror-image reason: a new scanner whose result is
-#      passed in but not listed here would be reported and not enforced,
-#      which is the exact shape of a check that examines everything and
-#      blocks nothing.
-#
-# Fail closed (CLAUDE.md 3.4): anything unrecognised, missing, empty or
-# merely not-'success' is a refusal. There is no path through this script
-# that publishes on a maybe.
+# Anything unrecognised, missing, empty or not "success" is a refusal.
 set -euo pipefail
 
-# The gates that must have passed for an artifact to be publishable. This
-# list is the contract; ci.yml must pass exactly these and no others.
+# The gates that must have passed. ci.yml passes exactly these.
 REQUIRED_GATES="suite sast gitleaks deps image terraform trustchain"
 
 die() { echo "assert-publishable: $*" >&2; exit 1; }
@@ -53,11 +30,7 @@ EVENT="${PUBLISH_EVENT:-}"
 REF="${PUBLISH_REF:-}"
 GATES="${PUBLISH_GATES:-}"
 
-# A pull request never publishes, and that includes one from a fork. A fork's
-# pull_request run gets a read-only token and no secrets, so it could not
-# push even if it reached this far -- but "the credential would not have
-# worked" is a weaker statement than "the step does not run", and only the
-# second one stays true when the credentials change.
+# A pull request never publishes, from a fork or otherwise.
 [ "$EVENT" = "push" ] || die \
     "refusing to publish: event is '${EVENT:-<unset>}', not 'push'.
 Only a push to the default branch publishes; a pull request -- from a fork
@@ -74,8 +47,7 @@ case "$REF" in
 esac
 
 [ -n "$GATES" ] || die \
-    "refusing to publish: no gate results were supplied. An empty result set
-is not an absence of failures, it is an absence of evidence."
+    "refusing to publish: no gate results were supplied."
 
 # Every supplied result must be a gate this script knows about, and every
 # gate this script knows about must have been supplied and have passed.
@@ -112,8 +84,7 @@ for req in $REQUIRED_GATES; do
         *" $req "*) ;;
         *) die \
             "refusing to publish: gate '$req' reported no result at all.
-Either ci.yml stopped passing it in, or the job was removed. A gate that
-does not report is not a gate that passed." ;;
+Either ci.yml stopped passing it in, or the job was removed." ;;
     esac
 done
 

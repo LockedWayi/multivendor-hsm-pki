@@ -1,9 +1,8 @@
 # How the PKCS#11 module reaches a pod in a `restricted` namespace.
 #
 # THE TENSION. No module ships in the image, so it must come from the node.
-# The obvious way is a hostPath volume in the pod spec -- and Pod Security
-# Admission at `restricted` forbids exactly that, which sub-task 4.5
-# requires. Two apparent options, both bad: drop the namespace to
+# The obvious way is a hostPath volume in the pod spec, and Pod Security
+# Admission at `restricted` forbids exactly that. Two apparent options, both bad: drop the namespace to
 # `baseline` and lose the guardrail, or bake the module back into the image
 # and lose the delivery decision.
 #
@@ -116,9 +115,9 @@ spec:
 # That was verified the expensive way rather than reasoned about: a
 # certificate was issued and revoked, the cluster deleted and rebuilt, and
 # the CRL came back with zero entries while the old data sat in an orphaned
-# directory on the host. It is the Phase 3b.3 regression -- a revoked
-# certificate becoming valid again -- reintroduced at the cluster level by
-# the deployment rather than by the code.
+# directory on the host. A revoked certificate becoming valid again is the
+# regression the store exists to prevent, reintroduced at the cluster
+# level by the deployment rather than by the code.
 #
 # Backing the provisioner's root directory on the host does not fix it:
 # preserving the bytes is not the same as preserving the *binding* to them.

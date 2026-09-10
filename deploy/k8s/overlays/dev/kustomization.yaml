@@ -21,8 +21,7 @@ patches:
 
 images:
   # A tag, and only because this image is built locally and never pushed.
-  # Sub-task 4.10 replaces this with a digest once a registry exists: a tag
-  # is a mutable pointer, and a signature over one attests to nothing
-  # durable.
+  # Against a registry this becomes a digest: a tag is a mutable pointer,
+  # and a signature over one attests to nothing durable.
   - name: hsm-pki-server
     newTag: local

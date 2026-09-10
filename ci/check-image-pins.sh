@@ -4,22 +4,11 @@
 #
 #   ci/check-image-pins.sh
 #
-# ci.yml's header has claimed this since Phase 5.1. On 2026-09-08 it was
-# false in six places, and the two that mattered were not the obvious ones:
-# ci/softhsm2-dev.Dockerfile ran on a *tag*, and that image runs the whole
-# test suite, the coverage floor, the local CA -- and generates the
-# supply-chain signing keys. A moved tag there is a different toolchain
-# generating a private key.
-#
-# The other four were bare `alpine:3` in scripts that chown a signature
-# bundle and delete token state. ci/scanner-pins.sh had already pinned
-# alpine by digest, with a comment saying in as many words that "it only
-# runs rm" is how an unpinned image gets into a repository with a rule
-# against them. The rule was written down in one file and not followed in
-# the four next to it.
-#
-# So the claim is now checked rather than asserted. That is the whole point:
-# a stated invariant nothing verifies is a comment.
+# The workflow header claims this. It was false in six places on
+# 2026-09-08: ci/softhsm2-dev.Dockerfile ran on a tag, and four scripts
+# used a bare alpine:3. The dev image runs the test suite and generates the
+# supply-chain signing keys, so a moved tag there is a different toolchain
+# generating a private key. The claim is now checked.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,26 +17,13 @@ cd "$REPO_ROOT"
 failures=0
 fail() { printf '  UNPINNED  %s\n' "$*" >&2; failures=$((failures + 1)); }
 
-# Only files this repository actually tracks.
-#
-# The first version of this script walked the working tree and immediately
-# found `.local/ci-cache/gomod/golang.org/x/sys@v0.47.0/unix/linux/Dockerfile`
-# in CI -- a dependency's own Dockerfile, inside the restored Go module
-# cache. It was a true finding about a file that is none of this
-# repository's business, which is the same lesson ci/scan-deps.sh already
-# carries as `--skip-dirs .local` ("scanning it means scanning the
-# scanner").
-#
-# Excluding .local by name would fix that instance. `git ls-files` fixes the
-# class: it is the precise definition of "a file we are responsible for",
-# and it stays correct when the next piece of untracked working state
-# appears under a different name.
+# Only files this repository tracks. The first version walked the working
+# tree and found a dependency's Dockerfile inside the restored Go module
+# cache.
 tracked() { git ls-files -z -- "$@"; }
 
 echo "==> Dockerfile FROM lines"
-# Complete and unambiguous: every build stage must name a digest. `FROM x AS
-# y` and plain `FROM x` are both covered because the test is on the whole
-# line containing the reference.
+# Every build stage must name a digest.
 while IFS= read -r hit; do
     file="${hit%%:*}"
     line="${hit#*:}"
@@ -67,10 +43,9 @@ done < <(tracked '*Dockerfile*' | xargs -0 -r grep -n "^FROM " /dev/null 2>/dev/
 
 echo
 echo "==> upstream images referenced from scripts and workflows"
-# Not a shell parser -- a list of the upstream names this repository actually
-# uses. A name here without @sha256: on the same line is a finding. Adding a
-# new upstream image means adding it here too, which is the point: the
-# check should not silently stop covering things.
+# A list of the upstream names this repository uses. A name here without
+# @sha256: on the same line is a finding. A new upstream image is added
+# here too.
 UPSTREAM='alpine|golang|debian|registry|ubuntu|aquasec/trivy|semgrep/semgrep|zricethezav/gitleaks|ghcr\.io/opentofu/opentofu|gcr\.io/distroless'
 while IFS= read -r hit; do
     case "$hit" in
