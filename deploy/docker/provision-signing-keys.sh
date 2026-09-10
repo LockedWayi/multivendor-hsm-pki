@@ -78,13 +78,32 @@ DEV_IMAGE="hsm-pki-dev:local"
 SUPPLY_TOKEN_LABEL="hsm-pki-local-supply-chain"
 INVENTORY_TOKEN_LABEL="hsm-pki-local-inventory"
 
-# Throwaway PINs for throwaway local tokens, passed to the containers as
-# environment variables and never written to any file. Nothing here is a
-# secret worth protecting; the point is that the mechanism is the one a real
-# deployment uses -- the tool takes the NAME of the variable, never a value
-# on a command line where it would reach ps output and shell history.
-SUPPLY_PIN="1234"
-INVENTORY_PIN="1234"
+# Throwaway PINs for throwaway tokens, passed to the containers as
+# environment variables and never written to any file. The tool takes the
+# NAME of the variable, never a value on a command line where it would reach
+# ps output and shell history.
+#
+# Generated, not fixed. The old value was the literal 1234, on the reasoning
+# that a PIN for a token created and destroyed on the same machine protects
+# nothing -- which is true, and which made the pipeline copy it into a
+# workflow file, where it became a question ("should this be a repository
+# secret?") with two bad answers: a secret holding a value the repository
+# already publishes is theatre, and leaving it inline invites somebody to
+# reuse the number somewhere it does matter.
+#
+# A random PIN per invocation dissolves the question instead of answering
+# it. crypto-quality randomness because the alternative is explaining why
+# not (CLAUDE.md 3.3), and it costs one command.
+SUPPLY_PIN="${HSM_PKI_SUPPLY_PIN_VALUE:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+INVENTORY_PIN="${HSM_PKI_INVENTORY_PIN_VALUE:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+
+# Different tokens, different PINs. Sharing one would make the offline
+# inventory token reachable with the supply-chain token's PIN, which is
+# most of the point of separating them (step 6 moves it out of the store).
+[ "$SUPPLY_PIN" != "$INVENTORY_PIN" ] || {
+    echo "provision-signing-keys: the two tokens must not share a PIN." >&2
+    exit 1
+}
 
 IMAGE_KEY_LABEL="image-signing-key-v1"
 ARTIFACT_KEY_LABEL="artifact-signing-key-v1"
