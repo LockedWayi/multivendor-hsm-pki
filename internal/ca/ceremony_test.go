@@ -168,7 +168,7 @@ func TestRunCeremony_RejectsSameTokenForBothRoles(t *testing.T) {
 // TestRunCeremony_DetectsSameTokenPresentedWithDifferentSerials is why the
 // empirical cross-visibility check exists alongside the serial comparison.
 // It fakes the case a serial check cannot catch — one token reported under
-// two identities — by handing the ceremony the same real token twice with
+// two identities: by handing the ceremony the same token twice with
 // the serial rewritten on one copy. The serial guard passes; the
 // object-visibility check must still stop it.
 func TestRunCeremony_DetectsSameTokenPresentedWithDifferentSerials(t *testing.T) {

@@ -2,10 +2,10 @@
 # Computes test coverage over CI-reachable code only, and fails if it is
 # below the floor. "CI-reachable" excludes the files listed in
 # coverage-exclude.txt — vendor adapters that need a proprietary SDK or HSM
-# hardware this pipeline does not have (see that file's header, the engineering contract
-# the verified-claim split). Those adapters are validated separately, by the conformance suite
-# passing against real hardware in the maintainer's own environment; a
-# coverage percentage is not a meaningful gate for code CI cannot execute.
+# hardware this pipeline does not have. Those adapters are checked by the
+# conformance suite passing against ProtectToolkit-C software emulation in
+# the maintainer's own environment. A coverage percentage is not a
+# meaningful gate for code CI cannot execute.
 #
 # Usage: ci/coverage.sh [go test flags...]
 #   COVERAGE_THRESHOLD=70 ci/coverage.sh -race

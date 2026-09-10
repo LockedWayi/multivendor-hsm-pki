@@ -162,12 +162,12 @@ The 70% floor is enforced by `ci/coverage.sh`, not a bare `go test -cover`:
 docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev bash ci/coverage.sh -race
 ```
 
-The difference matters once a vendor adapter needs a proprietary SDK or real
-hardware this pipeline does not have: that adapter's file goes in
-`ci/coverage-exclude.txt`, and its correctness is validated by
-`TestConformance` passing against real hardware in the maintainer's own
-environment instead of by a percentage CI cannot honestly compute for code
-it cannot execute. A bare `go test -cover` still works for a
+The difference matters once a vendor adapter needs a proprietary SDK this
+pipeline does not have: that adapter's file goes in
+`ci/coverage-exclude.txt`, and its correctness is checked by
+`TestConformance` passing against that vendor's module in the
+maintainer's own environment (ProtectToolkit-C software emulation today)
+instead of by a percentage CI cannot compute for code it cannot execute. A bare `go test -cover` still works for a
 quick local read, but the floor itself is `ci/coverage.sh`'s number.
 
 ## Accepting a Semgrep finding
@@ -195,7 +195,7 @@ finding go away.
 - Private keys and PINs never hit plaintext disk or logs.
 - Standard-library crypto; `miekg/pkcs11` for PKCS#11 — no hand-rolled crypto.
 - Develop and test against SoftHSM2. Vendor backends are exercised only
-  against hardware the maintainer owns.
+  against modules and tokens the maintainer owns, never an employer's.
 - All code, comments, and commit messages in English.
 
 Everything above is enforced by the checks in `ci/`, not by convention alone —

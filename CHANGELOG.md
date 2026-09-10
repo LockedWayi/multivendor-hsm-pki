@@ -549,7 +549,7 @@ that the verified-claim split requires and the tag convention formats.
   proprietary SDK), so a blanket `go test ./... -cover` no longer measures
   what it used to — it conflates "untested" with "untestable here." The
   excluded files are validated instead by the conformance suite passing
-  against real hardware, and that claim stays labelled maintainer-verified,
+  against ProtectToolkit-C software emulation, and that claim stays labelled maintainer-verified,
   never blended into a CI-reported percentage.
 -: a living record of where PKCS#11
   implementations differ and of the portability traps (`CK_ULONG` width,
@@ -610,8 +610,8 @@ that the verified-claim split requires and the tag convention formats.
   where an operator is watching instead.
 - `internal/pkcs11/base.go`: the shared PKCS#11 plumbing (`pkcs11Adapter`)
   extracted from `SoftHSM2Adapter` and `ProtectServerAdapter` now that both
-  have been run against real hardware. Every operation the conformance
-  suite exercises turned out to need zero vendor-specific code — the one
+  have been run against ProtectToolkit-C 7.3.3 software emulation. Every operation the conformance
+  suite exercises turned out to need zero vendor-specific code on those two implementations — the one
   real divergence found (an all-zero-digest `Verify` rejection, ProtectServer
   only) is HSM behavior, not adapter logic, so it stays a documented fact in
   `protectserver.go` rather than a branch. `SoftHSM2Adapter` and

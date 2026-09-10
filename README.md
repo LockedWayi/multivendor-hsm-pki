@@ -19,33 +19,32 @@ along the way — is in **[docs/architecture.md](docs/architecture.md)**.
 
 ## Why this is unusual
 
-Most HSM integrations hard-code a single vendor. The PKCS#11 standard is
-supposed to prevent that, and in practice does not — vendors disagree about
-attribute defaults, session semantics, object search behaviour and error
-codes, in ways that only surface against real hardware.
+Most HSM integrations hard-code one vendor. PKCS#11 is meant to prevent
+that, and in practice vendors differ in attribute defaults, session
+semantics, object search behaviour and error codes. Those differences
+only show against a second implementation.
 
-So the interesting claim is not "this code calls PKCS#11". It is that the
-same interface drives **two independent backends** with no vendor-specific
-branches in the calling code, and that this was proven by running a second,
-real vendor against an interface designed before it arrived.
+One interface drives two backends with no vendor-specific code in the
+shared implementation.
 
 | Backend | Status |
 |---|---|
 | **SoftHSM2** | Runs in CI on every push. No hardware, no SDK, reproducible by anyone. |
-| **Thales ProtectServer** | Runs locally against the maintainer's own token. |
+| **Thales ProtectServer** | Thales ProtectToolkit-C 7.3.3 software emulation (`libctsw.so`, token model `SW:SWEMUL`), on the maintainer's own installation. Not an appliance. |
 
-Two, not five. A list of vendor names in a README costs nothing; an
-abstraction implemented once is a guess, and this repository does not claim
-support it has not run.
+Two spec-conformant implementations needed no vendor-specific code. That
+is not proof that the abstraction is complete. nShield and Luna are
+untested, and that is where differences are expected: the login and key
+protection model, `CKA_ID` and label handling, EC point encoding, session
+limits, error codes.
 
 ## The PKCS#11 core
 
 `internal/pkcs11` is the centre of the project, not a detail of it.
 
-- **One interface, one shared core.** Both adapters delegate to a common
-  implementation (`base.go`). The interface needed *zero* vendor-specific
-  overrides once the second, real vendor was run against it — which is the
-  evidence that the abstraction generalizes rather than the assertion.
+- **One interface, one shared core.** Both adapters wrap a common
+  implementation (`base.go`) with no overrides. Two conformant
+  implementations agreeing is evidence, not proof; see above.
 - **One conformance suite, run per backend.** Every test that touches a
   token runs as its own subtest against every backend the environment
   provides, so a pass or a skip is visible per vendor in the log. A backend
@@ -279,10 +278,10 @@ separately and never averaged:
   against SoftHSM2; SAST; full-history secret scan; dependency, reachability
   and image scanning; infrastructure scanning. Reproducible by anyone with
   Docker and no hardware.
-- **Maintainer-verified.** Everything involving the Thales ProtectServer
-  token: the conformance suite against a second real vendor, CA issuance and
-  revocation end to end, and durable-key signing. Run on the maintainer's own
-  hardware and reported as such.
+- **Maintainer-verified.** Everything involving the ProtectServer backend:
+  the conformance suite, CA issuance and revocation end to end, and
+  durable-key signing. Run against Thales ProtectToolkit-C 7.3.3 software
+  emulation on the maintainer's own installation, and reported as such.
 
 A release that blurs those two is the version of this repository that
 damages its own credibility, so it does not.

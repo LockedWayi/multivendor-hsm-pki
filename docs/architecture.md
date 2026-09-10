@@ -59,11 +59,11 @@ demonstrates across three vendors at once.
  (CI runs)  (local only)
 ```
 
-Two of those four are the working proof. **SoftHSM2** is the universal
-baseline: no hardware, no proprietary SDK, so CI runs it and any reader can
-reproduce the whole suite. **ProtectServer** — via Thales ProtectToolkit — is a
-real vendor implementation of the same interface. nShield and Luna are deferred
-to Phase 7 and are honest gaps until then, not implied capabilities.
+Two of those four run. **SoftHSM2** is the baseline: no hardware, no
+proprietary SDK, so CI runs it and any reader can reproduce the whole
+suite. **ProtectServer** runs through Thales ProtectToolkit-C 7.3.3 in
+software emulation, on the maintainer's own installation. nShield and Luna
+are planned and untested.
 
 ---
 
@@ -75,9 +75,9 @@ building a bank branch — you make sure the teller can count money by hand befo
 you install the vault door and connect it to the central reserve.
 
 1. **PKCS#11 abstraction + vendor adapters (Go).** The core. One interface,
-   proven against two independent backends — SoftHSM2 (needs no hardware, so CI
-   runs it) and Thales ProtectServer (a real vendor module, run locally). If
-   this layer is wrong, nothing on top matters.
+   run against two backends: SoftHSM2 (needs no hardware, so CI runs it)
+   and Thales ProtectServer (ProtectToolkit-C software emulation, run
+   locally). If this layer is wrong, nothing on top matters.
 
 2. **CA core (Go).** Certificate issue / revoke / CRL, built on the abstraction so
    it is HSM-agnostic from day one. Standard-library crypto only.
@@ -333,8 +333,9 @@ implements. Abstracting at the PKCS#11 layer is what makes one interface over
 three vendors possible at all.
 
 ### SoftHSM2 as the development and CI target
-Rejected: developing against real hardware. Chosen: SoftHSM2 first, real hardware
-only for final validation of vendor-specific paths. Reason: it keeps development
+Rejected: developing against a vendor module. Chosen: SoftHSM2 first, the
+maintainer's own ProtectToolkit-C software emulation for validation of the
+vendor path. Reason: it keeps development
 hardware-free (so CI can run the whole suite), and — critically — it keeps this
 work cleanly independent of any employer's HSM, which matters for provenance.
 

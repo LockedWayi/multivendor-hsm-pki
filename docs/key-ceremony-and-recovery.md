@@ -25,7 +25,7 @@ log line or a plaintext file.
 
 ### 2.1 Who, and with what access
 
-One operator, run locally against real hardware or the software emulator —
+One operator, run locally against SoftHSM2 or ProtectToolkit-C software emulation.
 this repository demonstrates a **single-operator** ceremony, which
 §7's non-goal in `threat-model.md` states plainly: it provides no separation
 of duties. The operator needs:
