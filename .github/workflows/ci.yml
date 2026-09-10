@@ -1,71 +1,35 @@
-# CI — the security gates, as jobs.
+# The pipeline. Every job above `publish` is a gate. Nothing is written
+# anywhere until all of them pass. Each gate is one script under ci/, run
+# the same way locally.
 #
-#   suite     build, vet, race suite and the coverage floor, against SoftHSM2
-#   sast      Semgrep over this repository's own Go code  (Phase 5.2)
-#   gitleaks  secret scan over the full history          (Phase 5.2)
-#   deps      dependency vulnerabilities: trivy fs + govulncheck  (Phase 5.3)
-#   image     the service image: trivy image + SBOM      (Phase 5.3)
-#   terraform fmt, validate, trivy config + secrets      (Phase 5.4)
-#   trustchain the key inventory against an out-of-band anchor (Phase 5.9)
-#   publish   build, scan, push and sign the image        (Phase 5.6)
-#   verifyrun re-check every signature this run made, holding no key
-#             material at all                              (Phase 5.9)
+#   suite       build, vet, race suite, coverage floor, link check (SoftHSM2)
+#   sast        Semgrep over this repository's Go code
+#   gitleaks    secret scan over the full history
+#   deps        dependency vulnerabilities: trivy fs and govulncheck
+#   image       the service image: trivy image and SBOM
+#   terraform   OpenTofu fmt, validate, trivy config and secrets
+#   trustchain  the key inventory against the anchor named by repository
+#               variables
+#   publish     build, scan, prove the PKCS#11 signing path, push, sign
+#               keyless
+#   verifyrun   re-check this run's keyless signatures from a checkout
+#               that holds no key material
 #
-# Phase 5.1 and 5.2's gitleaks gate were pulled forward on 2026-09-04; the
-# scanning jobs arrived with 5.3 and 5.2's Semgrep gate on 2026-09-05.
+# Seven gates are required checks on main: suite, sast, gitleaks, deps,
+# image, terraform and trustchain. enforce_admins is on, so the owner is
+# not exempt. Force-pushes and deletions are refused. Pull-request review
+# is not required. verifyrun runs only after a publish, so it cannot gate
+# a merge. A failure there turns main red after the fact.
 #
-# The four scanners are not four opinions about one thing. Each reads a
-# different artifact, and a finding from one is invisible to the others:
-# Semgrep reads the code written here, gitleaks reads what was committed,
-# trivy fs and govulncheck read what was imported, trivy image reads what
-# was assembled, and trivy config reads what would be provisioned.
+# Everything Go runs inside ci/softhsm2-dev.Dockerfile. The suite needs
+# the SoftHSM2 module. A host without the module skips every
+# token-touching test and the coverage floor means nothing.
 #
-# Everything here ran locally before it ran here: each step below is the
-# same command a contributor runs from CONTRIBUTING.md, wrapped in the same
-# dev container. That is the point of this workflow's shape — CI is not a
-# second environment to keep in sync, it is the first environment made
-# unforgettable. Every job below is one script a contributor can run —
-# ci/coverage.sh, ci/scan-code.sh, ci/scan-deps.sh, ci/scan-image.sh — so a
-# red check is reproducible without pushing again. The rest of Phase 5
-# (Terraform scanning, signing as a gate, SLSA provenance, the rotation
-# drill) lands on top of this file, not instead of it.
+# Every third-party reference is pinned: actions by commit SHA, images by
+# digest. ci/check-image-pins.sh checks the image half in the suite gate.
 #
-# Two decisions worth naming:
-#
-#   * Everything Go runs INSIDE ci/softhsm2-dev.Dockerfile, never on the
-#     runner's own Go. The suite needs the SoftHSM2 module, and the
-#     coverage floor is only honest in-container: a host without the module
-#     skips every token-touching test and reports ~34% against the real
-#     ~78% (ci/coverage.sh's header, measured).
-#
-#   * Every third-party ref is pinned to an immutable identifier — actions
-#     by commit SHA, images by digest — the same discipline the repository
-#     applies to its base images and to cosign (the identity rule: a tag is
-#     a pointer somebody can move).
-#
-#     That sentence was here for four days before anything checked it, and
-#     it was false in six places: ci/softhsm2-dev.Dockerfile ran on a tag,
-#     and four scripts reached for a bare `alpine:3` while ci/scanner-pins.sh
-#     sat next to them pinning alpine by digest. `ci/check-image-pins.sh`
-#     runs in the suite gate now, so the claim fails the build when it stops
-#     being true.
-#
-# "Blocks merge" needs one repository setting this file cannot make: the six
-# gate jobs marked required under branch protection. That setting was
-# measured unavailable while this project lived in a private repository on
-# the free plan (403) -- which is one of the reasons it is published here.
-# It is now in force: six required contexts, enforce_admins on, force-pushes
-# and deletions refused. A gate the owner can wave through is a report, not
-# a gate, so the owner is not exempt.
-#
-# The `publish` job below is the first that writes anything anywhere, and it
-# is downstream of all six in the same workflow run. That ordering is the
-# point: nothing reaches the registry that the gates did not examine on the
-# way past. Because the interaction between `needs:` and `if:` is easy to
-# read wrongly -- and the way it goes wrong is a publish step that runs
-# anyway -- the six results are also passed into ci/assert-publishable.sh
-# and compared there, and that script is exercised in both directions by
-# ci/assert-publishable-selftest.sh inside the `suite` gate.
+# The publish job is downstream of all seven gates in the same run, and
+# ci/assert-publishable.sh compares their results again at run time.
 name: ci
 
 on:
@@ -86,12 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # Mounted into every Go container in this job. Kept in one variable so
-      # the three invocations cannot drift into caching different things.
-      # github.workspace, not $PWD: this value is expanded by Actions when
-      # the environment is built, and a shell variable left inside it would
-      # reach `docker run` as the literal four characters -- docker would
-      # then create a directory named $PWD and mount that.
+      # github.workspace, not $PWD: Actions expands this when the
+      # environment is built, and a shell variable would reach docker as
+      # four literal characters.
       CACHE_MOUNTS: >-
         -v ${{ github.workspace }}/.local/ci-cache/gomod:/go/pkg/mod
         -v ${{ github.workspace }}/.local/ci-cache/gobuild:/root/.cache/go-build
@@ -99,11 +60,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The Go module and build caches live on the runner and are mounted
-      # into the container, because everything Go runs in the container and
-      # a cache the container cannot see is a cache that does nothing. Keyed
-      # on go.sum so a dependency change starts a fresh one; restore-keys
-      # let an unrelated commit reuse the previous run's build output.
+      # The caches live on the runner and are mounted into the container.
       - name: Restore the Go module and build caches
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -120,11 +77,9 @@ jobs:
           mkdir -p .local/ci-cache/gomod .local/ci-cache/gobuild
           docker build -f ci/softhsm2-dev.Dockerfile -t hsm-pki-dev .
 
-      # The safe.directory line in each step below is not decoration: the
-      # checkout is owned by the runner's uid, the container runs as root,
-      # and git refuses to read a repository with "dubious ownership" —
-      # which surfaces as a misleading VCS error inside go, not as a clear
-      # git one.
+      # safe.directory: the checkout is owned by the runner's uid and the
+      # container runs as root. Without it git refuses the repository and
+      # go reports a VCS error.
       - name: gofmt and go vet
         run: |
           docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS hsm-pki-dev sh -c '
@@ -137,40 +92,29 @@ jobs:
             fi
             go vet ./...'
 
-      # The publish guard, exercised in both directions. It lives in this
-      # job rather than in `publish` because `publish` runs only on a push
-      # to main -- a guard whose test never runs on the pull request that
-      # changes it is a guard nobody is checking.
+      # The publish guard is tested here because `publish` runs only on a
+      # push to main. A guard whose test never runs on the pull request
+      # that changes it is not checked.
       - name: Publish-guard selftest
         run: ci/assert-publishable-selftest.sh
 
-      # The pinning claim in this file's header, checked rather than
-      # asserted. It was false in six places until 2026-09-08 -- including
-      # the image that generates the supply-chain signing keys.
       - name: Every third-party image is pinned by digest
         run: ci/check-image-pins.sh
 
-      # -p 1 matches the documented invocation everywhere this suite runs.
-      # SoftHSM2 gets a fresh temp token store per test, so parallel package
-      # binaries are PROBABLY safe here — but the vendor backends share a
-      # persistent store, the rule exists for them, and one invocation that
-      # works on every backend beats two that each work on one.
+      - name: Every relative link in the documentation resolves
+        run: tools/check-public-links.sh
+
+      # -p 1: the vendor backends share a persistent token store, and one
+      # invocation that works on every backend is kept.
       - name: Full suite with the race detector
         run: |
           docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS hsm-pki-dev sh -c '
             git config --global --add safe.directory /repo
             go test -race -p 1 ./...'
 
-      # This re-runs the suite instrumented. The bare run above is kept
-      # anyway: its failure output is the readable one, and a coverage-run
-      # failure would otherwise be the only signal for a plain test bug.
-      # Merging the two into one instrumented run is a Phase 5 optimization,
-      # not a correctness change.
-      # COVERAGE_BADGE_CHECK recomputes docs/coverage.svg and fails if the
-      # committed one disagrees. The badge is checked in like a lockfile
-      # rather than published by CI, so this job needs no `contents: write`
-      # and no token -- see ci/coverage.sh's header for why that mattered
-      # more than the convenience.
+      # COVERAGE_BADGE_CHECK recomputes docs/coverage.svg and fails when
+      # the committed one disagrees. The badge is checked in like a
+      # lockfile, so this job needs no write permission.
       - name: Coverage floor and badge
         run: |
           docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS \
@@ -188,10 +132,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # p/golang and p/security-audit, blocking on any finding. Exceptions
-      # are `nosemgrep` comments pinned to the exact line, each with its
-      # reason beside it — never a disabled ruleset, and never a path
-      # exclusion, which would also exempt the finding nobody has written
-      # yet in the two files where one would matter most.
+      # are nosemgrep comments on the exact line, each with its reason.
       - name: Semgrep
         run: ci/scan-code.sh
 
@@ -203,27 +144,12 @@ jobs:
       - name: Check out with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The scan's subject IS the history (the no-secrets rule forbids
-          # secrets in commits, not just in the tree); a shallow clone
-          # would scan only the tip and pass on anything already buried.
+          # The subject is the history. A shallow clone would scan only the
+          # tip, and ci/scan-secrets.sh refuses one.
           fetch-depth: 0
 
-      # v8.30.1, pinned by digest. The GIT_CONFIG_* environment is how a
-      # container whose entrypoint is the gitleaks binary (no shell) gets
-      # told the runner-owned checkout is safe to read.
-      #
-      # Exceptions live in two committed, reviewed files: .gitleaks.toml
-      # (exact public key-label strings, and .local/ for directory scans)
-      # and .gitleaksignore (one commit-pinned fingerprint for Phase 3.6's
-      # deliberately planted scanner-demo credential). Both say why.
       - name: Scan every commit
-        run: |
-          docker run --rm -v "$PWD":/repo -w /repo \
-            -e GIT_CONFIG_COUNT=1 \
-            -e GIT_CONFIG_KEY_0=safe.directory \
-            -e GIT_CONFIG_VALUE_0='*' \
-            zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
-            git . --config .gitleaks.toml
+        run: ci/scan-secrets.sh
 
   deps:
     name: dependency scan (trivy fs, govulncheck)
@@ -233,16 +159,9 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # One script, the same one a contributor runs. It asks the two
-      # different questions — "is a vulnerable version present" (trivy fs)
-      # and "does this code reach it" (govulncheck) — and grants exceptions
-      # only from ci/vuln-allowlist.yaml, which ci/vuln-gate validates
-      # before either scanner is believed.
-      #
-      # govulncheck runs inside the digest-pinned builder image from
-      # deploy/docker/Dockerfile, not on the runner's Go: part of its answer
-      # is about the standard library, and that is a property of the
-      # toolchain that compiles the shipped binary.
+      # trivy fs asks whether a vulnerable version is present; govulncheck
+      # asks whether this code reaches it. Exceptions come only from
+      # ci/vuln-allowlist.yaml, which ci/vuln-gate validates first.
       - name: Dependencies and reachable vulnerabilities
         run: ci/scan-deps.sh
 
@@ -254,29 +173,17 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Built here rather than pulled: the image this job scans has to be
-      # the image this commit produces, and a registry tag is a pointer to
-      # whatever was pushed last. Publishing is 5.6's job;
-      # this one only needs the artifact to exist locally.
+      # Built here, not pulled: the image scanned has to be the one this
+      # commit produces.
       - name: Build the service image
         run: docker build -f deploy/docker/Dockerfile -t hsm-pki-server:ci .
 
       - name: Vulnerabilities and SBOM
         run: ci/scan-image.sh hsm-pki-server:ci
 
-      # The signing environment, built because nothing else here builds it.
-      # Found by a base-image bump (debian 12-slim -> 13-slim) that arrived
-      # with six green checks, none of which had compiled the file it
-      # changed: a green check that examined nothing is indistinguishable
-      # from one that examined everything and approved.
-      #
-      # What is asserted is what this image exists to provide. It ships no
-      # cosign binary -- that is fetched, verified and mounted at run time --
-      # so the failure a base bump actually causes is a renamed or dropped
-      # library, and the binary then dies at exec with an unresolved
-      # DT_NEEDED. Checking the sonames resolve catches exactly that, and
-      # costs a container start rather than a 140 MB download. Running the
-      # real binary against a real token stays the maintainer-verified step.
+      # The signing environment is built so that a base-image bump that
+      # drops a library the cosign binary needs fails here, not in the
+      # publish job.
       - name: Build the cosign image and check its runtime libraries
         run: |
           docker build -f ci/cosign.Dockerfile -t hsm-pki-cosign:ci .
@@ -293,9 +200,6 @@ jobs:
             done
             exit "$missing"'
 
-      # The SBOM answers "were we affected" about a CVE published after this
-      # build, which it can only do if it outlives the job that made it.
-      # Attaching it to the image itself is 5.6.
       - name: Keep the SBOM
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -312,42 +216,28 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # fmt -check, validate, trivy config and trivy's secret scanner over
-      # deploy/terraform. `validate` runs with -backend=false: the state
-      # backend is a self-hosted MinIO bucket this runner cannot reach and
-      # holds no credentials for, and validate needs the providers, not the
-      # state.
-      #
-      # `tofu plan` is deliberately absent. It needs provider credentials
-      # and a real deploy target, and which target is still an open
-      # maintainer decision . A plan job wired to nothing would be a check that
-      # passes because it did nothing.
+      # fmt -check, validate with -backend=false, trivy config and trivy's
+      # secret scanner. There is no plan step: it needs credentials and a
+      # deploy target, and neither exists here.
       - name: Format, validate and scan the OpenTofu tree
         run: ci/terraform-scan.sh
 
-  # The independent half of the signing story (Phase 5.9). It holds no token,
-  # no PIN and no private key of any kind, and that is enforced by the code
-  # path rather than by this job being careful: ci/cosign.sh decides from the
-  # subcommand, so there is no argument to it that both verifies and reaches
-  # a private key.
+  # The key inventory against the trust anchor. The anchor's repository,
+  # commit and digest come from repository variables, not from any file in
+  # this tree. This job holds no token and no PIN; ci/cosign.sh refuses a
+  # PKCS#11 key in verify mode, and the second step proves that refusal.
   #
-  # What it asserts is the link that is NOT self-referential. The inventory,
-  # its signature and the key that verifies it would all three live in this
-  # tree, and checking them against each other proves only that the three
-  # agree -- which they would also do if somebody who can push here rewrote
-  # all three in one commit. So the anchor is fetched from a separately
-  # protected repository, pinned by commit and digest, and the inventory is
-  # checked against THAT, by openssl rather than by code shipped here.
-  #
-  # Deliberately --inventory-only. An ordinary `main` build carries only the
-  # pipeline's ephemeral signature by design, so demanding a release
-  # signature on every commit would leave this red for the normal case, and a
-  # check that is red normally is a check people learn to ignore. A specific
-  # release is verified by passing its digest.
+  # --inventory-only: a build of main carries only the pipeline's keyless
+  # signature, which this chain does not accept, so the image half is
+  # checked per release rather than on every push.
   trustchain:
     name: verify trust chain (public keys only)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      HSM_PKI_TRUST_ANCHOR_REPO: ${{ vars.TRUST_ANCHOR_REPO }}
+      HSM_PKI_TRUST_ANCHOR_COMMIT: ${{ vars.TRUST_ANCHOR_COMMIT }}
+      HSM_PKI_TRUST_ANCHOR_SHA256: ${{ vars.TRUST_ANCHOR_SHA256 }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -355,47 +245,34 @@ jobs:
       - name: Anchor, inventory and listed keys
         run: ci/verify-release.sh --inventory-only
 
-      # The claim above is "a verifier cannot reach a private key". Asserted
-      # rather than stated: a guard nobody has watched refuse is
-      # indistinguishable from one that accepts everything.
       - name: A verify invocation must refuse a PKCS#11 key
         run: |
           if ci/cosign.sh verify --key "pkcs11:token=x;object=y" scratch 2>/dev/null; then
-            echo "cosign.sh accepted a PKCS#11 key in verify mode -- the" >&2
-            echo "verifier is not independent." >&2
+            echo "cosign.sh accepted a PKCS#11 key in verify mode" >&2
             exit 1
           fi
           echo "refused, as it must"
 
   # --------------------------------------------------------------------
-  # Everything above this line is a gate. This is the first job that writes
-  # anything anywhere, and the only one holding a credential that can.
+  # The first job that writes anything, and the only one holding a
+  # credential that can. id-token: write is what lets cosign obtain a
+  # Fulcio certificate for this run's identity.
   publish:
     name: publish signed image (GHCR)
     needs: [suite, sast, gitleaks, deps, image, terraform, trustchain]
-    # A pull request never publishes -- from a fork or from a branch here.
-    # `needs` already requires all six to have succeeded; this narrows it
-    # further to the event and branch, and ci/assert-publishable.sh re-checks
-    # both plus the six results at run time. Three layers because the
-    # interaction between `needs` and `if` is subtle enough to get wrong
-    # while reading it, and the way it goes wrong is a publish that happens.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
-      # Scoped to this job alone. Every other job in this workflow runs with
-      # the read-only default at the top of the file, so a compromise of a
-      # scanner cannot push an image.
       packages: write
+      id-token: write
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Tags, not just the tip. `git describe --exact-match` decides
-          # whether this commit gets a semver tag, and the default shallow
-          # fetch brings no tags at all -- so without this the release tag
-          # is silently never applied and the step still reports success.
+          # Tags, not just the tip: `git describe --exact-match` decides
+          # whether this commit gets a semver tag.
           fetch-depth: 0
 
       - name: Refuse to publish unless every gate passed
@@ -412,113 +289,44 @@ jobs:
             trustchain=${{ needs.trustchain.result }}
         run: ci/assert-publishable.sh
 
-      # The ephemeral trust root (5.9's decision, applied here). A fresh
-      # SoftHSM2 token and fresh signing keys, provisioned per run, so the
-      # pipeline needs no hardware and commits no key material. The public
-      # halves go to .local/ci-keys and NOT to docs/keys: those are the
-      # committed, durable keys consumers verify against, and overwriting
-      # them with a set that dies with the build is the one thing this
-      # separation exists to prevent.
-      # Both tracks, because this job signs two different kinds of thing and
-      # they do not agree on a version. v2 signs and attests the image: its
-      # layout is what Kyverno's verifier reads, and v3's OCI-referrers form
-      # reports as "no signatures found" there. v3 signs the release binary:
-      # its bundle is what internal/artifactsig reads, and --signing-config
-      # -- the flag that declares "no transparency log" -- exists only in v3.
-      #
-      # Fetching only v2 is what a previous run did, and the failure was
-      # honest but late: the binary signing step died with "no cosign at
-      # .local/bin/cosign-v3.1.3" after the image had already been pushed
-      # and signed. Each track is pinned and verified independently; neither
-      # is trusted because the other was.
+      # v2 makes the PKCS#11 image signatures in the mechanism test, in the
+      # layout Kyverno reads. v3 makes every keyless signature and the
+      # release binary's bundle. Each is pinned and verified on its own.
       - name: Fetch and verify cosign, both tracks
         run: |
           HSM_PKI_COSIGN_VERSION=v2 ci/cosign.sh fetch
           HSM_PKI_COSIGN_VERSION=v3 ci/cosign.sh fetch
 
-      # The credential is the runner's own GITHUB_TOKEN, minted for this run
-      # and expiring with it. That is why no registry password is stored as
-      # a repository secret: a long-lived credential in a repository whose
-      # subject is supply-chain custody is the thing to avoid, and a fork's
-      # pull_request run receives a read-only one by construction.
+      # The runner's own GITHUB_TOKEN, minted for this run. No registry
+      # password is stored as a secret.
       - name: Log in to GHCR
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      # Provisioning and signing are ONE step, and that is the whole reason
-      # this reads the way it does.
-      #
-      # The token's PIN is generated here and must not outlive this shell.
-      # Splitting the steps would mean handing it between them through
-      # $GITHUB_ENV, which is a file on the runner -- and a PIN written to a
-      # file is exactly what CLAUDE.md 3.1 forbids, whoever wrote the file.
-      # So the PIN is created, used and discarded inside one `run:`: never a
-      # literal in this repository, never on a command line, never on disk.
-      #
-      # It was the literal "1234" until 2026-09-09, copied from the local
-      # provisioning script. That was defensible -- the token is created and
-      # destroyed inside this job, so the PIN protects nothing -- but it
-      # produced a question with two bad answers (a repository secret holding
-      # a value the repository already publishes is theatre; an inline
-      # literal invites reuse somewhere it does matter). Generating it
-      # dissolves the question instead of answering it.
-      - name: Provision this run's keys, then build, scan, push and sign
+      # ci/publish-image.sh builds and scans, runs the PKCS#11 mechanism
+      # test against a throwaway registry with a token whose PINs are
+      # generated inside that script, then pushes and signs keyless.
+      - name: Build, scan, prove the PKCS#11 path, push and sign keyless
         run: |
-          export HSM_PKI_SUPPLY_PIN_VALUE="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-          export HSM_PKI_INVENTORY_PIN_VALUE="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-          export HSM_PKI_SIGNING_STATE="$PWD/.local/ci-signing"
-          export HSM_PKI_KEYS_DIR="$PWD/.local/ci-keys"
-
-          deploy/docker/provision-signing-keys.sh
-
-          # cosign takes the PIN from the environment, never from a PKCS#11
-          # URI -- a URI is a command-line argument, so it reaches ps output
-          # and any log that echoes the command.
-          export COSIGN_PKCS11_PIN="$HSM_PKI_SUPPLY_PIN_VALUE"
           HSM_PKI_DOCKER_CONFIG="$HOME/.docker" \
             ci/publish-image.sh "ghcr.io/${GITHUB_REPOSITORY,,}"
 
-      # Without this the signature on the published image is unverifiable by
-      # anyone: it was made by a key that existed only during this run. The
-      # public half and the run's signed inventory are kept so the claim can
-      # be checked at all -- and so that what the CI signature does and does
-      # not prove stays inspectable rather than asserted (CLAUDE.md 2.3).
-      - name: Keep this run's public keys and inventory
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ephemeral-signing-keys-${{ github.sha }}
-          path: .local/ci-keys/
-          if-no-files-found: error
-
-      # The signed binary and its bundle, so the verify job below can check
-      # them without rebuilding -- rebuilding would produce a second binary
-      # and check the signature against the wrong bytes.
-      - name: Keep the signed release binary
+      # The binary, its keyless bundle and its digest. The verify job
+      # checks them without rebuilding.
+      - name: Keep the release binary and its keyless bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-binary-${{ github.sha }}
           path: |
             .local/release/hsm-pki-server
-            .local/release/hsm-pki-server.bundle
+            .local/release/hsm-pki-server.sigstore.json
+            .local/release/hsm-pki-server.sha256
           if-no-files-found: error
 
-  # The independent half (Phase 5.9). It holds no token, no PIN and no module,
-  # and it re-derives every answer the signing job asserted.
-  #
-  # What it can prove and what it cannot is worth being exact about. It does
-  # NOT establish custody: the inventory it reads was signed by the same run
-  # that made the signatures, so that link is self-consistent by construction.
-  # An ephemeral trust root cannot vouch for itself to anybody else, and
-  # nothing here claims otherwise -- `trustchain` and ci/verify-release.sh are
-  # the anchored checks.
-  #
-  # What it proves is the thing a signer cannot prove about itself: that the
-  # signatures are checkable by something that did not make them. A wrong key
-  # published, a bundle naming a different digest, a format only cosign's own
-  # writer understands -- each of those passes in the signing job and fails
-  # here. That is why it is a separate job and not a second command.
+  # A fresh checkout holding no key material re-derives what the publish
+  # job asserted: the keyless signature, both attestations, the provenance
+  # content and the binary's bundle, all for this run's exact identity.
   verifyrun:
     name: verify this run's signatures (no key material)
     needs: [publish]
@@ -532,32 +340,15 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Fetch this run's public keys
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: ephemeral-signing-keys-${{ github.sha }}
-          path: .local/ci-keys
-
-      - name: Fetch the signed release binary
+      - name: Fetch the release binary and its bundle
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: release-binary-${{ github.sha }}
           path: .local/release
 
-      # Resolved from the registry rather than handed over by the signing
-      # job. A verifier told which digest to check is verifying the signer's
-      # claim about what it published; a verifier that looks it up is
-      # checking what a consumer would actually pull.
-      #
-      # By PULLING and reading RepoDigests, which is the consumer's own
-      # method -- not `docker manifest inspect`. Those two disagree, measured:
-      # against the same tag, manifest inspect reported
-      # sha256:2eb7d020... while the pushed and signed digest was
-      # sha256:df8cbf9d..., because the registry serves a re-encoded OCI
-      # manifest whose bytes hash differently. Both answers look like a
-      # digest and only one is the one that was signed, so the wrong choice
-      # here fails verification for a reason that has nothing to do with the
-      # signature. Pulling also proves the image is fetchable at all.
+      # Resolved by pulling, which is what a consumer does. `docker
+      # manifest inspect` can report a different digest for the same tag,
+      # because the registry serves a re-encoded manifest.
       - name: Resolve the published digest independently
         id: digest
         run: |
@@ -574,11 +365,12 @@ jobs:
           echo "ref=$repo@$digest" >> "$GITHUB_OUTPUT"
           echo "$repo@$digest"
 
-      - name: Verify both signatures, and prove the refusals
+      - name: Verify the keyless signature, attestations and binary
+        env:
+          HSM_PKI_KEYLESS_IDENTITY: https://github.com/${{ github.workflow_ref }}
         run: |
           chmod +x .local/release/hsm-pki-server
-          ci/verify-run-artifacts.sh \
-            .local/ci-keys \
-            .local/release/hsm-pki-server \
-            .local/release/hsm-pki-server.bundle \
-            '${{ steps.digest.outputs.ref }}'
+          ci/verify-keyless.sh '${{ steps.digest.outputs.ref }}' \
+            --commit "$GITHUB_SHA" \
+            --binary .local/release/hsm-pki-server \
+            --bundle .local/release/hsm-pki-server.sigstore.json

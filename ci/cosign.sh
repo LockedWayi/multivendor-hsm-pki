@@ -442,6 +442,39 @@ claims to have. Pass a published public key instead." ;;
         return
     fi
 
+    # Keyless mode: no token, no module, no PIN. The identity comes from
+    # the runner's OIDC token, which cosign requests itself through the
+    # ACTIONS_ID_TOKEN_REQUEST_* variables passed in here. Fulcio, Rekor
+    # and the TUF root are reached over the container's own network.
+    if [ "${HSM_PKI_COSIGN_MODE:-}" = "keyless" ]; then
+        for arg in "$@"; do
+            case "$arg" in
+                pkcs11:*) die "refusing a PKCS#11 key in keyless mode. Unset HSM_PKI_COSIGN_MODE to sign with a token." ;;
+            esac
+        done
+        [ -z "${COSIGN_PKCS11_PIN:-}" ] || die \
+            "COSIGN_PKCS11_PIN is set in keyless mode. A keyless signing step holds no PIN."
+        ensure_runner_image
+        local knet_args=() kcred_args=() oidc_args=()
+        [ -n "${HSM_PKI_COSIGN_NETWORK:-}" ] && knet_args=(--network "$HSM_PKI_COSIGN_NETWORK")
+        if [ -n "${HSM_PKI_DOCKER_CONFIG:-}" ]; then
+            kcred_args=(-v "${HSM_PKI_DOCKER_CONFIG}":/dockerconfig:ro
+                        -e DOCKER_CONFIG=/dockerconfig)
+        fi
+        local v
+        for v in ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN SIGSTORE_ID_TOKEN; do
+            [ -n "${!v:-}" ] && oidc_args+=(-e "$v")
+        done
+        docker run --rm -i \
+            "${knet_args[@]}" \
+            "${kcred_args[@]}" \
+            "${oidc_args[@]}" \
+            -v "$COSIGN_BIN":/usr/local/bin/cosign:ro \
+            -v "$REPO_ROOT":/repo -w /repo \
+            "$RUNNER_IMAGE" "$@"
+        return
+    fi
+
     # Checked here rather than left to docker, which would create each
     # missing path on the host as a root-owned directory. That is not just
     # untidy: provision-signing-keys.sh refuses to run when its state
