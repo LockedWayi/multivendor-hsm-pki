@@ -254,13 +254,27 @@ so a fully compromised CA host is still a recoverable event.
 
 ### A5 — Compromised CI pipeline
 
-**Gets (from Phase 4/5):** whatever the pipeline's own token session can
-sign — image and artifact signatures, and therefore images that pass
-admission.
+**Gets:** everything the publish job holds for the length of a run: a
+registry credential that can push to GHCR, and the run's OIDC identity,
+with which cosign obtains a Fulcio certificate. So the attacker can push
+any image and sign it keyless as the workflow, with attestations that say
+whatever the attacker wants. Rekor records each signature publicly.
 
-**Does not get:** the CA hierarchy's keys, *provided* §6.1's conclusion is
-implemented. This is the finding this document exists to surface, and it is
-open.
+**Does not get: an image that admission accepts, or that
+`ci/verify-release.sh` accepts.** Nothing CI holds is in the key
+inventory. The PKCS#11 keys the mechanism test provisions die with the
+runner and are not listed. The keyless signature is made under the
+workflow identity, and the inventory lists keys, not identities, so
+admission ignores it. The durable signature needs `image-signing-key-v1`
+on the maintainer's token, which no pipeline can reach. This is the main
+argument for keeping the durable signature off the pipeline: a compromised
+CI can publish, but it cannot make anything deployable.
+
+**Also does not get:** the CA hierarchy's keys, for the reason in §6.1.
+
+**Recovery:** revoke the run's credentials by ending it, delete the
+pushed digests, and note that the Rekor entries stay. No key rotation is
+needed, because no key was held.
 
 ### A6 — Thief of storage
 
