@@ -62,6 +62,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -180,16 +181,16 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("parsing the inventory: %w", err)
 	}
 
-	// Freshness: an expired document is refused, not warned about. Without
-	// this, an attacker who can only *withhold* inventory updates keeps
-	// yesterday's list — and any key it has since retired — trusted forever
-	// (the freeze attack valid_until exists for; internal/inventory's
-	// package comment names it and correctly says it cannot enforce it
-	// alone — this is the consumer-side half).
-	if now := time.Now(); now.After(inv.ValidUntil) {
-		return fmt.Errorf("the inventory expired at %s (now %s): a stale list of trusted keys "+
-			"is refused rather than rendered — regenerate and re-sign it with "+
-			"hsm-pki-keytool generate-inventory", inv.ValidUntil.Format(time.RFC3339), now.Format(time.RFC3339))
+	// Freshness and key selection share one implementation with every
+	// other consumer: an expired document is refused, a not-yet-valid key
+	// is left out, a retired key is never included.
+	verifiable, err := inv.VerifiableAt(inventory.PurposeImage, time.Now())
+	if errors.Is(err, inventory.ErrExpired) {
+		return fmt.Errorf("%v. A stale list of trusted keys is refused rather than rendered. "+
+			"Regenerate and re-sign it with hsm-pki-keytool generate-inventory", err)
+	}
+	if err != nil {
+		return err
 	}
 
 	// Rollback: when this run replaces an existing rendering, the incoming
@@ -212,7 +213,6 @@ func run(args []string, out io.Writer) error {
 		}
 	}
 
-	verifiable := inv.Verifiable(inventory.PurposeImage)
 	if len(verifiable) == 0 {
 		// Refused rather than emitted. A policy with no attestors rejects
 		// every image, which is fail-closed and also useless -- it would

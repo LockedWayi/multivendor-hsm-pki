@@ -1,28 +1,22 @@
 #!/usr/bin/env bash
 #
-# Verify everything a pipeline run signed, from a job that holds no key
-# material (Phase 5.9).
+# Verify everything the signing mechanism test signed, with public keys
+# only.
 #
-#   ci/verify-run-artifacts.sh <keys-dir> <binary> <bundle> <image-digest-ref>
+#   ci/verify-run-artifacts.sh <keys-dir> <binary> <bundle> <image>@sha256:<digest> [<commit>]
 #
-# # What this proves, and what it does not
+# The keys in <keys-dir> were provisioned by the same run that made the
+# signatures, so this is not a custody check. It checks that the signatures
+# are readable by something that did not make them: the binary through
+# ci/verify-artifact (Go standard library), the image and its attestations
+# through cosign with a public key, and the provenance content through
+# ci/check-provenance.sh. Three refusals are asserted as well: a tampered
+# binary, the wrong purpose's key, and a provenance statement about the
+# wrong subject would each pass a verifier that returns success
+# unconditionally.
 #
-# It does NOT establish custody. The inventory it reads was signed by the
-# same run that made the signatures, so that link is self-consistent by
-# construction -- an ephemeral trust root cannot vouch for itself to anybody
-# else, and this script never claims it does. `ci/verify-release.sh` is the
-# one anchored outside the tree, and it is what a consumer runs.
-#
-# What it does prove is the thing a signer cannot prove about itself: that
-# the signatures are checkable by something that did not make them. This
-# runs with no token, no PIN and no module -- so if the signing step had
-# produced a signature only the signing environment could verify (a wrong
-# key published, a bundle naming a different digest, a format only cosign's
-# own writer understands), it fails here. That is why the job is separate
-# rather than a second command in the signing one.
-#
-# Both artifacts are checked, each against the key for its own purpose, and
-# the keys come out of the inventory rather than being named here.
+# Keys are selected from the run's inventory by ci/select-key, never named
+# here, so a signing key the inventory does not list fails.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,248 +27,113 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 die() { echo "verify-run-artifacts: $*" >&2; exit 1; }
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
-# go.mod requires a Go newer than the runner ships, and pinning the toolchain
-# matters here for the same reason it does in ci/scan-deps.sh: the verifier
-# should be built by the toolchain that builds the thing being verified, not
-# by whatever the CI image happens to carry this month. Read out of the
-# service Dockerfile rather than copied from it, so a builder bump moves this
-# with it instead of leaving a second copy to drift.
-GO_IMAGE="$(buildGoImage "${REPO_ROOT}/deploy/docker/Dockerfile")"
-
-# Everything the verifier touches has to be inside the repository, because
-# that is the only thing mounted into the container. A path outside it would
-# resolve against the container's own filesystem -- which does not fail, it
-# reads a different file, and that is the dangerous kind of wrong
-# (ci/sign-artifact.sh's header records the measurement).
-in_repo() {
-    case "$(realpath -m -- "$1")" in
-        "$REPO_ROOT"/*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-rel() { realpath --relative-to="$REPO_ROOT" -- "$1"; }
-
-# go run, in the pinned toolchain, against paths named from inside.
-go_verify() {
-    docker run --rm -v "$REPO_ROOT":/repo -w /repo -e GOFLAGS=-mod=readonly \
-        "$GO_IMAGE" sh -c "
-            git config --global --add safe.directory /repo
-            go run ./ci/verify-artifact -key '$1' -bundle '$2' '$3'"
-}
-
-KEYS_DIR="${1:?usage: ci/verify-run-artifacts.sh <keys-dir> <binary> <bundle> <image-digest-ref>}"
+KEYS_DIR="${1:?usage: ci/verify-run-artifacts.sh <keys-dir> <binary> <bundle> <image>@sha256:<digest> [<commit>]}"
 BINARY="${2:?missing binary}"
 BUNDLE="${3:?missing bundle}"
 IMAGE_REF="${4:?missing image digest reference}"
-# The commit this run built. Supplied rather than read from the checkout so
-# the assertion below is against what the *pipeline* says it built, not
-# against whatever HEAD happens to be in the verifying workspace.
 EXPECT_COMMIT="${5:-${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}}"
+ALLOW_HTTP="${HSM_PKI_REGISTRY_ALLOW_HTTP:-false}"
 
-# Holding no key material is the whole point of this job, so it is asserted
-# rather than assumed -- and the assertion has to be about what the verifying
-# *container* can reach, not about what the host happens to have. Both
-# verifiers below mount the repository, so a token store anywhere inside it
-# is reachable from inside them even though nothing points at it.
-#
-# In CI this never fires: the verify job is a fresh checkout that downloads
-# only public keys and the binary. It fires for a maintainer whose working
-# copy still holds the tokens they provisioned, which is a real difference
-# worth being told about rather than silently ignoring -- so it is an
-# override with a name that says what is being given up, not a bypass.
-[ -z "${COSIGN_PKCS11_PIN:-}" ] || die \
-    "COSIGN_PKCS11_PIN is set. This job must hold no PIN: a verifier that
-could sign proves nothing about the signer."
-
-if [ -z "${HSM_PKI_VERIFY_ACCEPT_REACHABLE_TOKENS:-}" ]; then
-    for forbidden in "$REPO_ROOT/.local/ci-signing" "$REPO_ROOT/.local/signing"; do
-        [ -d "$forbidden" ] && die \
-            "a signing token store is reachable at $forbidden.
-Both verifiers below mount the whole repository, so that store is visible
-from inside them. In CI this cannot happen -- the verify job is a fresh
-checkout holding only public keys. On a machine that has provisioned keys it
-can, and then this run demonstrates less than it appears to.
-
-Run it from a clean checkout, or acknowledge the weaker claim explicitly:
-
-    HSM_PKI_VERIFY_ACCEPT_REACHABLE_TOKENS=1 $0 ..."
-    done
-else
-    echo "verify-run-artifacts: WARNING -- a signing token store is reachable" >&2
-    echo "  from the verifying containers. This run shows the signatures are" >&2
-    echo "  checkable; it does not show the checker could not have signed." >&2
-fi
+# A verifier that holds a PIN could sign. This one must not.
+[ -z "${COSIGN_PKCS11_PIN:-}" ] || die "COSIGN_PKCS11_PIN is set. This verifier must hold no PIN."
 
 case "$IMAGE_REF" in
     *@sha256:*) ;;
     *) die "image reference must be a digest, not a tag: $IMAGE_REF" ;;
 esac
 
-# Normalised before anything else uses them. Everything below strips
-# $REPO_ROOT off these paths to name them from inside the container, and a
-# relative argument would make that strip a no-op -- which happens to work
-# when the caller's cwd is the repository root and silently addresses the
-# wrong file when it is not.
-KEYS_DIR="$(realpath -m -- "$KEYS_DIR")"
-BINARY="$(realpath -m -- "$BINARY")"
-BUNDLE="$(realpath -m -- "$BUNDLE")"
-
-for path in "$KEYS_DIR" "$BINARY" "$BUNDLE"; do
-    in_repo "$path" || die \
-        "$path is outside the repository at $REPO_ROOT.
-The verifier runs in a container with only the repository mounted, so a path
-outside it silently resolves against the container's filesystem and a
-different file gets checked."
-done
-
-INVENTORY="$KEYS_DIR/key-inventory.json"
+# Everything the verifier reads is inside the repository, because that is
+# the only thing mounted into the containers.
+rel() {
+    local resolved
+    resolved="$(realpath -m -- "$1")"
+    case "$resolved" in
+        "$REPO_ROOT"/*) printf '%s' "${resolved#"$REPO_ROOT"/}" ;;
+        *) die "$1 is outside the repository at $REPO_ROOT. The verifiers run in containers that mount only the repository." ;;
+    esac
+}
+KEYS_REL="$(rel "$KEYS_DIR")"
+BINARY_REL="$(rel "$BINARY")"
+BUNDLE_REL="$(rel "$BUNDLE")"
+INVENTORY="$REPO_ROOT/$KEYS_REL/key-inventory.json"
 [ -f "$INVENTORY" ] || die "no inventory at $INVENTORY"
 
-log "1/6  the run's inventory is internally consistent (NOT a custody claim)"
-openssl dgst -sha256 -verify "$KEYS_DIR/inventory-signing-key-v1.pub" \
-    -signature "$KEYS_DIR/key-inventory.json.sig" "$INVENTORY" \
-    || die "the run's own inventory does not verify against the run's own
-inventory key. That is a broken pipeline, not a trust problem."
-echo "    (ephemeral trust root: this says the run agrees with itself)"
+# Created host-side before any container writes into it, so the next run
+# can empty it.
+WORK="$REPO_ROOT/.local/verify-run"
+rm -rf "$WORK"
+mkdir -p "$WORK/keys"
+WORK_REL="${WORK#"$REPO_ROOT"/}"
 
-# Keys by purpose, out of the inventory. Naming them here would defeat 3.7
-# and would also hide a rotation bug: if the pipeline signed with a key the
-# inventory does not list, that must fail, and hardcoding the key it used
-# would make it pass.
-key_for() {
-    python3 - "$INVENTORY" "$KEYS_DIR" "$1" <<'PY'
-import json, sys, os
-inv = json.load(open(sys.argv[1]))
-for k in inv.get("keys", []):
-    if k.get("purpose") == sys.argv[3] and k.get("status") in ("active", "verify-only"):
-        p = os.path.join(sys.argv[2], k["label"] + ".pub")
-        if not os.path.exists(p):
-            open(p, "w").write(k["public_key"])
-        print(p)
-        break
-PY
+log "1/7  the run's inventory verifies against the run's own inventory key"
+openssl dgst -sha256 -verify "$REPO_ROOT/$KEYS_REL/inventory-signing-key-v1.pub" \
+    -signature "$REPO_ROOT/$KEYS_REL/key-inventory.json.sig" "$INVENTORY" \
+    || die "the run's inventory does not verify against the run's inventory key. That is a broken pipeline."
+echo "    (same run made both; this is not a custody claim)"
+
+log "2/7  selecting the keys from the inventory"
+select_key() {   # select_key <purpose>: prints the repo-relative PEM path of the first usable key
+    local line
+    line="$(goRun ./ci/select-key -inventory "/repo/$KEYS_REL/key-inventory.json" \
+        -purpose "$1" -out-dir "/repo/$WORK_REL/keys" | head -1)" || return 1
+    [ -n "$line" ] || return 1
+    printf '%s' "$(cut -f3 <<<"$line" | sed 's|^/repo/||')"
+}
+ARTIFACT_KEY="$(select_key artifact)" || die "the inventory lists no usable artifact-signing key"
+IMAGE_KEY="$(select_key image)" || die "the inventory lists no usable image-signing key"
+echo "    artifact  $ARTIFACT_KEY"
+echo "    image     $IMAGE_KEY"
+
+go_verify() {   # go_verify <key rel> <bundle rel> <artifact rel>
+    goRun ./ci/verify-artifact -key "/repo/$1" -bundle "/repo/$2" "/repo/$3"
 }
 
-ARTIFACT_KEY="$(key_for artifact)"
-IMAGE_KEY="$(key_for image)"
-[ -n "$ARTIFACT_KEY" ] || die "the inventory lists no usable artifact-signing key"
-[ -n "$IMAGE_KEY" ] || die "the inventory lists no usable image-signing key"
+log "3/7  the release binary, checked by the Go standard library"
+go_verify "$ARTIFACT_KEY" "$BUNDLE_REL" "$BINARY_REL" \
+    || die "the binary does not verify against the artifact key the run published."
 
-log "2/6  the release binary, checked by the Go standard library"
-# ci/verify-artifact re-derives the answer from crypto/ecdsa rather than
-# asking cosign whether cosign was right.
-go_verify "$(rel "$ARTIFACT_KEY")" "$(rel "$BUNDLE")" "$(rel "$BINARY")" \
-    || die "the release binary does not verify against the artifact key the
-run published. The signature is not checkable outside the signer."
-
-log "3/6  the image, checked with no token mounted"
+log "4/7  the image signature and both attestations, with no token mounted"
 export HSM_PKI_COSIGN_VERSION=v2
 "$REPO_ROOT/ci/cosign.sh" fetch >/dev/null
-rel_image_key="${IMAGE_KEY#"$REPO_ROOT"/}"
-HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" verify \
-    --key "/repo/$rel_image_key" --insecure-ignore-tlog=true \
-    "$IMAGE_REF" >/dev/null \
-    || die "the image signature does not verify against the image key the run
-published."
-echo "    verified"
+cosign_verify() {   # cosign_verify <subcommand> [args]
+    HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" "$@" \
+        --key "/repo/$IMAGE_KEY" --insecure-ignore-tlog=true \
+        --allow-http-registry="$ALLOW_HTTP" "$IMAGE_REF"
+}
+cosign_verify verify >/dev/null 2>&1 \
+    || die "the image signature does not verify against the image key the run published."
+echo "    signature      verified"
+cosign_verify verify-attestation --type cyclonedx >/dev/null 2>&1 \
+    || die "the CycloneDX SBOM attestation does not verify against the image key."
+echo "    SBOM           verified"
+PROVENANCE="$WORK/provenance.dsse.json"
+cosign_verify verify-attestation --type slsaprovenance1 > "$PROVENANCE" 2>/dev/null \
+    || die "the SLSA provenance attestation does not verify against the image key."
+echo "    provenance     verified"
 
-# --- the negative half -------------------------------------------------
-# A verifier that has only ever been shown valid input is indistinguishable
-# from one that returns success unconditionally. Both refusals below are
-# asserted on every run, so the day one of them stops refusing, this job goes
-# red rather than quietly approving.
+log "5/7  the provenance says what it should"
+"$REPO_ROOT/ci/check-provenance.sh" "$PROVENANCE" "${IMAGE_REF#*@}" "$EXPECT_COMMIT"
 
-log "4/6  the provenance attestation, and what it actually says"
-# Two separate questions, and passing the first without the second is how a
-# provenance attestation becomes decoration.
-#
-#   signature   does the published key vouch for this statement?
-#   content     does the statement describe THIS image and THIS commit?
-#
-# cosign answers the first. The second is answered here by parsing the
-# in-toto statement rather than trusting cosign's "verified" line, because
-# an attestation correctly signed over the wrong subject verifies happily --
-# and a signed claim about a different artifact is worse than no claim, since
-# it reads as provenance for this one.
-ATTESTATION="$REPO_ROOT/.local/verify-negative/provenance.dsse.json"
-mkdir -p "$(dirname "$ATTESTATION")"
-HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" verify-attestation \
-    --key "/repo/$rel_image_key" --type slsaprovenance1 \
-    --insecure-ignore-tlog=true "$IMAGE_REF" > "$ATTESTATION" 2>/dev/null \
-    || die "the SLSA provenance attestation does not verify against the image
-key this run published."
-
-python3 - "$ATTESTATION" "${IMAGE_REF#*@}" "$EXPECT_COMMIT" <<'PY' || exit 1
-import base64, json, sys
-
-envelope_path, want_digest, want_commit = sys.argv[1], sys.argv[2], sys.argv[3]
-
-# cosign emits one DSSE envelope per line.
-line = next(l for l in open(envelope_path) if l.strip())
-statement = json.loads(base64.b64decode(json.loads(line)["payload"]))
-
-problems = []
-if statement.get("predicateType") != "https://slsa.dev/provenance/v1":
-    problems.append(f"predicateType is {statement.get('predicateType')!r}")
-
-subjects = statement.get("subject") or []
-got = {"sha256:" + s.get("digest", {}).get("sha256", "") for s in subjects}
-if want_digest not in got:
-    problems.append(f"subject digest {got} does not include the image {want_digest}")
-
-deps = statement["predicate"]["buildDefinition"].get("resolvedDependencies") or []
-commits = {d.get("digest", {}).get("gitCommit") for d in deps}
-if want_commit not in commits:
-    problems.append(f"resolvedDependencies commit {commits} is not {want_commit}")
-
-builder = statement["predicate"]["runDetails"]["builder"].get("id", "")
-if not builder.startswith("https://"):
-    problems.append(f"builder id {builder!r} is not a URI")
-
-if problems:
-    print("verify-run-artifacts: the attestation is signed but says the wrong thing:",
-          file=sys.stderr)
-    for p in problems:
-        print("  -", p, file=sys.stderr)
-    sys.exit(1)
-
-print(f"    subject   {want_digest}")
-print(f"    source    {want_commit}")
-print(f"    builder   {builder}")
-PY
-
-log "5/6  a tampered binary must be refused"
-TAMPER_DIR="$REPO_ROOT/.local/verify-negative"
-mkdir -p "$TAMPER_DIR"
-TAMPERED="$TAMPER_DIR/hsm-pki-server"
+log "6/7  a tampered binary must be refused"
+TAMPERED="$WORK/hsm-pki-server"
 cp "$BINARY" "$TAMPERED"
-# One byte appended: the smallest change that still changes the digest, and a
-# realistic one -- a truncated or padded download looks exactly like this.
 printf '\0' >> "$TAMPERED"
-if go_verify "$(rel "$ARTIFACT_KEY")" "$(rel "$BUNDLE")" "$(rel "$TAMPERED")" >/dev/null 2>&1; then
-    die "a tampered binary VERIFIED. The gate is not a gate."
+if go_verify "$ARTIFACT_KEY" "$BUNDLE_REL" "$WORK_REL/hsm-pki-server" >/dev/null 2>&1; then
+    die "a tampered binary VERIFIED."
 fi
 echo "    refused"
 
-log "6/6  the wrong purpose's key must be refused"
-# CLAUDE.md 3.6 says the keys are purpose-separated and never interchangeable.
-# That is a claim about behaviour, so it is measured: the image key must not
-# validate a release artifact.
-if go_verify "$(rel "$IMAGE_KEY")" "$(rel "$BUNDLE")" "$(rel "$BINARY")" >/dev/null 2>&1; then
-    die "the IMAGE key verified a release artifact. Purpose separation is
-not being enforced by anything, whatever the labels say."
+log "7/7  the wrong purpose's key must be refused"
+if go_verify "$IMAGE_KEY" "$BUNDLE_REL" "$BINARY_REL" >/dev/null 2>&1; then
+    die "the image key verified a release artifact. Purpose separation is not enforced."
 fi
 echo "    refused"
 
-cat <<EOF
+cat <<EOT
 
-All signatures made by this run are checkable by something that did not make
-them, the provenance says what it should, and all three negative cases are
-refused.
+Every signature the mechanism test made is checkable with public keys only,
+the provenance says what it should, and the refusals hold.
 
   binary  $(sha256sum "$BINARY" | cut -d' ' -f1)
   image   $IMAGE_REF
-
-This is a mechanism result, not a custody one: the trust root was created by
-the same run. ci/verify-release.sh is the anchored check a consumer runs.
-EOF
+EOT

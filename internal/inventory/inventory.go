@@ -371,3 +371,53 @@ func Verify(document, signature []byte, pub *ecdsa.PublicKey) error {
 func SignWith(document []byte, priv *ecdsa.PrivateKey) ([]byte, error) {
 	return ecdsa.SignASN1(rand.Reader, priv, Digest(document))
 }
+
+// ErrExpired reports an inventory whose valid_until has passed.
+var ErrExpired = errors.New("inventory: expired")
+
+// checkFresh refuses the document when now is past ValidUntil. Every
+// consumer reports this in the same words, so a shell verifier and the
+// policy generator cannot drift apart on it.
+func (inv Inventory) checkFresh(now time.Time) error {
+	if now.After(inv.ValidUntil) {
+		return fmt.Errorf("%w: the inventory expired at %s (now %s)", ErrExpired,
+			inv.ValidUntil.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
+	return nil
+}
+
+// VerifiableAt returns the entries a verifier may accept a signature from
+// for purpose p at time now. An entry is included when its status is
+// active or verify-only and its valid_from is not after now. Retired
+// entries are never included. The whole document is refused with
+// ErrExpired when now is past valid_until.
+func (inv Inventory) VerifiableAt(p Purpose, now time.Time) ([]Entry, error) {
+	if err := inv.checkFresh(now); err != nil {
+		return nil, err
+	}
+	var out []Entry
+	for _, e := range inv.Verifiable(p) {
+		if e.ValidFrom.After(now) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// ActiveAt returns the entries a signer may use for purpose p at time now:
+// status active, valid_from not after now. The whole document is refused
+// with ErrExpired when now is past valid_until.
+func (inv Inventory) ActiveAt(p Purpose, now time.Time) ([]Entry, error) {
+	if err := inv.checkFresh(now); err != nil {
+		return nil, err
+	}
+	var out []Entry
+	for _, e := range inv.Active(p) {
+		if e.ValidFrom.After(now) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
