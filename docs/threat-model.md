@@ -151,6 +151,7 @@ follow, and each is an attacker capability rather than a caveat:
 | **A7** | Malicious operator | Authorized ceremony participant, knows PINs, has physical access |
 | **A8** | Network position | Can intercept or block traffic between a relying party and this service |
 | **A9** | Cluster tenant (Phase 4 onward) | Can create pods in the cluster, with whatever namespaces RBAC grants them |
+| **A10** | Writer to this source repository | Can push a branch and merge it to `main`; no pull-request review is required |
 
 ---
 
@@ -346,6 +347,44 @@ separate.
 **Honest limit:** the platform detects none of this. An unsigned image
 running in `kube-system` produces no admission denial, no audit record and
 no alert — Phase 8's audit chain is where that gap is addressed.
+
+### A10 — Writer to this source repository
+
+**Assumed capability, as the controls stand on 2026-09-10.** `main` is
+protected: seven required checks, `enforce_admins` on, no force-push, no
+deletion. **Pull-request review is not required**, on this repository or
+on the anchor repository. A writer can open a pull request, wait for the
+checks, and merge it alone. Repository variables and secrets need admin
+access, which this attacker is assumed not to have.
+
+**Gets:**
+
+- Any change to the code, the workflow, the scripts and `docs/keys/` that
+  passes the seven checks. The checks read the tree the attacker wrote.
+- A build of `main` published by the pipeline and signed keyless under
+  the workflow identity, with attestations. That signature says the
+  workflow built it, which is true.
+- The three anchor values printed in this README. A consumer who copies
+  them from here instead of holding them independently accepts whatever
+  the attacker wrote, and `ci/verify-release.sh` then verifies an
+  attacker's inventory for that consumer. This is the residual the
+  README states.
+
+**Does not get:**
+
+- An image that admission accepts, or that a consumer holding the real
+  anchor inputs accepts. The durable signature needs
+  `image-signing-key-v1` on the maintainer's token, and the inventory
+  that lists it is signed by an offline token whose public half the
+  attacker cannot change in place: that file lives in the anchor
+  repository, where force-pushes are refused.
+- A change to what the trust-chain check compares against. The anchor
+  inputs come from repository variables, not from the tree.
+- The CA hierarchy's keys, or any token.
+
+**Recovery:** revert the merge. Digests the pipeline published in the
+meantime carry a keyless signature that names the run, and Rekor keeps a
+public record of it.
 
 ---
 

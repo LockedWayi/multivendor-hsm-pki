@@ -171,39 +171,46 @@ moving `main`. **The digest is the identity.** Pull the digest form.
 ### Verifying a release
 
 ```sh
-ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+HSM_PKI_TRUST_ANCHOR_REPO=... HSM_PKI_TRUST_ANCHOR_COMMIT=... HSM_PKI_TRUST_ANCHOR_SHA256=... \
+    ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
 ```
 
-That script exists because the obvious thing would prove nothing. If a
-project publishes an inventory, a signature over it, and the public key that
-verifies that signature, all in one repository, then checking them against
-each other only establishes that the three files agree — and whoever can
-write to the repository can change all three in one commit. A verification
-recipe pointing at `docs/keys/` alone is theatre.
-
-So the chain starts somewhere else:
+An inventory, its signature and the key that verifies it, all in one
+repository, only show that the three files agree. Whoever can write to the
+repository can change all three in one commit. So the chain starts with
+inputs the verifier supplies:
 
 | # | Link | Why it is where it is |
 |---|---|---|
-| 1 | **anchor** | fetched from `LockedWayi/hsm-pki-trust-anchor`, a separate repository with its own protection, pinned by commit *and* content digest. An unreachable anchor **refuses** — it never falls back to the copy in this tree, because that copy is what the step exists to stop trusting. |
+| 1 | **anchor** | fetched from the anchor repository at the commit and with the SHA-256 the verifier supplies in `HSM_PKI_TRUST_ANCHOR_REPO`, `_COMMIT` and `_SHA256`. Nothing in this tree names them. An unreachable or mismatched anchor refuses; there is no fallback to the copy in this tree. |
 | 2 | **inventory** | `docs/keys/key-inventory.json` verified against that anchor **by openssl** — an implementation that is not this project's code and did not produce the signature. |
 | 3 | **the key** | read *out of* the verified inventory, never hardcoded. This is what makes rotation work: a signature from a previous key version keeps verifying while that version is listed `verify-only`. |
 | 4 | **the image** | verified by digest, with no token mounted anywhere. |
 
-Forging that chain needs a compromise of two separately protected
-repositories **and** an offline token that is in neither of them. That is the
-property being bought — not that the pins are unreachable, but that one push
-is not enough.
+What that buys, stated narrowly. Changing the anchor file in place needs
+write access to `LockedWayi/hsm-pki-trust-anchor`, where force-pushes and
+deletions are refused. Replacing the anchor needs the consumer to accept
+new anchor inputs. A consumer who copies the three values from this README
+trusts this repository for that step; that is the residual. The values
+today are:
+
+```
+HSM_PKI_TRUST_ANCHOR_REPO=LockedWayi/hsm-pki-trust-anchor
+HSM_PKI_TRUST_ANCHOR_COMMIT=13a8d605df7379f247ab3643b769552a206c6d22
+HSM_PKI_TRUST_ANCHOR_SHA256=afc3febd028c566b30a04e2dfd38f4a8740ca2dada5bdb12e2eb5e701913d888
+```
 
 You can also do it by hand; it is four commands and worth reading once:
 
 ```sh
-curl -fsSL "https://raw.githubusercontent.com/LockedWayi/hsm-pki-trust-anchor/<pinned-commit>/inventory-signing-key-v1.pub" -o anchor.pub
-sha256sum anchor.pub                       # compare with ci/scanner-pins.sh
+curl -fsSL "https://raw.githubusercontent.com/$HSM_PKI_TRUST_ANCHOR_REPO/$HSM_PKI_TRUST_ANCHOR_COMMIT/inventory-signing-key-v1.pub" -o anchor.pub
+sha256sum anchor.pub                       # must equal HSM_PKI_TRUST_ANCHOR_SHA256
 openssl dgst -sha256 -verify anchor.pub \
     -signature docs/keys/key-inventory.json.sig docs/keys/key-inventory.json
 cosign verify --key <the image key listed in that inventory> \
     --insecure-ignore-tlog=true ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+cosign verify-attestation --key <same key> --type cyclonedx       --insecure-ignore-tlog=true <same ref>
+cosign verify-attestation --key <same key> --type slsaprovenance1 --insecure-ignore-tlog=true <same ref>
 ```
 
 ### The release binary
