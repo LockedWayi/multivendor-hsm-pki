@@ -63,8 +63,15 @@ GATES="${PUBLISH_GATES:-}"
 Only a push to the default branch publishes; a pull request -- from a fork
 or otherwise -- must never reach this step."
 
-[ "$REF" = "refs/heads/main" ] || die \
-    "refusing to publish: ref is '${REF:-<unset>}', not 'refs/heads/main'."
+# A push to main publishes, and so does a push of a release tag v<x.y.z>.
+# Nothing else does: a pre-release tag, a branch, or a tag of another
+# shape is refused.
+case "$REF" in
+    refs/heads/main) ;;
+    *)
+        [[ "$REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die \
+            "refusing to publish: ref is '${REF:-<unset>}', not 'refs/heads/main' or a release tag 'refs/tags/v<x.y.z>'." ;;
+esac
 
 [ -n "$GATES" ] || die \
     "refusing to publish: no gate results were supplied. An empty result set

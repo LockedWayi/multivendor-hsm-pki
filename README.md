@@ -207,32 +207,23 @@ cosign verify --key <the image key listed in that inventory> \
 
 ### The release binary
 
-The pipeline also signs the server binary, with `artifact-signing-key-v1` —
-never the image key, because a compromise of one must not be able to do the
-other's job. The binary is *extracted from the image that was just signed*
-rather than rebuilt, so the two signatures cover the same bytes.
-
-Its signature is checked by a program that holds only the public key and
-shares no code with the signer:
+The pipeline extracts the server binary from the image it just signed, so
+both signatures cover the same bytes, and signs the binary keyless. On a
+`v<x.y.z>` tag the binary, its Sigstore bundle and its SHA-256 are attached
+to a GitHub Release, after a separate job has verified them.
 
 ```sh
-go run ./ci/verify-artifact \
-    -key <the run's artifact-signing-key-v1.pub> \
-    -bundle hsm-pki-server.bundle \
+gh release download v<x.y.z> --repo LockedWayi/multivendor-hsm-pki \
+    --pattern 'hsm-pki-server*'
+sha256sum --check hsm-pki-server.sha256
+cosign verify-blob --bundle hsm-pki-server.sigstore.json \
+    --certificate-identity 'https://github.com/LockedWayi/multivendor-hsm-pki/.github/workflows/ci.yml@refs/tags/v<x.y.z>' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     hsm-pki-server
 ```
 
-It exits zero only when the bundle names that key, the digest it carries is
-the digest of the bytes actually supplied, and the signature verifies over
-them. Anything else — including a bundle it does not recognise — is
-non-zero. A signature checked only by the tool that produced it proves the
-tool agrees with itself, which it would do just as convincingly if the whole
-encoding were wrong.
-
-The binary and its bundle are attached to each pipeline run as the
-`release-binary-<sha>` artifact, and the key that signs them is in
-`ephemeral-signing-keys-<sha>` beside it — which is the same honesty problem
-the image has, and the same answer:
+No release exists yet. Until one does, each run on `main` keeps the same
+three files as the `release-binary-<sha>` workflow artifact for 90 days.
 
 ### The two signatures, and why only one is for you
 
