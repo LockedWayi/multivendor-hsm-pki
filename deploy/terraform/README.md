@@ -1,12 +1,9 @@
 # `deploy/terraform`
 
-Infrastructure for this platform, described as OpenTofu (not Terraform —
-see "Terraform vs. OpenTofu" in
-[](../../)
-for why HashiCorp's BSL relicensing is the reason). The directory keeps
-the name `terraform`: it holds HCL infrastructure code, and the tool
-identity is a version/registry detail recorded in `versions.tf`, not
-something worth encoding into a path.
+Infrastructure for this platform, described as OpenTofu, not Terraform.
+HashiCorp's BSL relicensing is the reason; see `docs/architecture.md`,
+"OpenTofu on Hostinger". The directory keeps the name `terraform`: it holds
+HCL infrastructure code, and the tool is recorded in `versions.tf`.
 
 ## If you don't have the maintainer's Hostinger VPS
 
@@ -25,9 +22,9 @@ account:
 - `tofu init`, `validate`, and `fmt -check` against either environment —
   the skeleton, the module, and the provider resolution do not depend on
   any real resource existing.
-- `environments/staging`'s `tofu plan` — it is plan-only by design (see
-  the phase file's "Dev/staging with only one real VPS" decision), so it
-  never needs a real second VPS to demonstrate the mechanism.
+- `environments/staging`'s `tofu plan`. Staging is plan-only by design:
+  one real VPS exists, and a second was not worth its monthly cost to
+  prove a mechanism that `tofu plan` already proves.
 - The whole thing against **your own** VPS: point `terraform.tfvars` and
   `backend.tfvars` at your own values (copy the `*.example` files), run
   your own `tofu import` (see `modules/compute/README.md`, "Import"), and

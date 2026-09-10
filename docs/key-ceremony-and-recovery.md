@@ -74,10 +74,9 @@ hsm-pki-keytool ceremony \
   -intermediate-cert-out intermediate.pem
 ```
 
-Against ProtectServer, see
-[`protectserver-setup.md`](protectserver-setup.md) §3b for provisioning the
-two tokens and §3c for migrating a Phase 2-era single-tier token — there is
-no upgrade path, by design; a single-tier key was never certified by a root,
+Against ProtectServer, the two tokens are provisioned first with the
+ProtectToolkit tools (`ctconf`, `ctkmu`). There is no upgrade path from an
+older single-tier token: a single-tier key was never certified by a root,
 so it cannot become an intermediate.
 
 ### 2.3 What comes out, and what does not
@@ -576,14 +575,9 @@ piece of work seen from two tiers.
 - Blast-radius reasoning behind the two-tier hierarchy:
   [`architecture.md`](architecture.md), "Two-tier hierarchy rather than a
   single online CA"
-- Vendor behavior actually measured, not merely claimed:
-  [`pkcs11-vendor-notes.md`](pkcs11-vendor-notes.md)
-- ProtectServer token provisioning and the two-token setup:
-  [`protectserver-setup.md`](protectserver-setup.md) §3b, §3c
-- The ceremony as built: `internal/ca/ceremony.go`,
-  `cmd/hsm-pki-keytool/main.go`, and
-  [`phases/phase-3b-pki-hardening.md`](phases/phase-3b-pki-hardening.md)
-  sub-task 3b.1
-- Signing-key (not CA-hierarchy) rotation and the CI rotation drill:
-  [`phases/phase-4-container-k8s.md`](phases/phase-4-container-k8s.md) 4.8,
-  [`phases/phase-5-cicd.md`](phases/phase-5-cicd.md) 5.9
+- Vendor behaviour measured on both backends:
+  [`test-matrix.md`](test-matrix.md), "Expected divergences to look for"
+- The ceremony as built: `internal/ca/ceremony.go` and
+  `cmd/hsm-pki-keytool/main.go`
+- Signing-key (not CA-hierarchy) rotation:
+  [`architecture.md`](architecture.md), "The key inventory"

@@ -20,10 +20,9 @@ including the CA root, with `CKA_SENSITIVE` explicitly false. PKCS#11 lets a
 token disclose such a key in plaintext. SoftHSM2 declines to; ProtectToolkit
 7.3.3 hands over all 32 bytes. Both are conformant, so for the entire life
 of the project the claim "private keys never leave the HSM" was false on the
-vendor backend and true on the one CI runs — under a green suite. A second
-implementation is what turned that into a fixed defect
-([`pkcs11-vendor-notes.md`](pkcs11-vendor-notes.md)). A third, fourth and
-fifth are worth what they cost for the same reason.
+vendor backend and true on the one CI runs, under a green suite. A second
+implementation is what turned that into a fixed defect. A third and a
+fourth are worth what they cost for the same reason.
 
 ---
 
@@ -127,10 +126,8 @@ What a vendor must provide before it can join `hsmtest`'s registry:
    hard-coded: `<VENDOR>_MODULE`, `<VENDOR>_ROOT_WORKSPACE`,
    `<VENDOR>_INTERMEDIATE_WORKSPACE`, `<VENDOR>_ROOT_PIN`,
    `<VENDOR>_INTERMEDIATE_PIN`. Unset means skip, never fail.
-5. **A setup document** in `docs/`, in the shape of
-   [`protectserver-setup.md`](protectserver-setup.md): installation, token
-   initialization, how to verify the module loads, and how to run the suite
-   against it.
+5. **A setup document** in `docs/`: installation, token initialization,
+   how to verify the module loads, and how to run the suite against it.
 6. **Provenance confirmed** before a single test runs: the entitlement is
    the maintainer's own, never an employer's. This is
    a gate, not a formality — it is the reason this repository can be shown
@@ -188,8 +185,8 @@ because each was found the hard way:
 | Concurrency | `C_GetSlotList` deadlocked under concurrent callers on ProtectToolkit despite `CKF_OS_LOCKING_OK` |
 | Digest handling | ProtectToolkit's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted |
 | Protection attributes on generation | Ask the token, not the template: generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Both current backends honour them on generation — but ProtectToolkit ignores `CKA_EXTRACTABLE=false` on *unwrap*, so the two paths must be checked separately |
-| RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times — the RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included — so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend *before* trusting it with a key ([`lessons.md`](lessons.md) §8) |
-| Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups — `hsmtest.Backend.Cleanup` and the conformance suite's — destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. Before that retry existed they failed into a log line every run and left everything behind ([`lessons.md`](lessons.md) §9); with it, a full two-backend run now leaves **zero** objects, measured. Litter from before is still not the suite's to delete — `ci/token-cleanup` is the operator's tool for that, dry by default |
+| RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times. The RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included, so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend before trusting it with a key |
+| Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups — `hsmtest.Backend.Cleanup` and the conformance suite's — destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. Before that retry existed they failed into a log line every run and left everything behind. With it, a full two-backend run leaves zero objects, measured. Litter from before is still not the suite's to delete — `ci/token-cleanup` is the operator's tool for that, dry by default |
 
 ---
 
@@ -218,9 +215,8 @@ coverage those tests would have produced is gone. Measured 2026-09-04:
 The coverage gate then goes red for a reason that has nothing to do with the
 code it is measuring.
 
-Every configured backend — note `-p 1`, which is required rather than
-advisable when a vendor's token store is shared between package test
-binaries ([`protectserver-setup.md`](protectserver-setup.md) §5):
+Every configured backend. `-p 1` is required: the package test binaries
+would otherwise open the same vendor token store in parallel.
 
 ```sh
 docker run --rm -v "$PWD":/repo -w /repo \
