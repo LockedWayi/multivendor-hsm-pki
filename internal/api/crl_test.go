@@ -214,15 +214,10 @@ func TestCRL_EmptyWhenNothingRevoked(t *testing.T) {
 	})
 }
 
-// TestCRL_RevocationInvalidatesCache guards against a real bug found while
-// manually smoke-testing a running server: a long CRL validity window
-// (crl_validity_hours) means the *first* GET /crl populates a cache good
-// for that whole window. Without invalidating it on revoke, a certificate
-// revoked after that first fetch would not appear in the CRL until
-// nextUpdate — up to the full validity window later — even though nothing
-// about "don't serve a stale CRL past nextUpdate" was violated. A
-// revocation must be visible on the next fetch, not on the next natural
-// cache expiry.
+// TestCRL_RevocationInvalidatesCache: a revocation must be visible on the
+// next fetch, not at the next cache expiry. With a long validity window
+// the first GET /crl would otherwise hide later revocations until
+// nextUpdate.
 func TestCRL_RevocationInvalidatesCache(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -251,13 +246,12 @@ func TestCRL_RevocationInvalidatesCache(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatalf("revoked serial %v missing from CRL fetched after revoke, despite an earlier CRL fetch having cached a validity window of 24h — cache was not invalidated on revoke", cert.SerialNumber)
+			t.Fatalf("revoked serial %v missing from CRL fetched after revoke, despite an earlier CRL fetch having cached a validity window of 24h; cache was not invalidated on revoke", cert.SerialNumber)
 		}
 	})
 }
 
-// TestCRL_OpenSSLVerify is sub-task 2.5's own Done-when criterion: openssl
-// crl -verify accepts the served CRL against the CA certificate, and a
+// TestCRL_OpenSSLVerify: openssl crl -verify accepts the served CRL and a
 // revoked serial appears in it.
 func TestCRL_OpenSSLVerify(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
@@ -312,12 +306,9 @@ func TestCRL_OpenSSLVerify(t *testing.T) {
 	})
 }
 
-// TestCRL_NumberSurvivesRestart guards RFC 5280 §5.2.3's monotonicity
-// requirement across a process restart. A counter starting from zero each
-// time the service starts would reissue low numbers that verifiers holding
-// a higher-numbered CRL may then ignore — silently, and including its
-// revocations. Two independently constructed servers over the same CA stand
-// in for a restart.
+// TestCRL_NumberSurvivesRestart: CRL numbers stay monotonic across a
+// process restart (RFC 5280 §5.2.3). Two servers over the same CA stand in
+// for a restart.
 func TestCRL_NumberSurvivesRestart(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -326,8 +317,7 @@ func TestCRL_NumberSurvivesRestart(t *testing.T) {
 		beforeRestart := fetchCRL(t, first.URL)
 		first.Close()
 
-		// A brand-new server with a brand-new in-memory store: the same
-		// state a restarted process starts from.
+		// A new server with a new in-memory store.
 		second := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
 		defer second.Close()
 		afterRestart := fetchCRL(t, second.URL)
@@ -338,8 +328,8 @@ func TestCRL_NumberSurvivesRestart(t *testing.T) {
 	})
 }
 
-// TestCRL_NumberIncreasesWithinOneRun covers the other half: two CRLs
-// generated inside the same wall-clock second must still differ.
+// TestCRL_NumberIncreasesWithinOneRun: two CRLs generated in one second
+// still differ.
 func TestCRL_NumberIncreasesWithinOneRun(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -349,7 +339,7 @@ func TestCRL_NumberIncreasesWithinOneRun(t *testing.T) {
 
 		first := fetchCRL(t, srv.URL)
 
-		// Force regeneration rather than waiting out the cache.
+		// Force regeneration.
 		cert := issueTestCert(t, srv.URL, "crl-number.example.test")
 		resp := revokeTestCert(t, srv.URL, cert.SerialNumber)
 		resp.Body.Close()
@@ -361,8 +351,8 @@ func TestCRL_NumberIncreasesWithinOneRun(t *testing.T) {
 	})
 }
 
-// TestCRL_ThisUpdateIsBackdated checks the clock-skew allowance: a verifier
-// whose clock trails this host's must not see a CRL that is not valid yet.
+// TestCRL_ThisUpdateIsBackdated: a verifier with a slow clock must not see
+// a CRL that is not valid yet.
 func TestCRL_ThisUpdateIsBackdated(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -376,15 +366,9 @@ func TestCRL_ThisUpdateIsBackdated(t *testing.T) {
 	})
 }
 
-// TestCRL_RevocationSurvivesRestart is sub-task 3b.3's Done-when criterion,
-// exercised at the HTTP boundary rather than at the store: issue, revoke,
-// restart the service against the same durable store, and confirm the
-// revoked serial is still in the CRL.
-//
-// This is the regression the in-memory registry could not pass. Losing a
-// revocation on restart is not a durability inconvenience — a certificate
-// revoked during an incident reappears as valid in the very next CRL, and
-// nothing in the response tells a relying party that happened.
+// TestCRL_RevocationSurvivesRestart: issue, revoke, restart the service
+// over the same store, and the revoked serial is still in the CRL. The
+// in-memory registry this replaced could not pass this.
 func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -400,7 +384,7 @@ func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 			return s
 		}
 
-		// First run: issue a certificate, then revoke it.
+		// First run: issue, then revoke.
 		records := openStore()
 		first := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 
@@ -438,14 +422,13 @@ func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 			t.Fatal("the CRL does not list the certificate that was just revoked")
 		}
 
-		// The process ends: server down, store closed.
+		// The process ends.
 		first.Close()
 		if err := records.Close(); err != nil {
 			t.Fatalf("closing the store: %v", err)
 		}
 
-		// Second run: a new server and a new store handle over the same file,
-		// holding nothing in memory from before.
+		// Second run over the same file.
 		reopened := openStore()
 		defer reopened.Close()
 		second := httptest.NewServer(api.NewServer(c, adapter, ws, reopened, 24*time.Hour, rootArtifacts, testLogger()))
@@ -472,21 +455,14 @@ func crlContains(crl *x509.RevocationList, serial *big.Int) bool {
 	return false
 }
 
-// TestCRL_NextUpdateNeverOutlivesTheIssuer pins the clamp in currentCRL. A
-// CRL may not claim to be authoritative past the point its issuer stops
-// being able to sign anything, and the configured crl_validity_hours knows
-// nothing about when the intermediate expires.
-//
-// The clamp is the opposite choice from the one Issue makes on the same
-// overrun, and deliberately: a shortened CRL is entirely valid and merely
-// asks the verifier back sooner, while refusing to publish one would remove
-// the CA's ability to announce revocations during exactly the window where
-// its impending expiry makes re-issuance most likely.
+// TestCRL_NextUpdateNeverOutlivesTheIssuer pins the clamp in currentCRL.
+// A shorter CRL is valid; refusing would remove the CA's ability to
+// publish revocations in the window where re-issuance is most likely.
 func TestCRL_NextUpdateNeverOutlivesTheIssuer(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 
-		// A CRL validity far beyond the ceremony intermediate's own lifetime.
+		// A validity far beyond the intermediate's lifetime.
 		crlValidity := 100 * 365 * 24 * time.Hour
 		srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), crlValidity, rootArtifacts, testLogger()))
 		defer srv.Close()

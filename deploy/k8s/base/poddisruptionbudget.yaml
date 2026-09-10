@@ -13,9 +13,9 @@
 # (docs/threat-model.md §6.2).
 #
 # The cost is real and an operator must know it: `kubectl drain` on this
-# node will hang. Draining deliberately means scaling to zero first, or
-# `--disable-eviction`, which is the point -- the outage is chosen rather
-# than discovered afterwards.
+# node will hang. Draining means scaling to zero first, or
+# `--disable-eviction`. The outage is chosen rather than discovered
+# afterwards.
 #
 # The alternative, maxUnavailable: 1, was rejected: it makes every drain a
 # silent CA outage, and on a single-replica workload that is the same as

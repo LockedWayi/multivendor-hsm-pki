@@ -1,14 +1,11 @@
 package main
 
-// The routine half of CA-key rotation (the key lifecycle,
-// docs/key-ceremony-and-recovery.md §4.1.1): sign a new intermediate under
-// the root that already exists, without touching the root itself.
-//
-// It is a separate subcommand from `ceremony` rather than a flag on it,
-// because the two differ in exactly the way that matters: `ceremony`
-// creates a root, this never can. A shared command with a "reuse the
-// existing root" switch would put the operation that rebuilds every trust
-// store one mistyped argument away from the operation that does not.
+// The routine half of CA-key rotation: sign a new intermediate under the
+// root that already exists, without touching the root itself. It is a
+// separate subcommand from ceremony because ceremony creates a root and
+// this never can. A shared command with a "reuse the existing root" switch
+// would put the operation that rebuilds every trust store one mistyped
+// argument away from the routine one.
 
 import (
 	"bytes"
@@ -46,7 +43,7 @@ func runReissueIntermediateCmd(args []string) error {
 	interWorkspaceLabel := fs.String("intermediate-workspace", "", "token label the new intermediate key pair is generated on")
 	interWorkspaceSerial := fs.String("intermediate-workspace-serial", "", "token serial number, to disambiguate when several tokens share the intermediate label")
 	interPINEnv := fs.String("intermediate-pin-env", "", "environment variable holding the intermediate token's PIN")
-	interKeyLabel := fs.String("intermediate-key-label", "", "CKA_LABEL for the NEW intermediate key pair — the next version, e.g. ca-intermediate-key-v2")
+	interKeyLabel := fs.String("intermediate-key-label", "", "CKA_LABEL for the NEW intermediate key pair; the next version, e.g. ca-intermediate-key-v2")
 	interCN := fs.String("intermediate-cn", "hsm-pki-platform Intermediate CA", "new intermediate certificate subject common name")
 	interCertOut := fs.String("intermediate-cert-out", "", "path to write the new intermediate certificate PEM")
 	interValidity := fs.Duration("intermediate-validity", 0, "how long the new intermediate is valid for; defaults to the package default (5 years)")
@@ -59,10 +56,9 @@ func runReissueIntermediateCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	// The root's curve is separate from the new intermediate's because
-	// rotation is exactly the moment they may legitimately differ: moving
-	// the intermediate to P-384 while the root stays on the curve it was
-	// generated on years ago is a rotation, not a mistake.
+	// The root's curve can differ from the new intermediate's. Moving the
+	// intermediate to P-384 while the root stays on its curve is a
+	// rotation, not a mistake.
 	rootCurve := curve
 	if *rootCurveName != "" {
 		if rootCurve, err = config.ParseCurve(*rootCurveName); err != nil {
@@ -81,10 +77,8 @@ func runReissueIntermediateCmd(args []string) error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	// Refuse to clobber an existing artifact. A re-run against the previous
-	// intermediate's output path is the mistake this catches, and it is a
-	// costly one: that file is the certificate still serving traffic
-	// through the transition window.
+	// The previous intermediate's output path is the certificate still
+	// serving traffic through the transition window.
 	if _, err := os.Stat(*interCertOut); err == nil {
 		return fmt.Errorf("refusing to overwrite existing file %s", *interCertOut)
 	} else if !os.IsNotExist(err) {
@@ -130,16 +124,14 @@ func runReissueIntermediateCmd(args []string) error {
 		IntermediateCurve:     curve,
 		IntermediateValidity:  *interValidity,
 	})
-	// Written before the error is checked, for the same reason the ceremony
-	// does it: ReissueIntermediate can return a valid certificate alongside
-	// a logout failure, and that certificate cannot be regenerated because
-	// the new key label is now in use.
+	// Written before the error is checked: the certificate cannot be
+	// regenerated because the new key label is taken.
 	if result != nil {
 		if err := writeCertPEM(*interCertOut, result.IntermediateCertDER); err != nil {
 			return err
 		}
 		fmt.Printf("new intermediate certificate written: %s\n", *interCertOut)
-		fmt.Println("no private key material was written anywhere — the new key pair remains on its HSM token")
+		fmt.Println("no private key material was written anywhere; the new key pair remains on its token")
 		fmt.Printf("the previous intermediate is NOT revoked by this operation: it stays valid until you revoke it\n" +
 			" and publish a root CRL saying so, which is the transition window\n")
 	}
@@ -149,12 +141,8 @@ func runReissueIntermediateCmd(args []string) error {
 	return nil
 }
 
-// readCertPEM reads exactly one PEM certificate from path.
-//
-// A file carrying a second block is rejected rather than silently reduced
-// to its first: the likely way that happens is an operator passing a chain
-// where a single root was wanted, and picking the first block would make
-// the choice by file order, which is nobody's decision.
+// readCertPEM reads exactly one PEM certificate from path. A chain is
+// rejected: picking the first block would let file order decide.
 func readCertPEM(path string) (*x509.Certificate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

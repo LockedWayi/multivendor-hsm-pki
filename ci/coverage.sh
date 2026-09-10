@@ -1,44 +1,21 @@
 #!/usr/bin/env bash
-# Computes test coverage over CI-reachable code only, and fails if it is
-# below the floor. "CI-reachable" excludes the files listed in
-# coverage-exclude.txt — vendor adapters that need a proprietary SDK or HSM
-# hardware this pipeline does not have (see that file's header, the engineering contract
-# the verified-claim split). Those adapters are validated separately, by the conformance suite
-# passing against real hardware in the maintainer's own environment; a
-# coverage percentage is not a meaningful gate for code CI cannot execute.
+# Computes test coverage over CI-reachable code and fails below the floor.
+# The files in coverage-exclude.txt are vendor adapters that need a
+# proprietary SDK this pipeline does not have. Those are checked by the
+# conformance suite against ProtectToolkit-C software emulation in the
+# maintainer's own environment.
 #
-# Usage: ci/coverage.sh [go test flags...]
 #   COVERAGE_THRESHOLD=70 ci/coverage.sh -race
 #   COVERAGE_BADGE=docs/coverage.svg ci/coverage.sh -race        # write the badge
 #   COVERAGE_BADGE=docs/coverage.svg COVERAGE_BADGE_CHECK=1 ...  # verify it
 #
-# # The badge is a committed file that CI verifies, not one CI publishes
+# The badge is committed like a lockfile and CI recomputes it. Committing
+# it from a workflow would need contents: write on the default branch. The
+# figure rounds down to a whole number.
 #
-# The obvious ways to keep a coverage badge current both cost something this
-# repository should not pay. Committing the badge from a workflow needs
-# `contents: write` on a job that pushes to the default branch -- a write
-# credential added to a pipeline whose entire subject is supply-chain
-# provenance. Publishing to a gist or a third-party service needs a token
-# secret and puts the number somewhere the repository cannot verify.
-#
-# So the badge is checked in like a lockfile, and CI recomputes it and fails
-# on a mismatch (COVERAGE_BADGE_CHECK=1). The pipeline needs no new
-# permission and no new secret, and the badge cannot silently go stale: a
-# number that stops being true turns the build red.
-#
-# It shows the measured percentage rounded DOWN to a whole number. Down,
-# because a coverage badge that rounds up overstates, and by whole numbers
-# so the file changes when the figure meaningfully does rather than on every
-# commit that moves it a tenth.
-#
-# Run it where SoftHSM2 is, which on a developer machine means inside the
-# ci/softhsm2-dev.Dockerfile image and not on the host. A host without
-# SOFTHSM2_MODULE set skips every token-touching test by design (the engineering contract
-# the every-backend rule: a missing backend skips, never fails), so the suite stays green
-# while the coverage it produces collapses — measured 34.2% on such a host
-# against 79.1% in the container. The gate then fails for a reason that has
-# nothing to do with the code being measured, which is the worst kind of
-# red.
+# Run it inside ci/softhsm2-dev.Dockerfile. A host without the SoftHSM2
+# module skips every token-touching test, and the coverage collapses
+# (34.2% on such a host against 79.1% in the container, same commit).
 set -euo pipefail
 
 THRESHOLD="${COVERAGE_THRESHOLD:-70}"
@@ -49,8 +26,7 @@ RAW_PROFILE="$(mktemp)"
 FILTERED_PROFILE="$(mktemp)"
 trap 'rm -f "$RAW_PROFILE" "$FILTERED_PROFILE"' EXIT
 
-# atomic, not set: -race requires it, and it is a safe default for
-# non-race runs too.
+# atomic: -race requires it.
 go test ./... -covermode=atomic -coverprofile="$RAW_PROFILE" "$@"
 
 # The profile's first line is the "mode: set" header; every line after is
@@ -93,10 +69,7 @@ fi
 
 BADGE_TMP="$(mktemp)"
 trap 'rm -f "$RAW_PROFILE" "$FILTERED_PROFILE" "$BADGE_TMP"' EXIT
-# Written by hand rather than fetched from a badge service: an image loaded
-# from a third party on every view of the README is a request this
-# repository does not need to make, and one more thing that can change
-# under it.
+# Written by hand, so the README makes no request to a third party.
 cat >"$BADGE_TMP" <<SVG
 <svg xmlns="http://www.w3.org/2000/svg" width="104" height="20" role="img" aria-label="coverage: ${BADGE_PCT}%">
   <title>coverage: ${BADGE_PCT}%</title>
@@ -127,12 +100,8 @@ if [ "${COVERAGE_BADGE_CHECK:-0}" = "1" ]; then
 	fi
 	echo "coverage badge ${COVERAGE_BADGE} is current (${BADGE_PCT}%)"
 else
-	# install rather than cp: mktemp makes the source 0600, and a file
-	# that is about to be committed should be readable. The chown matters
-	# for the same reason: this script is normally run inside the dev
-	# container, which is root, so without it the badge lands root-owned
-	# inside a user-owned checkout and the next `git add` fails for a
-	# reason that looks nothing like its cause.
+	# install, not cp: mktemp makes the source 0600. The chown matters
+	# because this normally runs in the dev container as root.
 	install -m 0644 "$BADGE_TMP" "$COVERAGE_BADGE"
 	chown --reference="$(dirname "$COVERAGE_BADGE")" "$COVERAGE_BADGE" 2>/dev/null || true
 	echo "coverage badge written to ${COVERAGE_BADGE} (${BADGE_PCT}%)"

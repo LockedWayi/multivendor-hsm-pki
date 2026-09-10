@@ -1,44 +1,38 @@
 #!/usr/bin/env bash
 #
-# Fetch, verify and run the PKCS#11-capable cosign (Phase 4.9).
+# Fetch, verify and run the PKCS#11-capable cosign.
 #
 #   ci/cosign.sh fetch            download and verify; idempotent
-#   ci/cosign.sh <cosign args>    run it against the local signing tokens
+#   ci/cosign.sh <cosign args>    run it, in a container
 #
-# Everything below exists because a signing tool is a supply-chain
-# dependency of the thing it signs. A cosign binary that an attacker chose
-# is a cosign binary that reports every signature as valid, so obtaining it
-# is itself a verification problem -- and a circular one, since the usual
-# way to verify a Sigstore artifact is to run cosign.
+# A signing tool is a supply-chain dependency of the thing it signs. A
+# cosign binary an attacker chose reports every signature as valid, so
+# obtaining it is itself a verification problem, and a circular one: the
+# usual way to verify a Sigstore artifact is to run cosign.
 #
-# The circle is broken with a keyed bundle rather than the keyless one.
-# Every release asset carries two Sigstore bundles: <asset>.sigstore.json,
-# signed by an ephemeral Fulcio certificate (checking it needs Sigstore's
-# TUF trust root, which is one more thing to bootstrap), and
-# <asset>-kms.sigstore.json, signed by the long-lived release key published
-# as release-cosign.pub. The second needs nothing but that public key and an
-# ECDSA verifier, so it is checked here with openssl -- an implementation
-# that is not cosign and did not produce the signature.
+# The circle is broken with the keyed bundle. Every cosign release asset
+# carries two Sigstore bundles. <asset>-kms.sigstore.json is signed by the
+# long-lived release key published as release-cosign.pub, so it is checked
+# here with openssl and the copy of that key pinned in this repository
+# (ci/sigstore-release-cosign.pub). The pinned key is byte-identical to the
+# one published with cosign v1.13.0, v2.2.0 and v3.1.3.
 #
-# Three independent parties have to agree before the binary is used:
+# Three parties have to agree before the binary is used: GitHub serves the
+# asset and lists its SHA-256 in cosign_checksums.txt; the Sigstore release
+# key signs that digest; Rekor records that signature. And the digest is
+# pinned in this script, so after the first review a changed byte is a
+# failed comparison, not a re-run of the same fetch.
 #
-#   1. GitHub serves the asset and lists its SHA-256 in cosign_checksums.txt.
-#   2. The Sigstore release key signs that same digest. Its public half is
-#      pinned in this repository (ci/sigstore-release-cosign.pub) rather
-#      than downloaded beside the thing it authenticates -- an anchor
-#      fetched from the artifact's own source authenticates nothing. The
-#      pinned key is byte-identical to the one published with cosign
-#      v1.13.0 (2022), v2.2.0 (2023) and v3.1.3, and to the copy in the
-#      cosign source tree, so substituting it means having substituted it
-#      for four years.
-#   3. Rekor, the public transparency log, holds an entry recording that
-#      this digest was signed by that key at a stated time. That is the
-#      party GitHub cannot silently overrule: a targeted binary served to
-#      one user would have to be in a public, append-only log to verify.
+# Two tracks are pinned. cosign v3 stores an image signature as an OCI
+# referrers artifact, and Kyverno v1.19's verifier looks for the older
+# sha256-<digest>.sig tag, which is what cosign v2 writes. So images signed
+# with the PKCS#11 key use v2, and everything else uses v3:
 #
-# And the digest below is pinned in git, so after the first review none of
-# the above is trusted again -- a changed byte is a failed comparison
-# against a value a human approved, not a re-run of the same fetch.
+#   HSM_PKI_COSIGN_VERSION=v3   release artifacts and keyless signing (default)
+#   HSM_PKI_COSIGN_VERSION=v2   PKCS#11 image signatures, for Kyverno
+#
+# cosign's PKCS#11 support is a build tag, so the asset name is part of the
+# pin: the default cosign-linux-<arch> cannot load a module at all.
 set -euo pipefail
 
 # Two pinned versions, and the reason is measured rather than cautious.
@@ -78,17 +72,10 @@ REKOR_INDEX_API="https://rekor.sigstore.dev/api/v1/index/retrieve"
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 die() { echo "cosign.sh: $*" >&2; exit 1; }
 
-# The digest is per architecture, so the architecture has to be resolved
-# before there is anything to pin against. The runner image's base is a
-# multi-arch manifest list, so on an arm64 host docker pulls an arm64
-# runtime -- and an amd64 binary mounted into it fails with `exec format
-# error`. Hardcoding amd64 would have made that the failure a reader on an
-# Apple Silicon machine meets first.
-#
-# An unknown architecture is refused rather than guessed at: cosign publishes
-# a pivkey-pkcs11key asset for exactly these two, and picking the wrong one
-# produces a binary that cannot run, which is a worse outcome than being told
-# so.
+# The digest is per architecture. The runner image's base is multi-arch, so
+# an amd64 binary on an arm64 host fails with "exec format error". An
+# unknown architecture is refused: cosign publishes the pivkey-pkcs11key
+# asset for these two only.
 case "$(uname -m)" in
     x86_64)        COSIGN_ARCH="amd64" ;;
     aarch64|arm64) COSIGN_ARCH="arm64" ;;
@@ -98,12 +85,10 @@ the PKCS#11-capable build for linux/amd64 and linux/arm64 only; adding one
 means adding its digest here, verified the same way as the others." ;;
 esac
 
-# RELEASE_SIG_STYLE says where the release's own signature lives, which
-# differs between the two tracks and is the one thing the verification below
-# cannot share:
+# RELEASE_SIG_STYLE says where the release's own signature lives:
 #   bundle    v3: <asset>-kms.sigstore.json, a keyed Sigstore bundle
 #   detached  v2: <asset>.sig, base64 of the raw ECDSA signature
-# Same release key either way, and openssl checks both.
+# Same release key either way; openssl checks both.
 case "$COSIGN_TRACK" in
     v3)
         COSIGN_VERSION="v3.1.3"
@@ -123,9 +108,8 @@ case "$COSIGN_TRACK" in
         die "HSM_PKI_COSIGN_VERSION must be v3 (release artifacts) or v2 (container images), not \"$COSIGN_TRACK\"" ;;
 esac
 COSIGN_ASSET="cosign-linux-pivkey-pkcs11key-$COSIGN_ARCH"
-# One binary per track, side by side. A single path would mean the last
-# fetch decides which version every later command runs, and the two are not
-# interchangeable -- that is the whole reason both are pinned.
+# One binary per track, side by side, because the two are not
+# interchangeable.
 COSIGN_BIN="$BIN_DIR/cosign-$COSIGN_VERSION"
 RELEASE_URL="https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION"
 
@@ -144,15 +128,9 @@ fetch() {
     mkdir -p "$BIN_DIR"
     local work
     work="$(mktemp -d)"
-    # EXIT, not RETURN: a RETURN trap does not fire when die() exits the
-    # script, which is every failure path here -- measured, and it left the
-    # rejected 140 MB download behind each time. A verification that fails
-    # must not leave its subject lying around.
-    #
-    # Double quotes so the path is expanded now rather than at exit: `work`
-    # is function-local, so a trap deferring the expansion runs after it is
-    # out of scope and dies on `set -u` -- which also skips the removal it
-    # was there to do. Measured, not reasoned about.
+    # EXIT, not RETURN: a RETURN trap does not fire when die exits the
+    # script. Double quotes, so the path is expanded now; work is
+    # function-local and the trap runs after it is out of scope.
     trap "rm -rf '$work'" EXIT
 
     log "downloading $COSIGN_ASSET $COSIGN_VERSION"
@@ -180,23 +158,17 @@ different version. Investigate before changing the pin."
     log "3/4  the Sigstore release key signed exactly these bytes"
     if [ "$RELEASE_SIG_STYLE" = "detached" ]; then
         # v2 publishes <asset>.sig: base64 of the DER ECDSA signature over
-        # the artifact, and nothing else. Fewer moving parts than the bundle
-        # and the same question answered by the same key.
+        # the artifact.
         curl -sSL --fail -o "$work/asset.sig.b64" "$RELEASE_URL/$COSIGN_ASSET.sig"
         base64 -d < "$work/asset.sig.b64" > "$work/sig.der"
         echo "    detached signature, checked against the pinned release key"
     else
         # The bundle's messageSignature is a raw ECDSA-SHA256 signature over
-        # the artifact, which is what `openssl dgst -verify` checks -- so
-        # this needs no Sigstore tooling and no network trust beyond the
-        # pinned key. The bundle's publicKey.hint is checked too: it is the
-        # base64 SHA-256 of the release key's DER SubjectPublicKeyInfo, so a
-        # bundle signed by some other key is rejected as naming the wrong
-        # key rather than as a signature mismatch, which is a clearer
-        # failure.
-        #
-        # The Python below sits at column 0 and has to: this is a quoted
-        # heredoc, so its body and its PY terminator are taken literally.
+        # the artifact, which openssl dgst -verify checks. The bundle's
+        # publicKey.hint is the base64 SHA-256 of the release key's DER
+        # SubjectPublicKeyInfo, so a bundle signed by another key is
+        # rejected as naming the wrong key. The Python below sits at column
+        # 0 because it is a quoted heredoc.
         python3 - "$work/bundle.json" "$work/sig.der" "$RELEASE_KEY" <<'PY'
 import base64, hashlib, json, sys
 bundle_path, sig_path, key_path = sys.argv[1:4]
@@ -220,9 +192,8 @@ PY
         || die "the release signature does not verify over the downloaded bytes"
 
     log "4/4  Rekor's public log records that signature"
-    # The one check GitHub cannot answer for itself. If this step is the
-    # only one that fails the network is the likely cause, not an attack --
-    # so it warns rather than dies, and says which it is.
+    # The one check GitHub cannot answer for itself. If only this step
+    # fails, the network is the likely cause, so it warns rather than dies.
     local located=1
     if [ "$RELEASE_SIG_STYLE" = "bundle" ]; then
         local log_index
@@ -232,17 +203,14 @@ print(json.load(open(sys.argv[1]))["verificationMaterial"]["tlogEntries"][0]["lo
 ' "$work/bundle.json")"
         curl -sS --fail --max-time 30 "$REKOR_API?logIndex=$log_index" -o "$work/rekor.json" || located=0
     else
-        # No bundle, so no log index to follow. Rekor's index is searchable
-        # by the artifact's hash instead, which reaches the same entries
-        # from the other end and keeps this check the same check.
+        # No bundle, so Rekor's index is searched by the artifact's hash.
         local uuids
         uuids="$(curl -sS --fail --max-time 30 -X POST -H 'Content-Type: application/json' \
             -d "{\"hash\":\"sha256:$digest\"}" "$REKOR_INDEX_API" 2>/dev/null \
             | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)))' 2>/dev/null || true)"
         if [ -n "$uuids" ]; then
-            # Every entry the index knows about, merged into one document,
-            # because the check below is "at least one of these" and taking
-            # only the first makes the answer depend on Rekor's ordering.
+            # Every entry, merged into one document: the check is "at least
+            # one of these".
             : > "$work/entries.jsonl"
             while read -r u; do
                 [ -n "$u" ] || continue
@@ -271,27 +239,20 @@ json.dump(merged, open(sys.argv[2],"w"))' "$work/entries.jsonl" "$work/rekor.jso
 
     log "confirming this build actually has PKCS#11 support"
     # curl writes 0644, and a non-executable binary bind-mounted into the
-    # runner fails with "permission denied" at container init. Found by the
-    # positive probe below on its first run: the previous version of that
-    # check swallowed this and reported PKCS#11 support anyway.
+    # runner fails at container init.
     chmod +x "$work/cosign"
     assert_pkcs11_build "$work/cosign"
 
-    # Installed only after every check has passed, so a binary that fails one
-    # never reaches the path the rest of this repository invokes.
+    # Installed only after every check has passed.
     install -m 0755 "$work/cosign" "$COSIGN_BIN"
 
     log "ready: $COSIGN_BIN ($COSIGN_VERSION, $COSIGN_ASSET)"
 }
 
-# assert_rekor_records checks that Rekor's response for this log index
-# really records this digest under the pinned key.
-#
-# Extracted from fetch so it can be driven directly by
-# ci/cosign-selftest.sh. It was inline, and inline it hid a fail-open: a
-# loop over an empty response checks nothing and returns success, so a valid
-# but empty JSON object read as confirmation that the signature is publicly
-# logged. A guard nobody can point a test at is a guard nobody has seen work.
+# assert_rekor_records checks that Rekor's response records this digest
+# under the pinned key. It is a function so ci/cosign-selftest.sh can drive
+# it. Inline, a loop over an empty response checked nothing and returned
+# success.
 assert_rekor_records() {
     python3 - "$1" "$2" "$RELEASE_KEY" <<'PY'
 import base64, json, sys
@@ -302,11 +263,9 @@ if not entries:
     sys.exit("Rekor returned no entry, so nothing confirms the signature is "
              "publicly logged")
 
-# At least one entry must record this digest under the pinned key -- not
-# every entry. Rekor's index returns everything logged for an artifact, and
-# a cosign release is signed twice: once with the release key and once
-# keylessly. Requiring all of them to match rejected a perfectly good
-# release because the keyless entry, correctly, names a different key.
+# At least one entry must record this digest under the pinned key. A cosign
+# release is signed twice, once with the release key and once keyless, so
+# requiring every entry to match rejected a good release.
 matched = []
 for uuid, entry in entries.items():
     spec = json.loads(base64.b64decode(entry["body"]))["spec"]
@@ -326,49 +285,29 @@ print(f"    entry {matched[0][:16]}... records this digest under the pinned "
 PY
 }
 
-# ensure_runner_image makes sure the runner matches ci/cosign.Dockerfile.
-#
-# Called from both entry points, because they each need it and neither can
-# assume the other ran first: on a fresh checkout `fetch` reached its last
-# check with no image to run and failed there -- fail-closed, but the script
-# was unusable on exactly the machine this project’s priority cares most about.
+# ensure_runner_image builds the runner image every time. An existence
+# check returned a stale image after ci/cosign.Dockerfile changed. An
+# unchanged rebuild costs about a second from the layer cache.
 ensure_runner_image() {
-    # Built every time rather than skipped when the tag exists. Measured: an
-    # existence check returns a *stale* image after ci/cosign.Dockerfile
-    # changes -- adding a package to it and re-running left the old image in
-    # place, so the signing environment silently stopped matching the file
-    # that is supposed to define it. Docker's layer cache makes an unchanged
-    # rebuild cost about a second, which is the whole price of removing that
-    # class of bug. (Alternative: stamp the image with a label carrying the
-    # Dockerfile's digest and compare. Correct, and it saves the second, but
-    # it is a second source of truth about when a rebuild is needed.)
     docker build -q -f "$REPO_ROOT/ci/cosign.Dockerfile" -t "$RUNNER_IMAGE" "$REPO_ROOT" >/dev/null
 }
 
 # assert_pkcs11_build confirms that the binary at $1 was built with the
-# pkcs11key tag, by asking it to do something only that build can attempt.
-#
-# The first version of this checked for the *absence* of the stub build's
-# refusal string and reported success otherwise -- which passed on a machine
-# with no PKCS#11 module at all, printing a claim it had not measured. That
-# is the same fail-open shape the check exists to defend against, so it now
-# asserts a positive signal instead: the two builds are distinguishable by
-# what they say when there is no module to load.
+# pkcs11key tag, by asking it to do something only that build attempts. An
+# earlier version checked for the absence of the stub's refusal string and
+# passed on a machine with no module at all, so this asserts a positive
+# signal:
 #
 #   stub build  "This cosign was not built with pkcs11-tool support!", exit 0
-#   real build  "failed to load PKCS11 module", exit 1  (or a token listing,
-#               when a module happens to be present)
+#   real build  "failed to load PKCS11 module", exit 1, or a token listing
 #
-# Anything else -- a docker failure, a changed message in a future release --
-# is unrecognised and fails closed rather than being read as a pass.
+# Anything else fails closed.
 assert_pkcs11_build() {
     local binary="$1" out
     ensure_runner_image
-    # Deliberately no signing-state mounts. Loading a module is not what is
-    # being tested, and mounting a state directory that does not exist yet
-    # makes docker create it on the host as root -- which then blocks
-    # deploy/docker/provision-signing-keys.sh with "signing state already
-    # exists" over directories this script invented.
+    # No signing-state mounts. Mounting a state directory that does not
+    # exist yet makes docker create it on the host as root, which then
+    # blocks deploy/docker/provision-signing-keys.sh.
     out="$(docker run --rm \
         -v "$binary":/usr/local/bin/cosign:ro \
         -e COSIGN_PKCS11_MODULE_PATH=/nonexistent/no-such-module.so \
@@ -390,22 +329,9 @@ run() {
     [ -x "$COSIGN_BIN" ] || die "no cosign at $COSIGN_BIN. Run: ci/cosign.sh fetch"
     verify_pinned_digest
 
-    # Verification mounts no token, and that is structural rather than
-    # polite.
-    #
-    # This group's whole claim is that verification happens somewhere that
-    # holds only public keys -- "a signer that verifies its own work proves
-    # less than an independent verifier does". A verifier that could sign is
-    # not independent, whatever the job is called. So the decision is taken
-    # from the subcommand rather than from a flag the caller passes: there
-    # is no argument to ci/cosign.sh that both verifies and reaches a
-    # private key, because the code path that mounts the token is not
-    # reachable from a verify.
-    #
-    # Consequence worth stating: `verify --key pkcs11:...` cannot work here.
-    # That is refused loudly below rather than left to fail as a confusing
-    # module error, and it is not a limitation anybody should route around
-    # -- a published key is what a verifier is supposed to hold.
+    # Verification mounts no token. The decision is taken from the
+    # subcommand, not from a flag: there is no argument to this script that
+    # both verifies and reaches a private key.
     local verify_only=0
     case "${1:-}" in
         verify|verify-blob|verify-attestation) verify_only=1 ;;
@@ -416,9 +342,8 @@ run() {
             case "$arg" in
                 pkcs11:*) die \
                     "refusing to verify with a PKCS#11 key.
-Verification here runs with no token mounted, deliberately: a verifier that
-can reach a private key is not the independent verifier this pipeline
-claims to have. Pass a published public key instead." ;;
+Verification here runs with no token mounted. A verifier that can reach a
+private key is not independent. Pass a published public key instead." ;;
             esac
         done
         ensure_runner_image
@@ -431,8 +356,7 @@ claims to have. Pass a published public key instead." ;;
                         -e DOCKER_CONFIG=/dockerconfig)
         fi
 
-        # No token store, no module, no SOFTHSM2_CONF, no PIN. Compare this
-        # invocation with the signing one below: the difference is the point.
+        # No token store, no module, no SOFTHSM2_CONF, no PIN.
         docker run --rm -i \
             "${vnet_args[@]}" \
             "${vcred_args[@]}" \
@@ -442,12 +366,42 @@ claims to have. Pass a published public key instead." ;;
         return
     fi
 
+    # Keyless mode: no token, no module, no PIN. The identity comes from
+    # the runner's OIDC token, which cosign requests itself through the
+    # ACTIONS_ID_TOKEN_REQUEST_* variables passed in here. Fulcio, Rekor
+    # and the TUF root are reached over the container's own network.
+    if [ "${HSM_PKI_COSIGN_MODE:-}" = "keyless" ]; then
+        for arg in "$@"; do
+            case "$arg" in
+                pkcs11:*) die "refusing a PKCS#11 key in keyless mode. Unset HSM_PKI_COSIGN_MODE to sign with a token." ;;
+            esac
+        done
+        [ -z "${COSIGN_PKCS11_PIN:-}" ] || die \
+            "COSIGN_PKCS11_PIN is set in keyless mode. A keyless signing step holds no PIN."
+        ensure_runner_image
+        local knet_args=() kcred_args=() oidc_args=()
+        [ -n "${HSM_PKI_COSIGN_NETWORK:-}" ] && knet_args=(--network "$HSM_PKI_COSIGN_NETWORK")
+        if [ -n "${HSM_PKI_DOCKER_CONFIG:-}" ]; then
+            kcred_args=(-v "${HSM_PKI_DOCKER_CONFIG}":/dockerconfig:ro
+                        -e DOCKER_CONFIG=/dockerconfig)
+        fi
+        local v
+        for v in ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN SIGSTORE_ID_TOKEN; do
+            [ -n "${!v:-}" ] && oidc_args+=(-e "$v")
+        done
+        docker run --rm -i \
+            "${knet_args[@]}" \
+            "${kcred_args[@]}" \
+            "${oidc_args[@]}" \
+            -v "$COSIGN_BIN":/usr/local/bin/cosign:ro \
+            -v "$REPO_ROOT":/repo -w /repo \
+            "$RUNNER_IMAGE" "$@"
+        return
+    fi
+
     # Checked here rather than left to docker, which would create each
-    # missing path on the host as a root-owned directory. That is not just
-    # untidy: provision-signing-keys.sh refuses to run when its state
-    # directory exists, so an invented one blocks key provisioning with
-    # "signing state already exists" and advises --reset over state that was
-    # never provisioned. Fail closed, and say what to run.
+    # missing path on the host as a root-owned directory, and
+    # provision-signing-keys.sh then refuses to run over it.
     local missing=()
     [ -d "$STATE/pkcs11" ] || missing+=("$STATE/pkcs11")
     [ -d "$STATE/tokens" ] || missing+=("$STATE/tokens")
@@ -460,36 +414,24 @@ Provision the keys first:  deploy/docker/provision-signing-keys.sh
     fi
     ensure_runner_image
 
-    # The PIN reaches cosign as an environment variable and never as
-    # pin-value= in the PKCS#11 URI: a URI is a command-line argument, so it
-    # lands in ps output, shell history and any log that echoes the command
-    #
+    # The PIN reaches cosign as an environment variable, never inside the
+    # PKCS#11 URI: a URI is a command-line argument and reaches ps output.
     local pin_args=()
     if [ -n "${COSIGN_PKCS11_PIN:-}" ]; then
         pin_args=(-e COSIGN_PKCS11_PIN)
     fi
 
-    # Image signing has to reach a registry, and blob signing must not. So
-    # the network is opt-in per invocation rather than always on: with no
-    # HSM_PKI_COSIGN_NETWORK set, the signer runs with docker's default
-    # bridge and cannot see the host's registry at all. ci/sign-image.sh
-    # sets it; ci/sign-artifact.sh does not.
+    # Image signing has to reach a registry; blob signing must not. The
+    # network is opt-in per invocation.
     local net_args=()
     if [ -n "${HSM_PKI_COSIGN_NETWORK:-}" ]; then
         net_args=(--network "$HSM_PKI_COSIGN_NETWORK")
     fi
 
-    # Registry credentials, for the invocations that reach an authenticated
-    # registry. cosign reads them from a docker config directory, and the
-    # caller's lives outside the repository -- so with nothing mounted here
-    # cosign is simply anonymous, and against a private registry that
-    # surfaces as an authentication error from a step whose subject is
-    # signing, which sends the reader to the key.
-    #
-    # Opt-in per invocation for the same reason the network is: a blob
-    # signing run has no registry to reach, and a container that cannot
-    # read a credential cannot leak one. Read-only, and the directory
-    # rather than the file, because that is what DOCKER_CONFIG names.
+    # Registry credentials, opt-in per invocation and read-only. cosign
+    # reads them from a docker config directory; without one it is
+    # anonymous and a private registry answers with an authentication
+    # error.
     local cred_args=()
     if [ -n "${HSM_PKI_DOCKER_CONFIG:-}" ]; then
         [ -d "${HSM_PKI_DOCKER_CONFIG}" ] || die \
@@ -514,8 +456,7 @@ DOCKER_CONFIG names the directory holding config.json, not the file."
 }
 
 # Guarded so ci/cosign-selftest.sh can source this file and exercise the
-# individual checks. A guard nobody can trigger deliberately is a guard
-# nobody has seen work (the same reasoning as 4.8's lateral tests).
+# individual checks.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     case "${1:-}" in
         fetch) shift; fetch "$@" ;;

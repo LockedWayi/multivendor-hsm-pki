@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 #
 # Provision the supply-chain signing keys and publish the signed key
-# inventory -- one command, no hardware, no proprietary SDK.
+# inventory: one command, no hardware, no proprietary SDK.
 #
-# This is the operator-facing half of Phase 4.8. It creates two SoftHSM2
-# tokens and three keys, and the arrangement is the whole point:
+# It creates two SoftHSM2 tokens and three keys:
 #
 #   supply-chain token          offline inventory token
 #     image-signing-key-v1        inventory-signing-key-v1
@@ -12,34 +11,23 @@
 #              |                           | signs
 #              +----- listed in ---->  docs/keys/key-inventory.json
 #
-# Three properties an operator should be able to see in what follows:
+# Neither signing key shares a token with a CA key. PKCS#11 authenticates
+# a token, not a key, so a process holding the CA's session could find and
+# use them. hsm-pki-keytool refuses such a token.
 #
-#   1. Neither signing key shares a token with a CA key. PKCS#11
-#      authenticates a *token*, not a key, so a process holding the CA's
-#      session could otherwise find and use them (docs/threat-model.md
-#      6.1). hsm-pki-keytool refuses such a token rather than trusting the
-#      operator to point at the right one.
+# The key that signs the inventory is not one of the keys it vouches for,
+# and does not live on their token. Step 6 moves that token out of the
+# store.
 #
-#   2. The key that signs the inventory is not one of the keys it vouches
-#      for, and does not live on their token. An anchor stored beside what
-#      it authorises authorises whoever holds the token -- the invariant
-#      behind TUF's offline root role and behind any offline X.509 root.
-#      Step 6 moves that token out of the store, so what remains reachable
-#      is exactly what CI needs and nothing more.
+# Every published artifact is public: three public keys, one JSON
+# document, one signature. No private key is written anywhere.
 #
-#   3. Every published artifact here is public. Three public keys, one JSON
-#      document, one signature. No private key is written anywhere at any
-# point.
-#
-# Usage:
 #   deploy/docker/provision-signing-keys.sh          provision (first run)
 #   deploy/docker/provision-signing-keys.sh --reset  destroy local key state
-#                                                    and start over
 #
 # Re-running without --reset is refused: the labels are taken, and
 # regenerating a key under a published label would strand every signature
-# made with the old one (the key lifecycle -- rotation provisions the next
-# version, it does not overwrite).
+# made with the old one.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -47,24 +35,15 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$REPO_ROOT/ci/scanner-pins.sh"
 STATE="${HSM_PKI_SIGNING_STATE:-$REPO_ROOT/.local/signing}"
 # Where the public half of everything provisioned here is written.
-#
-# Overridable for exactly one caller: the pipeline. CI provisions a *fresh*
-# token and fresh keys on every run (the ephemeral trust root of 5.9), and
-# those public keys are not the published ones -- writing them to docs/keys/
-# would overwrite the committed, durable keys that consumers verify against
-# with a set that dies with the run. Different keys, different files.
+# Overridable for the mechanism test, which provisions throwaway keys that
+# must not overwrite the published ones.
 KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
 
-# The keytool runs in a container with the repository mounted at /repo, so
-# it needs the same directory named from inside. Derived rather than
-# duplicated: two spellings of one path is how they drift.
+# The keytool runs in a container with the repository mounted at /repo.
 case "$KEYS_DIR" in
     "$REPO_ROOT"/*)
         KEYS_DIR_IN_REPO="/repo/${KEYS_DIR#"$REPO_ROOT"/}"
-        # What the closing summary prints. The recipes below are meant to be
-        # copied and run, so they have to name the files this invocation
-        # actually wrote -- a recipe pointing at docs/keys/ after a run that
-        # wrote somewhere else verifies the wrong inventory, and succeeds.
+        # What the closing summary prints.
         KEYS_DIR_REL="${KEYS_DIR#"$REPO_ROOT"/}" ;;
     *)
         echo "HSM_PKI_KEYS_DIR must be inside $REPO_ROOT: the provisioning" >&2
@@ -78,28 +57,13 @@ DEV_IMAGE="hsm-pki-dev:local"
 SUPPLY_TOKEN_LABEL="hsm-pki-local-supply-chain"
 INVENTORY_TOKEN_LABEL="hsm-pki-local-inventory"
 
-# Throwaway PINs for throwaway tokens, passed to the containers as
-# environment variables and never written to any file. The tool takes the
-# NAME of the variable, never a value on a command line where it would reach
-# ps output and shell history.
-#
-# Generated, not fixed. The old value was the literal 1234, on the reasoning
-# that a PIN for a token created and destroyed on the same machine protects
-# nothing -- which is true, and which made the pipeline copy it into a
-# workflow file, where it became a question ("should this be a repository
-# secret?") with two bad answers: a secret holding a value the repository
-# already publishes is theatre, and leaving it inline invites somebody to
-# reuse the number somewhere it does matter.
-#
-# A random PIN per invocation dissolves the question instead of answering
-# it. crypto-quality randomness because the alternative is explaining why
-# not (CLAUDE.md 3.3), and it costs one command.
+# Throwaway PINs for throwaway tokens, generated per invocation from
+# /dev/urandom, passed to the containers as environment variables and never
+# written to a file. The tool takes the name of the variable.
 SUPPLY_PIN="${HSM_PKI_SUPPLY_PIN_VALUE:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 INVENTORY_PIN="${HSM_PKI_INVENTORY_PIN_VALUE:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
 
-# Different tokens, different PINs. Sharing one would make the offline
-# inventory token reachable with the supply-chain token's PIN, which is
-# most of the point of separating them (step 6 moves it out of the store).
+# Different tokens, different PINs.
 [ "$SUPPLY_PIN" != "$INVENTORY_PIN" ] || {
     echo "provision-signing-keys: the two tokens must not share a PIN." >&2
     exit 1
@@ -113,9 +77,7 @@ log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 if [[ "${1:-}" == "--reset" ]]; then
     log "removing local signing state at $STATE"
-    # Removed from inside a container: SoftHSM2 creates each token
-    # directory mode 0700 owned by whoever initialized it, which here is
-    # root, so a host-side rm would need sudo from the reader.
+    # Removed from inside a container: the token directories are root-owned.
     if [[ -d "$STATE" ]]; then
         docker run --rm -v "$(dirname "$STATE")":/parent "$ALPINE_IMAGE" \
             rm -rf "/parent/$(basename "$STATE")"
@@ -140,11 +102,8 @@ docker build -q -f "$REPO_ROOT/ci/softhsm2-dev.Dockerfile" -t "$DEV_IMAGE" "$REP
 mkdir -p "$STATE"/{pkcs11,etc,tokens,offline-inventory-token} "$KEYS_DIR"
 
 log "extracting the SoftHSM2 module"
-# Copied out of the dev image rather than mounted from the host, so this
-# works on a machine with no softhsm2 installed. The path inside the image
-# is the real object, not Debian's /usr/lib/softhsm symlink: mounting the
-# symlink reproduces a dangling link inside the container, which fails
-# exactly like a missing module.
+# Copied out of the dev image, so this works with no softhsm2 on the host.
+# The path inside the image is the real object, not Debian's symlink.
 cid="$(docker create "$DEV_IMAGE" /bin/true)"
 docker cp "$cid:/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so" "$STATE/pkcs11/libsofthsm2.so"
 docker rm -f "$cid" >/dev/null
@@ -155,8 +114,7 @@ objectstore.backend = file
 log.level = ERROR
 EOF
 
-# keytool runs from the dev image, which stands in for an operator's
-# workstation. It is not in the service image and never will be.
+# keytool runs from the dev image. It is not in the service image.
 keytool() {
     docker run --rm \
         -v "$REPO_ROOT":/repo -w /repo \
@@ -173,9 +131,7 @@ keytool() {
 }
 
 log "1/6  initializing two tokens"
-# Two tokens, not two labels on one token. What separates the supply-chain
-# keys from the key that vouches for them is a custody boundary, and a label
-# is not one.
+# Two tokens, not two labels on one token.
 docker run --rm \
     -v "$STATE/tokens":/var/lib/softhsm/tokens \
     -v "$STATE/etc":/conf:ro \
@@ -197,11 +153,10 @@ keytool provision-signing-key \
     -public-key-out "$KEYS_DIR_IN_REPO/$IMAGE_KEY_LABEL.pub"
 
 log "3/6  provisioning $ARTIFACT_KEY_LABEL"
-# A separate invocation, and therefore a separate key. The tool compares the
-# key it just generated against the others on the token and refuses a
-# repeat, because a token whose RNG restarts per C_Initialize hands out the
-# same key to each process -- measured on ProtectToolkit's software
-# emulator 8.
+# A separate invocation and therefore a separate C_Initialize. The tool
+# compares the new key against the others on the token and refuses a
+# repeat: ProtectToolkit-C software emulation hands every process the same
+# first key.
 keytool provision-signing-key \
     -module /pkcs11/libsofthsm2.so \
     -workspace "'$SUPPLY_TOKEN_LABEL'" \
@@ -231,9 +186,7 @@ keytool generate-inventory \
     -signature-out "$KEYS_DIR_IN_REPO/key-inventory.json.sig"
 
 log "verifying the inventory the way a stranger would"
-# openssl, not this repository's code. A signature checked only by the
-# library that produced it proves the code agrees with itself, which it
-# would do just as convincingly if the format were wrong.
+# openssl, not this repository's code.
 docker run --rm -v "$KEYS_DIR":/keys:ro "$DEV_IMAGE" \
     openssl dgst -sha256 \
         -verify "/keys/$INVENTORY_KEY_LABEL.pub" \
@@ -241,16 +194,9 @@ docker run --rm -v "$KEYS_DIR":/keys:ro "$DEV_IMAGE" \
         /keys/key-inventory.json
 
 log "6/6  taking the inventory token offline"
-# The same move run-local.sh makes with the root: identify the token
-# directory by the label stored in it, refuse to act on anything but exactly
-# one match, and move it out of the store. Resolving an ambiguous match to
-# the first hit would let enumeration order decide which token goes in the
-# safe, which is nobody's decision.
-#
-# In a container because SoftHSM2's token directories are 0700 owned by the
-# user that initialized them, so a host-side search reads none of them and
-# -- with its errors suppressed -- reports "no match" for a token that is
-# plainly there.
+# Identify the token directory by the label stored in it, refuse anything
+# but exactly one match, and move it out of the store. In a container,
+# because the token directories are 0700 root-owned.
 docker run --rm -v "$STATE":/state -e INVENTORY_LABEL="$INVENTORY_TOKEN_LABEL" "$DEV_IMAGE" sh -c '
     set -eu
     matches=$(grep -rla -- "$INVENTORY_LABEL" /state/tokens | xargs -r -n1 dirname | sort -u)
@@ -277,8 +223,8 @@ Done. Published to $KEYS_DIR_REL/ -- all public, all committable:
 Private key material stayed on the tokens under $STATE and was never
 written anywhere. The inventory token now sits in
 $STATE/offline-inventory-token and is not in the store the
-supply-chain token is reached through, so signing a new inventory means
-deliberately bringing it back.
+supply-chain token is reached through. Signing a new inventory means
+bringing it back.
 
 Anyone can check the inventory with nothing but openssl:
 
@@ -292,8 +238,6 @@ To rotate a key later, provision the next version and regenerate:
       -key image:$IMAGE_KEY_LABEL:verify-only \\
       -key image:image-signing-key-vNEXT:active ...
 
-(vNEXT stands for the next version number. It is written that way rather
-than as a concrete label because ci's key audit reads this file and would
-otherwise flag an example key the inventory does not list -- which is the
-audit working, on a line that was only ever documentation.)
+(vNEXT stands for the next version number. A concrete label here would be
+flagged by internal/keyaudit as a key the inventory does not list.)
 EOF

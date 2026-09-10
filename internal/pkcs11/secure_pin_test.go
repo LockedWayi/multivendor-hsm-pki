@@ -54,12 +54,8 @@ func TestSecurePIN_WipeZeroesBuffer(t *testing.T) {
 	secure := NewSecurePIN(pin)
 	defer secure.Zeroize()
 
-	// White-box: read the C buffer directly before and after wipe() to
-	// confirm the memory itself is overwritten, not just unreferenced.
-	// This reads the buffer while it is still allocated (before free) —
-	// reading it post-free would be a use-after-free read into memory
-	// glibc's allocator may have already reused for its own free-list
-	// bookkeeping, which would prove nothing about our memset.
+	// The C buffer is read before and after wipe, while it is still
+	// allocated. Reading after free would be a use-after-free.
 	n := int(secure.n)
 	buf := secure.buf
 	before := make([]byte, n)

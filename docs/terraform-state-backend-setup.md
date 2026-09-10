@@ -1,6 +1,6 @@
 # OpenTofu state backend: self-hosted MinIO
 
-Sub-task 3.4 of. This document is
+This document is
 the maintainer's setup guide for the real MinIO instance the S3 backend
 in `deploy/terraform/environments/*/backend.tf` talks to. Provisioning it
 is a step only the maintainer can do (it touches the real VPS); this file
@@ -10,21 +10,20 @@ knowledge.
 ## Why MinIO, self-hosted, on the same VPS
 
 Decided 2026-08-26. State needs a remote backend with locking and
-encryption at rest (the engineering contract-adjacent acceptance criteria, phase-3
-sub-task 3.4). The options considered:
+encryption at rest. The options considered:
 
 - **Self-hosted MinIO on the existing Hostinger VPS (chosen).** S3-
   compatible, so OpenTofu's mature `s3` backend works against it
   unmodified. No new commercial account -- consistent with this
   project's existing "the maintainer's own, already-owned infrastructure"
-  posture . Tradeoff accepted: one more service to run and
+  posture. Tradeoff accepted: one more service to run and
   secure on that VPS.
 - **Cloudflare R2** -- rejected: zero-ops, but adds a second external
   commercial account for a single-VPS project that otherwise has exactly
   one (Hostinger).
 - **HCP Terraform / Terraform Cloud free tier** -- rejected: this project
   moved from Terraform to OpenTofu specifically over HashiCorp's BSL
-  relicensing (see the "Terraform vs. OpenTofu" note in the phase file);
+  relicensing;
   routing state through HashiCorp's own SaaS the moment after making that
   point would read as inconsistent, and OpenTofu's support for the legacy
   TFC remote-state protocol was not going to be verified against a real

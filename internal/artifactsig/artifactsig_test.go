@@ -23,17 +23,10 @@ import (
 )
 
 // The fixture is a real cosign v3.1.3 signature, made over the HSM with
-// artifact-signing-key-v1 on the supply-chain token and a signing config
-// carrying no transparency log. That is the point of it: a test that signed
-// its own vector with crypto/ecdsa and then verified it would prove this
-// package agrees with itself, which it would do just as convincingly if the
-// bundle format were wrong.
-//
-// It is verified against docs/keys/artifact-signing-key-v1.pub -- the file
-// this repository publishes -- so a published key that stopped matching the
-// token would fail here. If the artifact key is ever rotated, this fixture
-// keeps verifying under the -v1 key while it is verify-only, and is
-// re-signed when that version retires.
+// artifact-signing-key-v1 and a signing config with no transparency log.
+// A test that signed its own vector with crypto/ecdsa would show only
+// that this package agrees with itself. It is verified against
+// docs/keys/artifact-signing-key-v1.pub, the published file.
 const (
 	fixtureArtifact = "testdata/sample-artifact.txt"
 	fixtureBundle   = "testdata/sample-artifact.bundle"
@@ -71,8 +64,7 @@ func loadFixture(t *testing.T) (artifactsig.Bundle, []byte) {
 	return b, artifact
 }
 
-// rewrite re-encodes the fixture bundle with one field replaced, so the
-// negative cases differ from the positive one in exactly one way.
+// rewrite re-encodes the fixture bundle with one field replaced.
 func rewrite(t *testing.T, mutate func(m map[string]any)) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(fixtureBundle)
@@ -106,18 +98,14 @@ func TestVerify_RejectsASingleFlippedBit(t *testing.T) {
 	if err == nil {
 		t.Fatal("a corrupted artifact verified")
 	}
-	// The digest comparison must be what catches it, not the signature
-	// check: "this bundle is for a different artifact" and "this signature
-	// is forged" are different findings, and reporting the wrong one sends
-	// whoever reads it looking in the wrong place.
+	// The digest comparison must catch it, not the signature check.
 	if !strings.Contains(err.Error(), "different artifact") {
 		t.Fatalf("wrong failure reported: %v", err)
 	}
 }
 
 func TestVerify_RejectsTheOtherPurposesKey(t *testing.T) {
-	// Purpose separation is only real if a verifier can express it. The
-	// image key must not verify an artifact signature.
+	// The image key must not verify an artifact signature.
 	b, artifact := loadFixture(t)
 	err := artifactsig.Verify(b, bytes.NewReader(artifact), loadKey(t, otherPurposeKey))
 	if err == nil {
@@ -129,9 +117,8 @@ func TestVerify_RejectsTheOtherPurposesKey(t *testing.T) {
 }
 
 func TestVerify_RejectsADigestEditedToMatchOtherBytes(t *testing.T) {
-	// The attack this closes: take a genuine bundle, point it at different
-	// content by rewriting the digest it claims. A verifier that trusts the
-	// document's digest instead of recomputing it accepts this.
+	// A genuine bundle with its claimed digest rewritten. A verifier that
+	// trusts the document's digest accepts this.
 	b, artifact := loadFixture(t)
 	other := append([]byte(nil), artifact...)
 	other = append(other, []byte("appended by somebody else\n")...)
@@ -149,18 +136,15 @@ func TestVerify_RejectsADigestEditedToMatchOtherBytes(t *testing.T) {
 	if err := artifactsig.Verify(edited, bytes.NewReader(other), loadKey(t, publishedKey)); err == nil {
 		t.Fatal("a bundle whose digest was edited to match other bytes verified")
 	}
-	// And the original still verifies, so the test above failed for the
-	// right reason rather than because the rewrite broke the bundle.
+	// The original still verifies.
 	if err := artifactsig.Verify(b, bytes.NewReader(artifact), loadKey(t, publishedKey)); err != nil {
 		t.Fatalf("the untouched bundle stopped verifying: %v", err)
 	}
 }
 
 func TestVerify_RejectsARawSignatureInsteadOfASN1(t *testing.T) {
-	// r||s and the DER SEQUENCE of r and s are the same two numbers in two
-	// encodings. PKCS#11, OpenSSL and cosign speak DER here, so accepting
-	// the raw form would be this package quietly widening an interop
-	// contract it does not own.
+	// r||s and the DER SEQUENCE are two encodings of the same numbers.
+	// PKCS#11, OpenSSL and cosign speak DER here.
 	b, artifact := loadFixture(t)
 	var parsed struct{ R, S *big.Int }
 	if _, err := asn1.Unmarshal(b.Signature, &parsed); err != nil {
@@ -190,9 +174,6 @@ func TestParse_RefusesTheShapesThisPlatformDoesNotProduce(t *testing.T) {
 		want   string
 	}{
 		{
-			// A keyless bundle's trust model is a Fulcio root and a
-			// transparency log. Verifying its signature and discarding the
-			// certificate would answer a question nobody asked.
 			name: "keyless bundle carrying a certificate",
 			mutate: func(m map[string]any) {
 				vm := m["verificationMaterial"].(map[string]any)
@@ -202,8 +183,6 @@ func TestParse_RefusesTheShapesThisPlatformDoesNotProduce(t *testing.T) {
 			want: "keyless bundle",
 		},
 		{
-			// The older keyless shape. Checking only `certificate` would
-			// have let this through as keyed material.
 			name: "keyless bundle carrying an x509 certificate chain",
 			mutate: func(m map[string]any) {
 				vm := m["verificationMaterial"].(map[string]any)
@@ -250,8 +229,6 @@ func TestParse_RefusesTheShapesThisPlatformDoesNotProduce(t *testing.T) {
 			want: "not SHA2_256",
 		},
 		{
-			// The arm is present but empty, which is a different failure
-			// from the arm being absent and must read as one.
 			name: "public key material carrying no hint",
 			mutate: func(m map[string]any) {
 				m["verificationMaterial"].(map[string]any)["publicKey"] = map[string]any{}
@@ -279,16 +256,11 @@ func TestParse_RefusesTheShapesThisPlatformDoesNotProduce(t *testing.T) {
 	}
 }
 
-// TestParse_RefusesTwoArmsOfOneOneof covers the gap this package shipped
-// with: it checked for `certificate` and nothing else, so a bundle carrying
-// BOTH a published key and certificate material, or BOTH a blob signature
-// and a DSSE envelope, was accepted and one arm silently discarded.
-// Measured open before the fix.
-//
-// sigstore_bundle.proto defines both as `oneof`, and that is the point: two
-// arms are not an extra field, they are two contradictory claims about what
-// authenticates the signature or about what it covers. Choosing either is
-// choosing for a sender who said two things.
+// TestParse_RefusesTwoArmsOfOneOneof: the parser once checked for
+// certificate only, so a bundle carrying both a public key and
+// certificate material, or both a blob signature and a DSSE envelope, was
+// accepted with one arm discarded. sigstore_bundle.proto defines both as
+// oneof.
 func TestParse_RefusesTwoArmsOfOneOneof(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -332,12 +304,9 @@ func TestParse_RefusesTwoArmsOfOneOneof(t *testing.T) {
 	}
 }
 
-// TestParse_AcceptsABundleCarryingFieldsThisPackageDoesNotRead is the other
-// half of the same decision, and the reason DisallowUnknownFields was not
-// the fix. A real Sigstore bundle carries tlogEntries and
-// timestampVerificationData; measured, Go's strict decoding rejects cosign's
-// own release bundles over exactly that. Strictness has to fall on the
-// fields that change meaning, not on every field.
+// TestParse_AcceptsABundleCarryingFieldsThisPackageDoesNotRead: a real
+// Sigstore bundle carries tlogEntries and timestampVerificationData, and
+// strict decoding rejects cosign's own release bundles.
 func TestParse_AcceptsABundleCarryingFieldsThisPackageDoesNotRead(t *testing.T) {
 	raw := rewrite(t, func(m map[string]any) {
 		m["verificationMaterial"].(map[string]any)["tlogEntries"] = []any{
@@ -356,8 +325,7 @@ func TestParse_AcceptsABundleCarryingFieldsThisPackageDoesNotRead(t *testing.T) 
 }
 
 func TestParse_KeylessBundleIsIdentifiable(t *testing.T) {
-	// Callers need to distinguish "this is the wrong kind of bundle" from
-	// "this bundle is broken", so the sentinel is part of the contract.
+	// The sentinel is part of the contract.
 	_, err := artifactsig.Parse(rewrite(t, func(m map[string]any) {
 		vm := m["verificationMaterial"].(map[string]any)
 		delete(vm, "publicKey")
@@ -415,19 +383,10 @@ func TestVerify_RefusesWithoutAKey(t *testing.T) {
 	}
 }
 
-// TestParse_AcceptsAForeignBundleProducedByAnotherToolchain is the
-// tolerance half of the oneof decision, proven against a bundle this
-// repository did not make: cosign's own v3.1.3 release signature, as
-// published by the Sigstore project. It carries tlogEntries,
-// inclusionProof, checkpoint and rfc3161Timestamps — none of which this
-// package reads — and it is the artifact whose verification bootstraps
-// ci/cosign.sh.
-//
-// It is here because the synthetic version of this test supplies its own
-// answer: a bundle written by the test to carry fields
-// the test chose proves only that the test agrees with itself. This one was
-// produced by a different toolchain, on a different day, for a different
-// artifact, and it is what a strict-by-default parser would have rejected.
+// TestParse_AcceptsAForeignBundleProducedByAnotherToolchain uses cosign's
+// own v3.1.3 release signature, which carries tlogEntries, inclusionProof,
+// checkpoint and rfc3161Timestamps, none of which this package reads. A
+// synthetic bundle would supply its own answer.
 func TestParse_AcceptsAForeignBundleProducedByAnotherToolchain(t *testing.T) {
 	raw, err := os.ReadFile("testdata/foreign-cosign-release.sigstore.json")
 	if err != nil {
@@ -437,8 +396,7 @@ func TestParse_AcceptsAForeignBundleProducedByAnotherToolchain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a real Sigstore bundle was rejected: %v", err)
 	}
-	// It names the Sigstore release key this repository pins, which is the
-	// same identity check ci/cosign.sh makes before trusting the download.
+	// It names the Sigstore release key this repository pins.
 	anchor, err := os.ReadFile("../../ci/sigstore-release-cosign.pub")
 	if err != nil {
 		t.Fatalf("reading the pinned release key: %v", err)

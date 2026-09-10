@@ -19,10 +19,8 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
 )
 
-// These tests reach a token, so every one of them runs against every
-// backend the environment provides. The pure-logic ones —
-// label shape, public-key comparison — are at the bottom and deliberately
-// do not multiply.
+// These tests reach a token, so every one runs against every backend. The
+// pure-logic ones at the bottom do not multiply.
 
 // session opens a logged-in session on the backend's primary token.
 func session(t *testing.T, b *hsmtest.Backend) *pk11.Session {
@@ -52,9 +50,7 @@ func TestProvision_ProducesAProtectedSigningKey(t *testing.T) {
 			t.Fatalf("Provision: %v", err)
 		}
 
-		// Read off the token, not echoed back from the request. This is the
-		// assertion that would have caught the CKA_SENSITIVE defect
-		//
+		// Read off the token, not echoed back from the request.
 		if !key.Sensitive {
 			t.Error("CKA_SENSITIVE is false on the token; the private key can be read out")
 		}
@@ -78,11 +74,7 @@ func TestProvision_KeyIsUsableForSigningAndVerifiesInTheStandardLibrary(t *testi
 			t.Fatalf("Provision: %v", err)
 		}
 
-		// A signing key that cannot sign is not a signing key, and a
-		// signature only this repository can verify is not a signature. So
-		// the HSM signs and crypto/ecdsa checks it — the same cross-check
-		// Phase 1.5 made against the HSM itself, and the one Phase 4.9 will
-		// make against cosign.
+		// The token signs and crypto/ecdsa checks it.
 		priv, err := pk11.FindKeyByLabel(ctx, b.Adapter, s, pk11.ClassPrivateKey, label)
 		if err != nil {
 			t.Fatalf("FindKeyByLabel: %v", err)
@@ -115,9 +107,7 @@ func TestProvision_RefusesALabelAlreadyInUse(t *testing.T) {
 			t.Fatalf("first Provision: %v", err)
 		}
 		// The second must refuse rather than add a second object under the
-		// same label: that would manufacture exactly the ambiguity
-		// FindKeyByLabel exists to reject, and leave which key signs to
-		// enumeration order.
+		// label.
 		_, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: label})
 		if !errors.Is(err, signingkey.ErrLabelTaken) {
 			t.Fatalf("second Provision error = %v, want ErrLabelTaken", err)
@@ -143,9 +133,7 @@ func TestProvision_TwoKeysAreGenuinelyDifferentKeys(t *testing.T) {
 			t.Fatalf("Provision artifact key: %v", err)
 		}
 
-		// Distinct labels prove nothing — two labels can name one key pair,
-		// which is the reuse purpose separation forbids and the thing a label
-		// comparison cannot see. Compare the public points.
+		// Two labels can name one key pair. Compare the public points.
 		if signingkey.SameKey(image.Public, artifact.Public) {
 			t.Error("the image and artifact keys are the same key pair under two labels")
 		}
@@ -157,10 +145,7 @@ func TestProvision_RejectsAnUnversionedLabelBeforeTouchingTheToken(t *testing.T)
 		ctx := context.Background()
 		s := session(t, b)
 
-		// "image-signing-key" with no version. Rejected because rotation
-		// under a bare label is a breaking rename for every consumer
-		//, and because a parameter error must surface
-		// before an irreversible generation, not after (validating before mutating).
+		// A label with no version is rejected before anything is generated.
 		bad := b.Label("image-signing-key")
 		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: bad}); err == nil {
 			t.Fatal("Provision accepted an unversioned label")
@@ -219,10 +204,8 @@ func TestKeyPEM_IsReadableByAVerifierWithNoHSM(t *testing.T) {
 			t.Fatalf("PEM: %v", err)
 		}
 
-		// Parsed back through the standard library's generic PEM/PKIX path,
-		// which is what any verifier — cosign included — will use. Decoding
-		// it with something that knows how we wrote it would prove nothing
-		//
+		// Parsed through the standard library's generic PKIX path, as any
+		// verifier would.
 		block, rest := pem.Decode(out)
 		if block == nil || block.Type != "PUBLIC KEY" || len(rest) != 0 {
 			t.Fatalf("PEM output is not a single PUBLIC KEY block: %q", out)
@@ -239,17 +222,15 @@ func TestKeyPEM_IsReadableByAVerifierWithNoHSM(t *testing.T) {
 			t.Error("the exported PEM is a different key than the one on the token")
 		}
 
-		// And it carries no private material, which is the whole reason a
-		// verifier can hold it.
+		// No private material.
 		if bytes.Contains(out, []byte("PRIVATE")) {
 			t.Error("exported PEM mentions PRIVATE")
 		}
 	})
 }
 
-// TestCheckNoCAHierarchyKey_PassesOnATokenWithoutCAKeys pins the case that
-// must not become a false refusal: the guard is run before every
-// provisioning, so a token carrying only supply-chain keys has to clear it.
+// TestCheckNoCAHierarchyKey_PassesOnATokenWithoutCAKeys: a token with
+// only supply-chain keys must clear the guard.
 func TestCheckNoCAHierarchyKey_PassesOnATokenWithoutCAKeys(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
@@ -267,20 +248,15 @@ func TestCheckNoCAHierarchyKey_PassesOnATokenWithoutCAKeys(t *testing.T) {
 	})
 }
 
-// TestCheckNoCAHierarchyKey_RefusesATokenHoldingACAKey is Phase 4.8's
-// third-token decision as an assertion. Every object involved is
-// individually correct — the CA key is a well-formed CA key, the signing
-// key would be a well-formed signing key — and the defect is only that they
-// share a token, which is exactly the kind of thing no per-object check can
-// see (docs/threat-model.md §6.1).
+// TestCheckNoCAHierarchyKey_RefusesATokenHoldingACAKey: every object is
+// correct on its own; the defect is that they share a token
+// (docs/threat-model.md §6.1).
 func TestCheckNoCAHierarchyKey_RefusesATokenHoldingACAKey(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
 		s := session(t, b)
 
-		// A real key pair rather than a stub object: the guard reads labels
-		// off private keys the token actually holds, so a test that faked
-		// one would be testing something else.
+		// A real key pair: the guard reads labels off private keys.
 		caLabel := b.Label("ca-intermediate-key-v1")
 		if _, err := b.Adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
 			Curve: pk11.P256, Label: caLabel, Sign: true, Verify: true,
@@ -292,9 +268,7 @@ func TestCheckNoCAHierarchyKey_RefusesATokenHoldingACAKey(t *testing.T) {
 		if !errors.Is(err, signingkey.ErrCAHierarchyKeyPresent) {
 			t.Fatalf("CheckNoCAHierarchyKey on the CA's token = %v, want ErrCAHierarchyKeyPresent", err)
 		}
-		// The operator has to be told which object caused the refusal;
-		// "wrong token" with no name in it is not actionable on a token
-		// holding hundreds of keys.
+		// The error must name the object.
 		if !strings.Contains(err.Error(), caLabel) {
 			t.Errorf("refusal does not name the offending key: %v", err)
 		}
@@ -324,10 +298,7 @@ func TestSameKey(t *testing.T) {
 }
 
 func TestValidateLabel(t *testing.T) {
-	// Versioning is what makes rotation a lifecycle step rather than a
-	// breaking rename, so an unversioned label is refused
-	// rather than defaulted to -v1: a tool that silently picks a version
-	// for you is a tool that will pick the same one twice.
+	// An unversioned label is refused, not defaulted to -v1.
 	valid := []string{"image-signing-key-v1", "artifact-signing-key-v12", "audit-signing-key-v1"}
 	for _, label := range valid {
 		if err := signingkey.ValidateLabel(label); err != nil {
@@ -349,31 +320,12 @@ func TestValidateLabel(t *testing.T) {
 	}
 }
 
-// TestProvision_SatisfiesWhatCosignsBindingRequiresToFindThePair pins the
-// preconditions cosign actually imposes, read out of its source rather than
-// assumed (Phase 4.8).
-//
-// The chain, as of cosign v3.1.3 → ThalesIgnite/crypto11 v1.2.5:
-//
-//   - cosign passes *one* of keyID or keyLabel to crypto11's FindKeyPair
-//     (keyID wins if both are configured), and that search matches the
-//     **private** half.
-//   - crypto11's makeKeyPair then reads CKA_ID and CKA_LABEL off that
-//     private key and looks for the **public** half carrying both, falling
-//     back to CKA_ID alone.
-//   - A private key whose CKA_ID is empty is rejected outright with
-//     errNoCkaId: "this is required to locate the matching public key".
-//   - If no public half is found, no key pair is returned.
-//
-// So three things must hold on the token, and none of them is checked
-// anywhere else in this repository: the private half has a non-empty
-// CKA_ID, both halves carry the *same* CKA_ID, and both carry the same
-// CKA_LABEL. A key that violates any of them is invisible to cosign while
-// looking perfectly correct to every tool here — the signing step would fail
-// with "no key pair found" for a key that plainly exists.
-//
-// This is the mechanical half of the check. Running cosign itself needs the
-// pkcs11-enabled build, which Phase 4.9 obtains.
+// TestProvision_SatisfiesWhatCosignsBindingRequiresToFindThePair pins what
+// cosign v3.1.3 through ThalesIgnite/crypto11 v1.2.5 needs: it searches
+// the private half by keyID or label, reads CKA_ID and CKA_LABEL off it,
+// and looks for the public half carrying both. A private key with an
+// empty CKA_ID is rejected outright. So the private half needs a
+// non-empty CKA_ID, and both halves carry the same CKA_ID and CKA_LABEL.
 func TestProvision_SatisfiesWhatCosignsBindingRequiresToFindThePair(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
@@ -413,29 +365,24 @@ func TestProvision_SatisfiesWhatCosignsBindingRequiresToFindThePair(t *testing.T
 				"before it ever looks for the public half")
 		}
 		if !bytes.Equal(privID, pubID) {
-			t.Errorf("CKA_ID differs across the pair: private %x, public %x — crypto11 locates the public "+
+			t.Errorf("CKA_ID differs across the pair: private %x, public %x; crypto11 locates the public "+
 				"half by the private half's CKA_ID, so cosign would report no key pair found", privID, pubID)
 		}
 		if !bytes.Equal(privLabel, pubLabel) {
-			t.Errorf("CKA_LABEL differs across the pair: private %q, public %q — crypto11 matches on both "+
+			t.Errorf("CKA_LABEL differs across the pair: private %q, public %q; crypto11 matches on both "+
 				"before falling back to CKA_ID alone", privLabel, pubLabel)
 		}
 		if string(privLabel) != label {
-			t.Errorf("CKA_LABEL on the token is %q, want %q — this is the value a PKCS#11 URI's object= carries", privLabel, label)
+			t.Errorf("CKA_LABEL on the token is %q, want %q; this is the value a PKCS#11 URI's object= carries", privLabel, label)
 		}
 	})
 }
 
 // --- lateral and boundary cases around duplicate detection and key naming ---
 
-// TestFindDuplicateKey_SeesAKeyUnderAnotherLabelAndSkipsItsOwn exercises the
-// comparison directly, because the path that triggers it in Provision cannot
-// be arranged on a backend whose RNG works.
-//
-// Both halves matter. Missing a genuine duplicate is the defect the check
-// exists for; *reporting* the key against itself would make every
-// provisioning fail, so the guard has to distinguish "another object holds
-// my key" from "I am on the token".
+// TestFindDuplicateKey_SeesAKeyUnderAnotherLabelAndSkipsItsOwn: the check
+// must find a duplicate under another label and must not report a key
+// against itself.
 func TestFindDuplicateKey_SeesAKeyUnderAnotherLabelAndSkipsItsOwn(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
@@ -447,17 +394,17 @@ func TestFindDuplicateKey_SeesAKeyUnderAnotherLabelAndSkipsItsOwn(t *testing.T) 
 			t.Fatalf("Provision: %v", err)
 		}
 
-		// Asked from the point of view of a hypothetical second key: this
-		// public point is already on the token, under `label`.
+		// From the point of view of a second key: this point is on the token
+		// under label.
 		found, err := signingkey.FindDuplicateKey(ctx, b.Adapter, s, b.Label("artifact-signing-key-v5"), key.Public, pk11.P256)
 		if err != nil {
 			t.Fatalf("FindDuplicateKey: %v", err)
 		}
 		if found != label {
-			t.Errorf("FindDuplicateKey = %q, want %q — a duplicate under another label went unnoticed", found, label)
+			t.Errorf("FindDuplicateKey = %q, want %q; a duplicate under another label went unnoticed", found, label)
 		}
 
-		// Asked from the point of view of the key itself: not a duplicate.
+		// From the point of view of the key itself: not a duplicate.
 		found, err = signingkey.FindDuplicateKey(ctx, b.Adapter, s, label, key.Public, pk11.P256)
 		if err != nil {
 			t.Fatalf("FindDuplicateKey: %v", err)
@@ -468,10 +415,8 @@ func TestFindDuplicateKey_SeesAKeyUnderAnotherLabelAndSkipsItsOwn(t *testing.T) 
 	})
 }
 
-// TestFindDuplicateKey_DoesNotMatchAcrossCurves pins that a key on another
-// curve is skipped rather than mistaken for a match or turned into an error.
-// A token holding P-384 keys for some other purpose must not make P-256
-// provisioning unusable.
+// TestFindDuplicateKey_DoesNotMatchAcrossCurves: a key on another curve is
+// skipped, not matched and not an error.
 func TestFindDuplicateKey_DoesNotMatchAcrossCurves(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
@@ -498,14 +443,8 @@ func TestFindDuplicateKey_DoesNotMatchAcrossCurves(t *testing.T) {
 	})
 }
 
-// TestProvision_LabelRoundTripsExactly pins that what the token stores is
-// what was asked for, byte for byte.
-//
-// It is the precondition for every label-based lookup in this repository and
-// for cosign's PKCS#11 URI, whose `object=` carries exactly this string. A
-// token that padded CKA_LABEL to a fixed width, or truncated it, would leave
-// keys that this platform creates and then cannot find — and the failure
-// would read as "no key pair found" for a key plainly on the token.
+// TestProvision_LabelRoundTripsExactly: what the token stores is what was
+// asked for, byte for byte. cosign's PKCS#11 URI carries this string.
 func TestProvision_LabelRoundTripsExactly(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
@@ -532,14 +471,8 @@ func TestProvision_LabelRoundTripsExactly(t *testing.T) {
 	})
 }
 
-// TestProvision_LabelLookupIsExactNotAPrefixMatch is the boundary case
-// versioned labels create for themselves: `-v1` is a prefix of `-v10`, and
-// they are different keys with different lifecycle states.
-//
-// A token that prefix-matched would return two objects for `-v1` — caught by
-// FindKeyByLabel's ambiguity refusal — or, worse, the wrong one. Either way a
-// verify-only key and an active key would be indistinguishable by the only
-// name a PKCS#11 URI can carry.
+// TestProvision_LabelLookupIsExactNotAPrefixMatch: -v1 is a prefix of
+// -v10, and they are different keys with different lifecycle states.
 func TestProvision_LabelLookupIsExactNotAPrefixMatch(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
@@ -559,14 +492,13 @@ func TestProvision_LabelLookupIsExactNotAPrefixMatch(t *testing.T) {
 			t.Fatal("the two versions are the same key pair")
 		}
 
-		// Each label must resolve to its own key, not to the other and not
-		// to both.
+		// Each label resolves to its own key.
 		gotShort, err := signingkey.Load(ctx, b.Adapter, s, short, pk11.P256)
 		if err != nil {
 			t.Fatalf("Load %s: %v", short, err)
 		}
 		if !signingkey.SameKey(gotShort.Public, shortKey.Public) {
-			t.Errorf("%q resolved to a different key — a prefix match would do exactly this", short)
+			t.Errorf("%q resolved to a different key; a prefix match would do exactly this", short)
 		}
 		gotLong, err := signingkey.Load(ctx, b.Adapter, s, long, pk11.P256)
 		if err != nil {
@@ -576,19 +508,15 @@ func TestProvision_LabelLookupIsExactNotAPrefixMatch(t *testing.T) {
 			t.Errorf("%q resolved to a different key", long)
 		}
 
-		// And the label of the shorter one must still count as taken, so a
-		// second provisioning under it cannot succeed.
+		// The shorter label still counts as taken.
 		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: short}); !errors.Is(err, signingkey.ErrLabelTaken) {
 			t.Errorf("re-provisioning %q = %v, want ErrLabelTaken", short, err)
 		}
 	})
 }
 
-// TestProvision_DistinctKeysGetDistinctCKAIDs matters because of how cosign
-// resolves a key: crypto11 takes CKA_ID as authoritative and, when cosign is
-// configured with an id, uses it in preference to the label. Two keys
-// sharing an id would make that lookup ambiguous in a way no label check
-// could see.
+// TestProvision_DistinctKeysGetDistinctCKAIDs: crypto11 takes CKA_ID as
+// authoritative, so two keys sharing an id would be ambiguous to cosign.
 func TestProvision_DistinctKeysGetDistinctCKAIDs(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		ctx := context.Background()
@@ -620,7 +548,7 @@ func TestProvision_DistinctKeysGetDistinctCKAIDs(t *testing.T) {
 			t.Fatal("a signing key has an empty CKA_ID; crypto11 rejects such a key outright")
 		}
 		if bytes.Equal(imageID, artifactID) {
-			t.Errorf("the image and artifact keys share CKA_ID %x — cosign resolves by id in preference to label, "+
+			t.Errorf("the image and artifact keys share CKA_ID %x; cosign resolves by id in preference to label, "+
 				"so the two purposes would be indistinguishable to it", imageID)
 		}
 	})

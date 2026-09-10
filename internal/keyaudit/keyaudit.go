@@ -1,25 +1,13 @@
 // Package keyaudit checks the repository against the key inventory it
-// publishes (Phase 4.8).
+// publishes. Signing keys are purpose-separated and verifiers consume the
+// inventory. Both are properties of the repository: a workflow line, a
+// cosign flag or a manifest label can break them. This check makes them
+// mechanical.
 //
-// # What this is for
-//
-// purpose separation says signing keys are purpose-separated and never
-// interchangeable, and the key lifecycle says verifiers consume the inventory rather than
-// a hard-coded key. Both are properties of the *repository*, not of any one
-// function: they are broken by a line in a workflow file, a cosign flag in a
-// script, or a key label in a Kubernetes manifest. A rule that only a
-// careful reader can enforce is a rule that lasts until the first hurried
-// afternoon, so this makes the two mechanical.
-//
-// # What it looks at, and what it deliberately does not
-//
-// Configuration and automation only: shell scripts, YAML, JSON, Dockerfiles,
-// CI workflows. Not prose and not Go source. Documentation has to be able to
-// discuss the CA keys and the signing keys in the same paragraph — that is
-// what documentation is for — and a check that forbade it would be
-// answered by writing worse documentation. What must never happen is a
-// *machine* being told to sign with the wrong key, and a machine is told
-// that in exactly the file types scanned here.
+// It reads configuration and automation only: shell scripts, YAML, JSON,
+// Dockerfiles, CI workflows. Not prose and not Go source. Documentation
+// has to discuss both key families in one paragraph. A machine told to
+// sign with the wrong key is told so in the file types scanned here.
 package keyaudit
 
 import (
@@ -41,19 +29,17 @@ var caKeyLabel = regexp.MustCompile(`ca-(root|intermediate)-key-v[0-9]+`)
 // versioned scheme.
 var signingKeyLabel = regexp.MustCompile(`(image|artifact|audit|inventory)-signing-key-v[0-9]+`)
 
-// InventorySigningKeyLabel is the label prefix of the key that signs the
-// inventory. It is deliberately *not* an entry in the document it signs: an
-// anchor that vouched for itself would be a list anyone holding the key
-// could extend. Verifiers pin its public half out of band instead, the way
-// TUF bootstraps `root.json`.
+// inventorySigningPrefix is the label prefix of the key that signs the
+// inventory. It is not an entry in the document it signs: an anchor that
+// vouched for itself would be a list anyone holding the key could extend.
+// Verifiers hold its public half out of band.
 const inventorySigningPrefix = "inventory-signing-key-v"
 
 // Finding is one violation, with enough location to fix it.
 type Finding struct {
 	Path string
 	Line int
-	// Rule names which invariant broke, so a failure reads as a statement
-	// about the platform rather than as a grep result.
+	// Rule names which invariant broke.
 	Rule string
 	Text string
 }
@@ -68,20 +54,15 @@ var scannedExtensions = map[string]bool{
 	".bash": true, ".env": true, ".conf": true, ".tf": true,
 }
 
-// skippedDirs are not part of the repository's instructions to a machine:
-// .git is history, .local is a developer's throwaway token state, and
-// docs/keys holds the published artifacts this check compares *against*.
+// skippedDirs hold nothing that instructs a machine.
 var skippedDirs = map[string]bool{
 	".git": true, ".local": true, "vendor": true, "node_modules": true,
 }
 
 // Audit walks the repository at root and reports every way its
-// configuration contradicts the published inventory.
-//
-// The inventory is read from docs/keys/key-inventory.json. A repository with
-// no inventory is a finding in itself rather than a pass: "nothing to check
-// against" and "everything checks out" must not look the same (the engineering contract
-// failing closed).
+// configuration contradicts the published inventory. A repository with no
+// inventory is a finding: "nothing to check against" must not look like
+// "everything checks out".
 func Audit(root string) ([]Finding, error) {
 	inv, invPath, err := loadInventory(root)
 	if err != nil {
@@ -135,23 +116,12 @@ func Audit(root string) ([]Finding, error) {
 	return findings, nil
 }
 
-// auditFile applies the rules to one file.
-//
-// # The rule is that the two key families never meet in one file
-//
-// Naming a CA key in configuration is not itself wrong — the CA service's
-// own config.yaml has to name the intermediate it signs with, and the
-// ceremony script has to name the keys it creates. Naming a signing key is
-// not wrong either. What is wrong is *both in one place*, because a file
-// that configures supply-chain signing and also names a CA key is one flag
-// away from signing a release with the CA's key, and that is the blast
-// radius purpose separation exists to bound.
-//
-// So the check is directional and needs no exemption list. An earlier
-// version flagged every CA label anywhere and had to carve out the ceremony
-// by filename; it also flagged the service's own config, which is the one
-// file that *must* name that key. An exemption list is a rule the next
-// person edits instead of obeys.
+// auditFile applies the rules to one file. Naming a CA key in
+// configuration is fine; the service's config.yaml has to. Naming a
+// signing key is fine. Both in one file is the finding: a file that
+// configures supply-chain signing and names a CA key is one flag away from
+// signing a release with the CA's key. The check is directional, so it
+// needs no exemption list.
 func auditFile(rel, content string, listed map[string]bool) []Finding {
 	var findings []Finding
 	lines := strings.Split(content, "\n")
@@ -181,8 +151,8 @@ func auditFile(rel, content string, listed map[string]bool) []Finding {
 
 		for _, label := range signingKeyLabel.FindAllString(line, -1) {
 			if strings.HasPrefix(label, inventorySigningPrefix) {
-				// The anchor is pinned out of band, not listed in the
-				// document it signs. See inventorySigningPrefix.
+				// The anchor is held out of band, not listed in the
+				// document it signs.
 				continue
 			}
 			if !listed[label] {
@@ -198,11 +168,9 @@ func auditFile(rel, content string, listed map[string]bool) []Finding {
 	return findings
 }
 
-// auditPublishedKeys checks the exported PEMs against the document.
-//
-// They drift silently otherwise: the inventory is regenerated from the
-// token, the loose `.pub` files are not, and a verifier handed the wrong one
-// gets "signature does not verify" with nothing pointing at why.
+// auditPublishedKeys checks the exported PEMs against the document. The
+// inventory is regenerated from the token and the loose .pub files are
+// not, so they drift.
 func auditPublishedKeys(root string, inv inventory.Inventory) []Finding {
 	var findings []Finding
 	for _, e := range inv.Keys {
@@ -211,8 +179,7 @@ func auditPublishedKeys(root string, inv inventory.Inventory) []Finding {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if e.Status == inventory.StatusRetired {
-				// A retired key's PEM may legitimately have been removed
-				// with the key; the inventory entry is the record.
+				// A retired key's PEM may have been removed with the key.
 				continue
 			}
 			findings = append(findings, Finding{
@@ -233,11 +200,9 @@ func auditPublishedKeys(root string, inv inventory.Inventory) []Finding {
 }
 
 // VerifyPublishedInventory checks the committed inventory against the
-// committed anchor public key.
-//
-// Separate from Audit because it answers a different question: Audit asks
-// whether the repository's instructions agree with the document, this asks
-// whether the document is the one the offline key actually signed.
+// committed anchor public key. Audit asks whether the repository agrees
+// with the document; this asks whether the document is the one the
+// offline key signed.
 func VerifyPublishedInventory(root string) error {
 	document, err := os.ReadFile(filepath.Join(root, "docs", "keys", "key-inventory.json"))
 	if err != nil {
@@ -271,8 +236,7 @@ func loadInventory(root string) (inventory.Inventory, string, error) {
 	return inv, path, nil
 }
 
-// isWorkflow reports whether path is a CI workflow, which carries no
-// extension convention this check can rely on beyond its directory.
+// isWorkflow reports whether path is a CI workflow.
 func isWorkflow(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {

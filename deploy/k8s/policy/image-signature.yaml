@@ -3,34 +3,32 @@
 #   go run ./ci/generate-image-policy -out deploy/k8s/policy/image-signature.yaml
 #
 # Rendered from docs/keys/key-inventory.json (version 1) by
-# ci/generate-image-policy. Edit the inventory and regenerate; a key pasted
-# in here by hand is exactly the hard-coded verifier the key lifecycle forbids,
-# and it would make the next rotation a breaking change to the cluster.
+# ci/generate-image-policy. Edit the inventory and regenerate. A key pasted
+# in here by hand is a hard-coded verifier, and it would make the next
+# rotation a breaking change to the cluster.
 #
 # The inventory's signature was verified against
 #   docs/keys/inventory-signing-key-v1.pub
 # before this was rendered, and the document was inside its stated validity
 # window (valid_until 2027-09-04T11:32:50Z). A rendering the generator refuses
-# to produce -- bad signature, expired document, version rollback -- never
-# reaches this file.
+# to produce, for a bad signature, an expired document or a version
+# rollback, never reaches this file.
 #
 # Trusted image keys in this rendering:
 #   image-signing-key-v1        active
 #
 #
-# Both statuses are here on purpose. "active" signs new images; "verify-only"
-# signs nothing but still verifies what it signed before it was rolled. A
-# policy able to hold only one key cannot express a transition window, so the
-# day a new key appears is the day every running image becomes unverifiable.
+# Both statuses are listed. "active" signs new images; "verify-only" signs
+# nothing but still verifies what it signed before it was rolled. A policy
+# that can hold only one key cannot express a transition window.
 ---
 apiVersion: policies.kyverno.io/v1
 kind: ImageValidatingPolicy
 metadata:
   name: require-signed-images
 spec:
-  # Fail, not Ignore: an image whose signature could not be checked -- an
-  # unreachable registry, a policy that will not compile -- must not run
-  #
+  # Fail, not Ignore: an image whose signature could not be checked must
+  # not run.
   failurePolicy: Fail
   validationActions:
     - Deny
@@ -38,11 +36,9 @@ spec:
     mode: Kubernetes
   matchConstraints:
     resourceRules:
-      # pods/ephemeralcontainers for the same measured reason as
-      # pod-hardening.yaml: `kubectl debug` attaches a container to a
-      # running pod through a subresource, and a policy matching only pods
-      # never sees the request. An unsigned debug image is still an unsigned
-      # image running in the cluster.
+      # kubectl debug attaches a container to a running pod through the
+      # pods/ephemeralcontainers subresource. A policy matching only pods
+      # never sees that request.
       - apiGroups: [""]
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE"]
@@ -60,19 +56,11 @@ spec:
     # image-signing-key-v1 (active)
     - name: imagesigningkeyv1
       cosign:
-        # This platform signs with a long-lived key published in a signed
-        # inventory and deliberately writes no transparency-log entry
-        # (sub-task 4.9): Rekor exists to bound the lifetime of an ephemeral
-        # Fulcio certificate, and a log entry here would put a record of
-        # every internal release in public without changing the trust
-        # decision. Kyverno checks the log by default, so it has to be told
-        # -- otherwise it finds the signature and rejects it for lacking
-        # something that was never meant to exist.
-        #
-        # "insecure" is Kyverno's word for the flag, and it is right about
-        # the keyless model it defaults to. It is not right about this one,
-        # where trust comes from a pinned public key that this policy
-        # carries and not from a log.
+        # The durable signature is made with a long-lived key published in
+        # a signed inventory, with no transparency-log entry. Kyverno
+        # checks the log by default, so it has to be told. "insecure" is
+        # Kyverno's word for the flag; here trust comes from a pinned
+        # public key, not from a log.
         ctlog:
           insecureIgnoreTlog: true
           insecureIgnoreSCT: true
@@ -138,22 +126,15 @@ spec:
         (has(object.spec.initContainers) ? object.spec.initContainers : []) +
         (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
   validations:
-    # A signature is made over a digest. A tag is a mutable pointer, so a
-    # tag-named image says nothing durable about what will run: the registry
-    # can repoint it after admission approved what it resolved to.
+    # A signature is made over a digest. A tag can be repointed after
+    # admission approved what it resolved to.
     #
-    # The regex is not decoration, and a plain contains('@sha256:') is not
-    # enough. Measured: when the image policy verifies a tag-named image,
-    # Kyverno rewrites the pod to repo:tag@sha256:<digest> BEFORE this
-    # policy is evaluated. A substring test therefore passes on a manifest
-    # whose author wrote a tag -- satisfied by Kyverno's own mutation rather
-    # than by anyone's intent, and it would go on passing if image
-    # verification were ever narrowed or removed, at which point the tag is
-    # unpinned again and nothing says so.
-    #
-    # This requires the last path segment before the digest to carry no tag,
-    # which is the shape an author writes and not the shape the mutation
-    # produces.
+    # A plain contains('@sha256:') is not enough. When the image policy
+    # verifies a tag-named image, Kyverno rewrites the pod to
+    # repo:tag@sha256:<digest> before this policy runs, so a substring test
+    # passes on a manifest whose author wrote a tag. This requires the last
+    # path segment before the digest to carry no tag, which is the shape an
+    # author writes.
     - expression: >-
         variables.allContainers.all(c,
           c.image.matches('^(.+/)?[^/:@]+@sha256:[a-f0-9]{64}$'))
