@@ -249,7 +249,7 @@ inventory rather than a key. The document as a whole records:
 | Field | Why it is there |
 |---|---|
 | `schema` | Inside the signed bytes, so a future format change cannot be presented as this one. |
-| `version` | Monotonic, so a rollback is detectable: an old list naming a retired key cannot be presented as current without the number saying so. The refusal itself is not yet enforced by any consumer here — it lands with the policy generator's inventory verification and Phase 5's verify job; until then the field records what those checks will act on. |
+| `version` | Monotonic, so a rollback is detectable: an old list naming a retired key cannot be presented as current without the number saying so. The policy generator enforces it: it refuses an inventory whose version is lower than the one its existing rendering was produced from. |
 | `generated_at` / `valid_until` | Bounds how long a stale document stays acceptable. Without an expiry, an attacker who can *withhold* updates replays yesterday's list forever and a retired key never dies — TUF calls this a freeze attack. |
 
 And per key version:
@@ -444,7 +444,7 @@ admission policies, docs — must change at once, so in practice the
 rotation never happens. Chosen (CLAUDE.md §3.7, applied from Phase 4.8's
 first provisioning): versioned labels plus a signed key inventory that
 verifiers consume, giving each key an explicit active → verify-only →
-retired(destroyed) lifecycle, drilled mechanically in CI (Phase 5.9). The
+retired(destroyed) lifecycle. A rotation drill in CI is planned, not built. The
 CA hierarchy's own rotation — intermediate re-issue as the routine case,
 root roll-over with cross-signing as the exceptional one — is documented
 design in [`key-ceremony-and-recovery.md`](key-ceremony-and-recovery.md).
