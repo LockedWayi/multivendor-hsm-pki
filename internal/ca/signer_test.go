@@ -1,10 +1,7 @@
 package ca_test
 
-// Sub-task 2.2's tests run against SoftHSM2 only — see the "Decide before
-// starting" entry in: Phase 1's conformance
-// suite already proved VendorAdapter generalizes across two independent
-// vendors, so the CA layer, which only ever calls through that interface,
-// does not need to re-prove it per test.
+// Signer tests. Every one runs against every backend the environment
+// provides.
 
 import (
 	"context"
@@ -23,10 +20,7 @@ import (
 )
 
 // newTestSigner generates an EC P-256 key pair on the backend's primary
-// token and returns a ready-to-use *ca.Signer over it.
-//
-// The key label is run-scoped: a vendor's tokens persist between runs, so a
-// fixed label would collide on the second run (see hsmtest.Backend.RunID).
+// token and returns a *ca.Signer over it. The label is run-scoped.
 func newTestSigner(t *testing.T, b *ceremonyBackend) *ca.Signer {
 	t.Helper()
 	adapter, ws, resolvePIN := newTestAdapter(t, b)
@@ -110,9 +104,9 @@ func TestSigner_WrongDigestLengthRejected(t *testing.T) {
 	})
 }
 
-// TestSigner_SelfSignedCertificate is sub-task 2.2's own Done-when
-// criterion: x509.CreateCertificate produces a certificate signed by an
-// HSM-resident key, and cert.CheckSignatureFrom(issuer) accepts it.
+// TestSigner_SelfSignedCertificate: x509.CreateCertificate produces a
+// certificate signed by a key on the token, and CheckSignatureFrom
+// accepts it.
 func TestSigner_SelfSignedCertificate(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		signer := newTestSigner(t, b)

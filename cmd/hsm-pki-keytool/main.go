@@ -1,14 +1,9 @@
-// Command hsm-pki-keytool hosts operator-run, one-time HSM key ceremonies —
-// starting with the root/intermediate CA bootstrap (
-// phase-3b-pki-hardening.md, sub-task 3b.1). It is deliberately a separate
-// binary from cmd/hsm-pki-server: the operations here touch the root key,
-// which the online service's configuration must never reference, and a
-// single PIN-handling implementation (pkcs11.SecurePIN) shared between the
-// two binaries is safer than reimplementing it wherever a ceremony is
-// needed. Phase 4.8 added the first of the signing-key lifecycle
-// operations as a further subcommand of this same tool:
-// provision-signing-key, which creates the supply-chain signing keys on
-// their own token (see provision.go).
+// Command hsm-pki-keytool hosts the operator-run key operations: the root
+// and intermediate ceremony, intermediate re-issue, signing-key
+// provisioning and inventory generation. It is a separate binary from
+// cmd/hsm-pki-server because these operations touch the root key, which
+// the service's configuration must never name. Both binaries share one
+// PIN-handling implementation, pkcs11.SecurePIN.
 package main
 
 import (
@@ -53,13 +48,10 @@ func run(args []string) error {
 	}
 }
 
-// ceremonyFlags mirrors ca.CeremonyParams field-for-field, as command-line
-// flags — see that type's doc comment for what each one means. Kept
-// separate from internal/config.Config deliberately: that type describes
-// the online service's single-token runtime configuration, and folding a
-// two-token, operator-run ceremony into the same schema would blur a
-// distinction this platform depends on (the service's configuration must
-// never be able to name the root's token at all).
+// runCeremonyCmd mirrors ca.CeremonyParams as command-line flags. It is
+// kept apart from internal/config.Config: that type describes the
+// service's single-token configuration and must not be able to name the
+// root's token.
 func runCeremonyCmd(args []string) error {
 	fs := flag.NewFlagSet("ceremony", flag.ExitOnError)
 
@@ -104,9 +96,7 @@ func runCeremonyCmd(args []string) error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	// Refuse to clobber existing artifacts silently — a re-run against
-	// output paths from a previous ceremony is almost certainly a mistake,
-	// not an intentional overwrite.
+	// A re-run against a previous ceremony's output paths is a mistake.
 	for _, path := range []string{*rootCertOut, *rootCRLOut, *interCertOut} {
 		if _, err := os.Stat(path); err == nil {
 			return fmt.Errorf("refusing to overwrite existing file %s", path)
@@ -149,13 +139,9 @@ func runCeremonyCmd(args []string) error {
 		IntermediateSubject:   pkix.Name{CommonName: *interCN},
 		IntermediateCurve:     curve,
 	})
-	// Artifacts are written before the error is checked, deliberately.
-	// RunCeremony can return a non-nil error alongside a valid result — a
-	// token that failed to log out after the certificates were already
-	// signed is the case that matters — and those certificates cannot be
-	// regenerated, because the ceremony's key labels are now in use. Losing
-	// them to an early return would be unrecoverable; writing them and then
-	// reporting the error is not.
+	// Artifacts are written before the error is checked. RunCeremony can
+	// return a valid result with an error when the root logout failed, and
+	// those certificates cannot be regenerated: the key labels are taken.
 	if result != nil {
 		if err := writeCertPEM(*rootCertOut, result.RootCertDER); err != nil {
 			return err
@@ -168,11 +154,11 @@ func runCeremonyCmd(args []string) error {
 		}
 		fmt.Printf("ceremony artifacts written:\n  root certificate:         %s\n  intermediate certificate: %s\n  root CRL:                 %s\n",
 			*rootCertOut, *interCertOut, *rootCRLOut)
-		fmt.Println("no private key material was written anywhere — both key pairs remain on their respective HSM tokens")
+		fmt.Println("no private key material was written anywhere; both key pairs remain on their tokens")
 		if *rootKeyExtractable {
-			fmt.Println("root private key: CKA_EXTRACTABLE=true — eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)")
+			fmt.Println("root private key: CKA_EXTRACTABLE=true, eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)")
 		} else {
-			fmt.Println("root private key: CKA_EXTRACTABLE=false — no wrap-based backup; recovery on loss is a fresh ceremony and cross-signing")
+			fmt.Println("root private key: CKA_EXTRACTABLE=false, no wrap-based backup; recovery on loss is a fresh ceremony and cross-signing")
 		}
 	}
 	if ceremonyErr != nil {
@@ -192,16 +178,10 @@ func newVendorAdapter(adapterName, modulePath string) (pk11.VendorAdapter, error
 	}
 }
 
-// findWorkspace resolves a token by the label an operator typed, optionally
-// narrowed by serial number.
-//
-// Label is the addressing key because it is what a human knows; serial is
-// the identity key because PKCS#11 does not require labels to be unique (see
-// pkcs11.Workspace). When a label matches more than one token, this refuses
-// to choose — an earlier version returned the first match, which on a token
-// set with a duplicated label means generating CA keys on whichever token
-// the driver happened to enumerate first. The error lists the candidates and
-// their serials so the operator can re-run with the disambiguating flag.
+// findWorkspace resolves a token by the label an operator typed,
+// optionally narrowed by serial. PKCS#11 does not require labels to be
+// unique. A label matching more than one token is refused, and the error
+// lists the candidates with their serials.
 func findWorkspace(ctx context.Context, adapter pk11.VendorAdapter, label, serial string) (pk11.Workspace, error) {
 	workspaces, err := adapter.Workspaces(ctx)
 	if err != nil {
@@ -233,13 +213,13 @@ func findWorkspace(ctx context.Context, adapter pk11.VendorAdapter, label, seria
 			fmt.Fprintf(&b, "\n  serial %q (slot %d)", w.Serial, w.SlotID)
 		}
 		return pk11.Workspace{}, fmt.Errorf(
-			"label %q matches %d tokens — refusing to guess which one to use; re-run with the matching -...-workspace-serial flag. Candidates:%s",
+			"label %q matches %d tokens; refusing to guess which one to use. Re-run with the matching -...-workspace-serial flag. Candidates:%s",
 			label, len(matches), b.String())
 	}
 }
 
 // pinResolver reads the PIN from the named environment variable at the
-// point of use — never cached, never logged.
+// point of use. It is never cached or logged.
 func pinResolver(envVar string) ca.PINResolver {
 	return func() ([]byte, error) {
 		pin := os.Getenv(envVar)
@@ -250,9 +230,8 @@ func pinResolver(envVar string) ca.PINResolver {
 	}
 }
 
-// writeCertPEM writes der as a PEM-encoded certificate file. Contains no
-// private key material, so 0644 is appropriate: this is meant to be handed
-// to anyone who needs to verify certificates from this hierarchy.
+// writeCertPEM writes der as a PEM certificate file, mode 0644: it holds
+// no private key material.
 func writeCertPEM(path string, der []byte) error {
 	block := &pem.Block{Type: "CERTIFICATE", Bytes: der}
 	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0644); err != nil {

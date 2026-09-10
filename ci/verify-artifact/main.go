@@ -1,29 +1,17 @@
 // Command verify-artifact checks a cosign signature bundle against a
-// published public key, using nothing but the Go standard library.
+// published public key, using the Go standard library only. cosign can
+// verify its own output; that shows cosign agrees with itself. This
+// program is the gate, and cosign's own verify is the cross-check.
 //
-// # Why a second verifier exists at all
+// cosign v3 verifies a keyed bundle only with --insecure-ignore-tlog,
+// because its default trust model expects a transparency log entry. A
+// verification recipe whose first flag is named "insecure" is not one
+// people follow. This program answers yes or no.
 //
-// cosign can verify its own output, and Phase 4.9 confirms that it does.
-// But a signature checked only by the tool that produced it proves the tool
-// agrees with itself, which it would do just as convincingly if the whole
-// encoding were wrong -- this repository has shipped that exact defect
-// twice, and independent verification is the rule that
-// came out of it. So the release gate is this program, and cosign's own
-// verify is the cross-check rather than the other way round.
-//
-// There is a second, blunter reason. cosign v3 verifies a keyed bundle only
-// with --insecure-ignore-tlog, because its default trust model expects a
-// transparency log entry that a private, key-based signature does not have
-// and does not need. A verification recipe whose first instruction is a flag
-// named "insecure", printing a warning that the reader is doing something
-// unsafe, is a recipe nobody follows correctly. This program says yes or no.
-//
-// # Fail closed
-//
-// Exit status is the whole interface: 0 only when the bundle names this key,
-// the digest it carries is the digest of the bytes actually supplied, and
-// the signature verifies over them. Every other outcome -- including a
-// bundle this program does not recognise -- is non-zero.
+// Exit status is the whole interface: 0 only when the bundle names this
+// key, the digest it carries is the digest of the bytes supplied, and the
+// signature verifies over them. Everything else, including a bundle this
+// program does not recognise, is non-zero.
 //
 // Usage:
 //
@@ -47,9 +35,7 @@ func main() {
 	}
 }
 
-// run takes its arguments and its output explicitly so the gate can be
-// tested. A security check whose only caller is main() is a check nobody
-// can point a test at.
+// run takes its arguments and output explicitly so the gate can be tested.
 func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("verify-artifact", flag.ContinueOnError)
 	fs.SetOutput(out)
@@ -83,9 +69,7 @@ func run(args []string, out io.Writer) error {
 		return err
 	}
 
-	// Streamed rather than read whole: a release artifact is a container
-	// image or a binary, and holding it in memory to hash it is a cost with
-	// no purpose.
+	// Streamed: a release artifact can be large.
 	artifact, err := os.Open(artifactPath)
 	if err != nil {
 		return fmt.Errorf("opening artifact: %w", err)

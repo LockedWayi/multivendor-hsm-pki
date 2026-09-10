@@ -1,50 +1,22 @@
-// Package artifactsig verifies a Sigstore keyed signature bundle without
-// Sigstore.
+// Package artifactsig verifies a keyed Sigstore signature bundle without
+// Sigstore. It re-derives the answer from the standard library:
+// crypto/sha256 over the artifact's bytes, crypto/ecdsa over the
+// signature. A signature checked only by the tool that produced it shows
+// that the tool agrees with itself.
 //
-// # Why this exists
-//
-// Phase 4.9 signs the release binary with cosign over an HSM-held key. A
-// verifier who reads that signature back with cosign learns only that
-// cosign agrees with itself — the same closed loop that shipped a CRL Go
-// could read and OpenSSL could not, and a conformance
-// suite that normalised away the property it tested (§3). independent verification
-// is the rule that came out of both: what another implementation has to
-// read is verified against another implementation.
-//
-// So this package re-derives the whole answer from the standard library —
-// crypto/sha256 over the artifact's bytes, crypto/ecdsa over the signature
-// — and shares no code with the tool that produced it. It is the same move
-// Phase 1.5 made when it cross-checked HSM signatures against
-// crypto/ecdsa rather than against the HSM.
-//
-// # What it is strict about, and what it deliberately is not
-//
-// A parser that guards a signature has to be strict about the right thing.
-// Rejecting every field it does not model is the wrong thing, and measurably
-// so: a real Sigstore bundle carries `tlogEntries` and
-// `timestampVerificationData`, so Go's DisallowUnknownFields refuses
-// cosign's own release bundles. Strictness of that kind would have passed
-// here only because this platform signs with no transparency log — a check
-// that holds by local configuration and breaks on the first valid bundle
-// from anywhere else.
-//
-// What does change meaning is which *variant* of a bundle this is, and the
-// format says so directly: sigstore_bundle.proto defines two `oneof`s.
+// The parser is strict about the variant and tolerant of extra fields. A
+// real Sigstore bundle carries tlogEntries and timestampVerificationData,
+// so DisallowUnknownFields would refuse cosign's own release bundles. What
+// changes meaning is which arm of each oneof is present:
 //
 //	verificationMaterial.content  publicKey | x509CertificateChain | certificate
 //	Bundle.content                messageSignature | dsseEnvelope
 //
-// Those are the fields that decide what the signature covers and what
-// authenticates it, so exactly one arm of each must be present and it must
-// be the arm this platform understands: a published public key, over a
-// message digest. A bundle carrying two arms is not a bundle with an extra
-// field — it is two contradictory claims, and picking one silently is how a
-// blob signature gets accepted by a verifier the sender meant to read as an
-// in-toto attestation.
-//
-// The keyless arms are refused rather than ignored. Their trust model is a
-// Fulcio root and a transparency log; verifying the signature and
-// discarding the identity material would answer a question nobody asked
+// Exactly one arm of each must be present, and it must be the arm this
+// platform understands: a published public key, over a message digest. Two
+// arms are two contradictory claims. The keyless arms are refused: their
+// trust model is a Fulcio root and a transparency log, and this package
+// does not implement it.
 package artifactsig
 
 import (
@@ -61,45 +33,34 @@ import (
 	"strings"
 )
 
-// MediaTypePrefix is the bundle media type this package understands. The
-// version is checked as a prefix because Sigstore versions the media type
-// itself, so a v0.4 bundle must be rejected as unknown rather than parsed
-// with v0.3 assumptions.
+// MediaTypePrefix is the bundle media type this package understands. A
+// newer major version is rejected rather than parsed with old assumptions.
 const MediaTypePrefix = "application/vnd.dev.sigstore.bundle"
 
 // ErrKeylessBundle is returned for a bundle whose verification material is
 // certificate-based rather than a published public key.
 var ErrKeylessBundle = errors.New("artifactsig: keyless bundle: its verification material is an X.509 certificate, so its trust model is a Fulcio root and a transparency log, not a published public key")
 
-// Bundle is a keyed Sigstore bundle after parsing and validation.
-//
-// Every field here has already been decoded and its encoding checked, so
-// Verify cannot be handed something Parse has not looked at. Fields the
-// format carries and this platform does not consume — transparency log
-// entries, timestamps — are deliberately absent rather than stored unread:
-// a field a verifier holds but never checks is one a reader will assume it
-// checked.
+// Bundle is a keyed Sigstore bundle after parsing. Fields the format
+// carries and this platform does not consume are absent, so a reader
+// cannot assume they were checked.
 type Bundle struct {
 	// MediaType is the bundle's declared format version.
 	MediaType string
 	// KeyHint is the base64 SHA-256 of the signer's DER
-	// SubjectPublicKeyInfo, as cosign writes it. It is an identity claim,
-	// not a signature input: checking it turns "this signature does not
-	// verify" into "this bundle names a different key", which are different
-	// bugs with different fixes.
+	// SubjectPublicKeyInfo, as cosign writes it. Checking it turns "does
+	// not verify" into "names a different key".
 	KeyHint string
-	// Digest is the SHA-256 the bundle claims the artifact has. It is a
-	// claim, never the value verified against — see Verify.
+	// Digest is the SHA-256 the bundle claims the artifact has. Verify
+	// recomputes it; see there.
 	Digest []byte
 	// Signature is the ECDSA signature, ASN.1 DER encoded.
 	Signature []byte
 }
 
-// wireBundle is the on-the-wire shape, decoded only as far as is needed to
-// enforce the format's two oneofs before anything is interpreted. The arms
-// are json.RawMessage so that "present" and "valid" stay separate
-// questions: an arm that is present but malformed must be a rejected
-// bundle, not an absent arm.
+// wireBundle is the on-the-wire shape, decoded only far enough to enforce
+// the two oneofs. The arms are json.RawMessage so that present and valid
+// stay separate questions.
 type wireBundle struct {
 	MediaType            string `json:"mediaType"`
 	VerificationMaterial struct {
@@ -176,9 +137,7 @@ func Parse(data []byte) (Bundle, error) {
 	if err := json.Unmarshal(*w.MessageSignature, &ms); err != nil {
 		return Bundle{}, fmt.Errorf("artifactsig: parsing message signature: %w", err)
 	}
-	// SHA2_256 is what cosign writes for an ECDSA P-256 key and what the
-	// digest comparison in Verify assumes. Anything else is refused rather
-	// than hashed with SHA-256 anyway.
+	// SHA2_256 is what cosign writes for an ECDSA P-256 key.
 	if ms.MessageDigest.Algorithm != "SHA2_256" {
 		return Bundle{}, fmt.Errorf("artifactsig: digest algorithm %q is not SHA2_256", ms.MessageDigest.Algorithm)
 	}
@@ -205,11 +164,9 @@ func Parse(data []byte) (Bundle, error) {
 	}, nil
 }
 
-// namesPresent returns the sorted names whose flag is set, so a message can
-// say which arms collided rather than only that they did.
+// namesPresent returns the names whose flag is set, in a fixed order so
+// the error message is stable.
 func namesPresent(arms map[string]bool) []string {
-	// Fixed order rather than map order: an error message that changes
-	// between runs is one nobody can grep for.
 	var out []string
 	for _, name := range []string{"publicKey", "x509CertificateChain", "certificate", "messageSignature", "dsseEnvelope"} {
 		if arms[name] {
@@ -219,22 +176,15 @@ func namesPresent(arms map[string]bool) []string {
 	return out
 }
 
-// Verify checks the bundle against the artifact and the public key.
+// Verify checks three things, and all three must hold: the key the bundle
+// names is the key supplied, the digest the bundle carries is the digest
+// of the artifact supplied, recomputed here, and the signature verifies
+// over that digest under that key.
 //
-// Three independent things are checked, and all three must hold:
-//
-//  1. the key the bundle names is the key supplied, by SHA-256 of its DER
-//     SubjectPublicKeyInfo — the same hint cosign writes;
-//  2. the digest the bundle carries is the digest of the artifact actually
-//     supplied, recomputed here rather than taken from the document;
-//  3. the signature verifies over that digest under that key.
-//
-// Check 2 is the one a verifier is most likely to skip, and skipping it is
-// how a bundle for one file gets accepted for another: the signature would
-// verify perfectly against the digest written in the bundle, which is not
-// the digest of the bytes in front of you. It caught a real defect in this
-// repository's own signing script, where a path outside the container's
-// mount made cosign sign a different file of the same name.
+// The second check is the one a verifier skips most often. Without it, a
+// bundle for one file is accepted for another. It caught a defect in this
+// repository's signing script, where a path outside the container mount
+// made cosign sign a different file of the same name.
 func Verify(b Bundle, artifact io.Reader, pub *ecdsa.PublicKey) error {
 	if pub == nil {
 		return errors.New("artifactsig: no public key supplied")
@@ -254,16 +204,13 @@ func Verify(b Bundle, artifact io.Reader, pub *ecdsa.PublicKey) error {
 		return fmt.Errorf("artifactsig: reading artifact: %w", err)
 	}
 	actual := h.Sum(nil)
-	// Both values are public — the caller holds the artifact and the bundle
-	// travels with it — so bytes.Equal is the honest comparison here.
-	// Constant time would defend a secret that does not exist.
+	// Both values are public, so bytes.Equal is the right comparison.
 	if !bytes.Equal(b.Digest, actual) {
 		return fmt.Errorf("artifactsig: the bundle is for a different artifact: it names sha256 %x, these bytes are %x", b.Digest, actual)
 	}
 
-	// VerifyASN1, because cosign writes the DER SEQUENCE of r and s that
-	// PKCS#11 and OpenSSL also speak. A raw r||s pair would be a different
-	// encoding of the same numbers and must not be accepted here.
+	// cosign writes the DER SEQUENCE of r and s. A raw r||s pair is a
+	// different encoding and must not be accepted.
 	if !ecdsa.VerifyASN1(pub, actual, b.Signature) {
 		return errors.New("artifactsig: signature does not verify over this artifact under this key")
 	}

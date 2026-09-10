@@ -14,28 +14,23 @@ import (
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
-// DefaultRootValidity is how long a ceremony-produced root certificate is
-// valid for. A root that outlives many intermediate rotations is the normal
-// shape of a CA hierarchy, even one this small.
+// DefaultRootValidity is the validity of a ceremony-produced root
+// certificate.
 const DefaultRootValidity = 10 * 365 * 24 * time.Hour
 
-// DefaultIntermediateValidity is how long a freshly ceremony-produced
-// intermediate certificate is valid for. Shorter than DefaultRootValidity —
-// the intermediate is the certificate this platform expects to routinely
-// re-issue, the root is not.
+// DefaultIntermediateValidity is the validity of a ceremony-produced
+// intermediate certificate. Shorter than the root's: the intermediate is
+// the certificate this platform re-issues.
 const DefaultIntermediateValidity = 5 * 365 * 24 * time.Hour
 
-// DefaultRootCRLValidity is how long the root's CRL is valid for. Long-lived
-// by design: the root stays offline between ceremonies (
-// phase-3b-pki-hardening.md, "How the root CRL is produced" decision), so
-// refreshing it means re-running the ceremony, not a recurring online step.
+// DefaultRootCRLValidity is the validity of the root's CRL. It is long
+// because the root stays offline between ceremonies. Refreshing the CRL
+// means running a ceremony.
 const DefaultRootCRLValidity = 5 * 365 * 24 * time.Hour
 
-// CeremonyParams configures RunCeremony. Root and intermediate are
-// configured as two independent tokens — never one — per the "Where the
-// root key lives relative to the intermediate" decision in
-// : the whole point is that nothing
-// downstream of this ceremony ever needs to name the root's token.
+// CeremonyParams configures RunCeremony. Root and intermediate are two
+// tokens, never one, so nothing downstream of the ceremony needs to name
+// the root's token.
 type CeremonyParams struct {
 	RootWorkspace pk11.Workspace
 	RootPIN       PINResolver
@@ -55,59 +50,36 @@ type CeremonyParams struct {
 	// IntermediateValidity defaults to DefaultIntermediateValidity when zero.
 	IntermediateValidity time.Duration
 
-	// RootCRLURL is where the root's CRL will be served from. It becomes the
-	// intermediate certificate's CRL distribution point, and it is required
-	// rather than optional: the root is offline, so its CRL is the only
-	// channel by which a relying party can ever learn the intermediate was
-	// revoked. A ceremony is irreversible — an intermediate signed without a
-	// CDP can never gain one without bringing the root back online — so the
-	// operator is made to decide the distribution point before the signature
-	// happens, not after.
+	// RootCRLURL becomes the intermediate certificate's CRL distribution
+	// point. It is required: the root is offline, so its CRL is the only
+	// channel by which a relying party learns the intermediate was revoked,
+	// and an extension cannot be added after the signature.
 	RootCRLURL string
-	// RootCertURL is where the root certificate will be served from. It
-	// becomes the intermediate's AIA CA-Issuers pointer, letting a relying
-	// party that lacks the root build the path. Required for the same
-	// irreversibility reason as RootCRLURL.
+	// RootCertURL becomes the intermediate's AIA CA-Issuers pointer.
+	// Required for the same reason.
 	RootCertURL string
 
-	// RootKeyExtractable sets CKA_EXTRACTABLE on the root private key.
-	// Maintainer decision, 2026-08-31 (docs/key-ceremony-and-recovery.md,
-	// "Deciding root-key extractability"): this is asked at ceremony time,
-	// as an explicit operator choice, rather than hard-coded — the
-	// consequence differs by deployment (a disposable dev token has nothing
-	// worth restoring; a real root does), so the ceremony command's default
-	// leans toward recoverability (see -root-key-extractable's default in
-	// cmd/hsm-pki-keytool) rather than this field defaulting on its own.
-	//
-	// true is what makes the wrap-based backup design usable for the root:
-	// without it, C_WrapKey has nothing to export and a lost root token has
-	// no recovery but a fresh ceremony and cross-signing. It does not weaken
-	// CKA_SENSITIVE, which GenerateKeyPair still forces true unconditionally
-	//  — C_WrapKey is a different door than
-	// C_GetAttributeValue, and only Extractable governs it.
+	// RootKeyExtractable sets CKA_EXTRACTABLE on the root private key. It
+	// is an operator choice per ceremony. true makes a wrap-based backup of
+	// the root possible; false leaves a lost root token with no recovery
+	// but a fresh ceremony. CKA_SENSITIVE stays true either way. C_WrapKey
+	// and C_GetAttributeValue are different doors.
 	RootKeyExtractable bool
 }
 
-// validate checks every parameter that can be checked without touching an
-// HSM, and is called before RunCeremony generates any key.
-//
-// The ordering is the point: a ceremony is irreversible and refuses to
-// overwrite a key label it has already used, so a parameter mistake caught
-// *after* the first key pair exists costs the operator a manual cleanup on
-// the token before they can retry. Everything knowable up front is therefore
-// rejected up front.
+// validate checks every parameter that can be checked without touching a
+// token, before RunCeremony generates any key. A ceremony refuses to
+// overwrite a label, so a mistake caught after the first key exists costs
+// a manual cleanup on the token.
 func (p *CeremonyParams) validate() error {
-	// Serial, not Label and not SlotID, is what identifies a token — see
-	// pkcs11.Workspace's doc comment. Comparing labels would reject two
-	// legitimately distinct tokens that happen to share a name; comparing
-	// slot IDs would fail to notice one token presented at two slots, which
-	// is precisely the case this guard exists to catch.
+	// The serial identifies a token. Labels are not unique, and a slot ID
+	// can change. See pkcs11.Workspace.
 	if p.RootWorkspace.Serial == "" || p.IntermediateWorkspace.Serial == "" {
-		return fmt.Errorf("ca: ceremony requires both workspaces to carry a token serial number; got root=%q intermediate=%q — a Workspace built by hand rather than returned by Workspaces() will not have one",
+		return fmt.Errorf("ca: ceremony requires both workspaces to carry a token serial number; got root=%q intermediate=%q; a Workspace built by hand rather than returned by Workspaces() will not have one",
 			p.RootWorkspace.Serial, p.IntermediateWorkspace.Serial)
 	}
 	if p.RootWorkspace.Serial == p.IntermediateWorkspace.Serial {
-		return fmt.Errorf("ca: ceremony refuses to run with root and intermediate on the same token (serial %q, labels %q and %q) — see phase-3b-pki-hardening.md's root token isolation decision",
+		return fmt.Errorf("ca: ceremony refuses to run with root and intermediate on the same token (serial %q, labels %q and %q); the root must be on its own token",
 			p.RootWorkspace.Serial, p.RootWorkspace.Label, p.IntermediateWorkspace.Label)
 	}
 	if p.RootKeyLabel == "" || p.IntermediateKeyLabel == "" {
@@ -122,59 +94,36 @@ func (p *CeremonyParams) validate() error {
 	if err := ValidateDistributionURL("RootCertURL", p.RootCertURL); err != nil {
 		return fmt.Errorf("ca: ceremony: %w (CeremonyParams documents why this is required)", err)
 	}
-	// An intermediate that outlives its issuer advertises a validity the
-	// chain cannot honor: RFC 5280 path validation requires every
-	// certificate in the path to be valid at the time of use, so the chain
-	// dies with the root regardless of what the intermediate claims.
-	// Rejected rather than silently clamped to the root's NotAfter —
-	// clamping would hand the operator a certificate whose lifetime differs
-	// from the one they asked for, discovered long after the one-shot
-	// ceremony they cannot easily repeat.
+	// An intermediate that outlives its root is refused, not clamped. RFC
+	// 5280 path validation needs every certificate in the path valid at the
+	// time of use, so the chain dies with the root.
 	if p.IntermediateValidity > p.RootValidity {
-		return fmt.Errorf("ca: intermediate validity (%s) exceeds root validity (%s) — the intermediate would outlive the root that signed it",
+		return fmt.Errorf("ca: intermediate validity (%s) exceeds root validity (%s); the intermediate would outlive the root that signed it",
 			p.IntermediateValidity, p.RootValidity)
 	}
 	return nil
 }
 
-// CeremonyResult is everything RunCeremony hands back: DER-encoded public
-// artifacts only — root certificate, intermediate certificate, and the
-// root's initial CRL. No private key material of any kind is included or
-// ever leaves either token: both key pairs are generated
-// on, and never extracted from, the HSM.
+// CeremonyResult is the DER of the root certificate, the intermediate
+// certificate and the root's initial CRL. No private key material is
+// included. Both key pairs stay on their tokens.
 type CeremonyResult struct {
 	RootCertDER         []byte
 	IntermediateCertDER []byte
 	RootCRLDER          []byte
 }
 
-// RunCeremony is the one-time, explicitly-run root and intermediate
-// bootstrap for a two-tier CA hierarchy (
-// phase-3b-pki-hardening.md, sub-task 3b.1). It is not part of the online
-// service's startup path — cmd/hsm-pki-keytool's ceremony command is the
-// only caller this platform ships, and it is meant to be run once, by an
-// operator, before the service ever starts.
+// RunCeremony bootstraps the two-tier hierarchy: the intermediate's key
+// pair on its token, then on the root token the root key pair, a
+// self-signed root certificate (pathlen 1), the intermediate certificate
+// signed under it (pathlen 0) and the root's initial CRL. It logs out of
+// every token it logs into before returning. cmd/hsm-pki-keytool's
+// ceremony command is the only caller.
 //
-// The sequence: generate the intermediate's key pair on its own token first
-// (its public key is needed to build the intermediate certificate, but
-// nothing about generating it requires the root), then log into the root's
-// token, generate the root key pair, self-sign the root certificate
-// (MaxPathLen 1), sign the intermediate certificate under it (MaxPathLen 0,
-// explicit), and produce the root's initial CRL. RunCeremony logs out of
-// every token it logs into before returning, on every path — a ceremony
-// that left a token authenticated behind it would defeat the isolation the
-// two-token decision exists to provide.
-//
-// # Callers must check the result even when the error is non-nil
-//
-// This returns a non-nil *CeremonyResult alongside an error in one case: the
-// certificates were signed successfully and logging out of the root token
-// then failed. Discarding the result there would throw away work that cannot
-// be redone — the key pairs now exist on the tokens, so a second run is
-// refused by the overwrite guard, and the certificates existed only in
-// memory. They contain no secret material, so the correct handling is to
-// persist them and then report the error, which is what
-// cmd/hsm-pki-keytool does.
+// A non-nil *CeremonyResult can come back with a non-nil error, when the
+// certificates were signed and the root logout then failed. The key pairs
+// exist, a second run is refused, and the certificates exist only in
+// memory. Callers persist the result and then report the error.
 func RunCeremony(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk11.SessionOptions, params CeremonyParams) (*CeremonyResult, error) {
 	if params.RootValidity == 0 {
 		params.RootValidity = DefaultRootValidity
@@ -195,53 +144,33 @@ func RunCeremony(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk
 	}
 
 	return withTokenLogin(ctx, adapter, params.RootWorkspace, params.RootPIN, func() (*CeremonyResult, error) {
-		// Empirical token-separation check, and the reason it runs here
-		// rather than in validate(): serial numbers are a metadata claim,
-		// but an object search is a measurement. If these two workspaces
-		// are in fact one token — a vendor presenting it at two slots with
-		// two serials, or any other way the metadata could mislead — then
-		// the intermediate key pair generated a moment ago is visible from
-		// this session, because a label search only ever sees the token it
-		// is run against.
-		//
-		// Placed before the root key pair is generated so that an abort
-		// here leaves exactly one label used rather than two.
+		// A serial is a claim the driver makes; an object search is a
+		// measurement. If these two workspaces are one token, the
+		// intermediate key generated a moment ago is visible from this
+		// session. Checked before the root key exists, so an abort leaves
+		// one label used, not two.
 		interVisibleFromRoot, err := keyPairExists(ctx, adapter, params.RootWorkspace, sessionOpts, params.IntermediateKeyLabel)
 		if err != nil {
 			return nil, fmt.Errorf("ca: ceremony: checking token separation: %w", err)
 		}
 		if interVisibleFromRoot {
-			return nil, fmt.Errorf("ca: ceremony aborted: the intermediate key label %q is visible from the root token (label %q, serial %q), so these are the same key space despite reporting different serials — the root must be isolated (phase-3b-pki-hardening.md)",
+			return nil, fmt.Errorf("ca: ceremony aborted: the intermediate key label %q is visible from the root token (label %q, serial %q), so these are the same key space despite reporting different serials; the root must be on its own token",
 				params.IntermediateKeyLabel, params.RootWorkspace.Label, params.RootWorkspace.Serial)
 		}
 		return signRootAndIntermediate(ctx, adapter, sessionOpts, params, interPub)
 	})
 }
 
-// generateCeremonyKey logs into ws, generates a fresh EC key pair labeled
-// label, and returns its public key. It refuses to run against a label that
-// already exists on the token — a ceremony never silently overwrites a key
-// — and logs the token back out before returning on every
-// path, including error paths.
+// generateCeremonyKey logs into ws, generates an EC key pair under label,
+// and returns its public key. It refuses a label that already exists, and
+// logs out on every path.
 //
-// # Why the existence check is not atomic, and why that is acceptable
-//
-// This checks for the label and then creates it, which is a check-then-act
-// with a window in between. That window cannot be closed at this layer, and
-// the obvious fix — let the HSM reject the duplicate — does not exist:
-// PKCS#11 places no uniqueness constraint on CKA_LABEL (it is specified as
-// a description of the object), so C_GenerateKeyPair will happily create a
-// second pair under a label already in use and return success. There is no
-// error to catch.
-//
-// What closes the hole is the *use* side rather than the creation side:
-// findKeyByLabel treats "more than one object with this label" as a failure
-// and refuses to return a handle, so a duplicate created through this window
-// surfaces as a loud error the next time anything tries to sign with that
-// label, never as a silent signature under the wrong key. A ceremony is
-// also a single-operator, one-shot operation, so the window is narrow in
-// practice — but it is the use-side rejection, not the narrowness, that
-// makes this safe.
+// The existence check and the generation are not atomic. PKCS#11 places no
+// uniqueness constraint on CKA_LABEL, so C_GenerateKeyPair creates a second
+// pair under a used label and returns success. The use side closes the
+// window: findKeyByLabel refuses a label that matches more than one object,
+// so a duplicate fails the next signature loudly instead of signing with
+// the wrong key.
 func generateCeremonyKey(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk11.SessionOptions, ws pk11.Workspace, resolvePIN PINResolver, label string, curve pk11.ECCurve) (*ecdsa.PublicKey, error) {
 	return withTokenLogin(ctx, adapter, ws, resolvePIN, func() (*ecdsa.PublicKey, error) {
 		exists, err := keyPairExists(ctx, adapter, ws, sessionOpts, label)
@@ -271,10 +200,10 @@ func generateCeremonyKey(ctx context.Context, adapter pk11.VendorAdapter, sessio
 	})
 }
 
-// signRootAndIntermediate runs with the root token already authenticated
-// (called from inside withTokenLogin by RunCeremony): it generates the root
-// key pair, self-signs the root certificate, signs the intermediate
-// certificate over interPub, and builds the root's initial CRL.
+// signRootAndIntermediate runs with the root token authenticated. It
+// generates the root key pair, self-signs the root certificate, signs the
+// intermediate certificate over interPub, and builds the root's initial
+// CRL.
 func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk11.SessionOptions, params CeremonyParams, interPub *ecdsa.PublicKey) (*CeremonyResult, error) {
 	exists, err := keyPairExists(ctx, adapter, params.RootWorkspace, sessionOpts, params.RootKeyLabel)
 	if err != nil {
@@ -319,12 +248,8 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		// The root may certify exactly one level below itself: the
-		// intermediate. Nothing the intermediate signs may itself be a CA
-		// (that constraint lives on the intermediate's own certificate,
-		// MaxPathLenZero below) — this field is what makes a
-		// standards-compliant verifier enforce it, not just this platform's
-		// own issuance code.
+		// The root may certify one level below itself. A standard verifier
+		// enforces this, not only this code.
 		MaxPathLen:     1,
 		SubjectKeyId:   rootSKI,
 		AuthorityKeyId: rootSKI,
@@ -354,24 +279,17 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
-		// Explicit pathlen 0: nothing the intermediate signs may itself be a
-		// CA. MaxPathLenZero must be set alongside MaxPathLen: 0 — otherwise
-		// crypto/x509 treats an unset zero value as "no constraint" rather
-		// than "constrained to zero".
+		// Nothing the intermediate signs may be a CA. MaxPathLenZero must be
+		// set with MaxPathLen 0; crypto/x509 treats an unset zero as no
+		// constraint.
 		MaxPathLen:     0,
 		MaxPathLenZero: true,
 		SubjectKeyId:   interSKI,
 		AuthorityKeyId: rootSKI,
-		// The intermediate's revocation status is published in the *root's*
-		// CRL, so this points there — not at the CRL this intermediate will
-		// itself serve for its own leaves. Set at ceremony time because it
-		// can never be added afterward: changing an extension means
-		// re-signing, which means bringing the offline root back out.
+		// The intermediate's revocation status is in the root's CRL. Set
+		// now; changing an extension means re-signing with the offline root.
 		CRLDistributionPoints: []string{params.RootCRLURL},
-		// AIA CA-Issuers: where a relying party that does not already hold
-		// the root can fetch it to complete the path. No OCSP URL is set —
-		// the responder does not exist until Phase 5b, and pointing at an
-		// endpoint that is not there is worse than omitting the pointer.
+		// No OCSP URL: no responder exists.
 		IssuingCertificateURL: []string{params.RootCertURL},
 	}
 	interDER, err := x509.CreateCertificate(rand.Reader, interTemplate, rootCert, interPub, rootSigner)
@@ -379,17 +297,10 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 		return nil, fmt.Errorf("ca: signing intermediate certificate: %w", err)
 	}
 
-	// The root's own CRL, covering the intermediate. It starts with nothing
-	// revoked — this is the CRL a relying party fetches to confirm the
-	// intermediate has not been revoked, not a record of any revocation
-	// having happened yet.
+	// The root's CRL starts empty. thisUpdate is backdated like the
+	// certificates: a relying party with a slow clock would otherwise find
+	// no valid CRL, which it cannot tell from "not revoked".
 	rootForCRL := &CA{cert: rootCert, signer: rootSigner}
-	// thisUpdate gets the same backdate the certificates above get. Without
-	// it, a relying party whose clock trails this host's fetches the root
-	// CDP and finds a CRL that is not valid yet — and "no usable CRL" is
-	// indistinguishable, to that verifier, from "the intermediate has not
-	// been revoked". The certificates were already backdated for exactly
-	// this reason; the CRL served alongside them needs it just as much.
 	rootCRLDER, err := rootForCRL.BuildCRL(nil, now.Add(-issuanceClockSkewAllowance), now.Add(params.RootCRLValidity), big.NewInt(1))
 	if err != nil {
 		return nil, fmt.Errorf("ca: building root CRL: %w", err)
@@ -402,9 +313,8 @@ func signRootAndIntermediate(ctx context.Context, adapter pk11.VendorAdapter, se
 	}, nil
 }
 
-// keyPairExists reports whether a private key with label already exists on
-// the token, distinguishing "does not exist" (ErrKeyNotFound) from any other
-// error opening a session or searching for it.
+// keyPairExists reports whether a private key with label exists on the
+// token. ErrKeyNotFound means no; any other error is returned.
 func keyPairExists(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, sessionOpts pk11.SessionOptions, label string) (bool, error) {
 	return withSession(ctx, adapter, ws, sessionOpts, func(s *pk11.Session) (bool, error) {
 		_, err := findKeyByLabel(ctx, adapter, s, pk11.ClassPrivateKey, label)
@@ -418,37 +328,18 @@ func keyPairExists(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Work
 	})
 }
 
-// withTokenLogin logs into ws for the span of fn and logs back out
-// afterward, on every path. It refuses to run if the adapter already holds
-// some other token authenticated — a ceremony expects to own the adapter's
-// anchor login exclusively for the duration of each step, never to inherit
-// or silently replace one a caller left behind.
+// withTokenLogin logs into ws for the span of fn and logs out afterwards,
+// on every path, including a panic. It refuses to run when the adapter
+// already holds a token authenticated.
 //
-// # The logout is deferred, and the result survives a failed logout
-//
-// Two properties this function must have, both learned the hard way:
-//
-// The logout runs in a defer, so it happens even if fn panics. Without it,
-// the invariant "this function leaves no token authenticated" would depend
-// on some caller further up having deferred adapter.Close() — true today in
-// cmd/hsm-pki-keytool, but a property of that caller rather than of this
-// function.
-//
-// More importantly, a logout failure never discards a successful fn's
-// result. An earlier version returned the zero value in that case, which for
-// a ceremony meant the worst outcome available: the key pairs exist on the
-// tokens and the certificates were signed, but the only copy of those
-// certificates — held in memory, never yet written — is thrown away, and
-// the ceremony cannot be re-run because its key labels are now taken. The
-// artifacts are public certificates containing no secret material, so
-// returning them alongside the logout error costs nothing and preserves
-// irreplaceable work. Callers must therefore check the result even when the
-// error is non-nil; cmd/hsm-pki-keytool writes the artifacts first and
-// reports the error afterward.
+// A logout failure never discards fn's result. An earlier version returned
+// the zero value there, which threw away certificates that cannot be
+// regenerated because their key labels are taken. Callers check the result
+// even when the error is non-nil.
 func withTokenLogin[T any](ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN PINResolver, fn func() (T, error)) (result T, err error) {
 	var zero T
 	if adapter.TokenLoggedIn() {
-		return zero, fmt.Errorf("ca: ceremony: a token is already authenticated before logging into %q — refusing to proceed", ws.Label)
+		return zero, fmt.Errorf("ca: ceremony: a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
 	}
 	pin, err := resolvePIN()
 	if err != nil {
@@ -459,10 +350,8 @@ func withTokenLogin[T any](ctx context.Context, adapter pk11.VendorAdapter, ws p
 	}
 	defer func() {
 		logoutErr := adapter.LogoutToken(ctx)
-		// Only surface the logout failure when fn itself succeeded —
-		// otherwise fn's error is the one that explains what went wrong,
-		// and replacing it with a teardown error would bury the cause.
-		// result is deliberately left untouched either way.
+		// fn's error explains the failure; a teardown error must not
+		// replace it. result is left untouched either way.
 		if logoutErr != nil && err == nil {
 			err = fmt.Errorf("ca: ceremony: work on %q completed but logging out failed (the returned result is valid and must not be discarded): %w", ws.Label, logoutErr)
 		}

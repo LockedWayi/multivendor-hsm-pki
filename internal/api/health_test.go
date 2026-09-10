@@ -36,11 +36,8 @@ func TestHealthz_SucceedsEvenAfterAdapterClosed(t *testing.T) {
 		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 		defer srv.Close()
 
-		// Released rather than closed directly: Release both closes the
-		// adapter and tells the harness it is gone, so cleanup reopens a
-		// fresh connection instead of failing against a dead one. Closing it
-		// behind the harness's back left this run's keys on the token every
-		// time, reported only into a log line nobody read.
+		// Release, not Close: the harness then reopens a fresh connection for
+		// cleanup instead of failing against a closed one.
 		b.Release()
 
 		resp, err := http.Get(srv.URL + "/healthz")
@@ -49,7 +46,7 @@ func TestHealthz_SucceedsEvenAfterAdapterClosed(t *testing.T) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("status = %d, want %d — /healthz must not depend on the HSM", resp.StatusCode, http.StatusOK)
+			t.Fatalf("status = %d, want %d; /healthz must not depend on the HSM", resp.StatusCode, http.StatusOK)
 		}
 	})
 }
@@ -72,9 +69,8 @@ func TestHealthReadyz_SucceedsWhenAdapterIsUp(t *testing.T) {
 	})
 }
 
-// TestHealthReadyz_FailsWhenAdapterClosed is sub-task 2.6's own Done-when
-// criterion, alongside TestHealthz_SucceedsEvenAfterAdapterClosed above:
-// /readyz fails when the adapter is closed while /healthz still succeeds.
+// TestHealthReadyz_FailsWhenAdapterClosed: /readyz fails when the adapter
+// is closed while /healthz still succeeds.
 func TestHealthReadyz_FailsWhenAdapterClosed(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -82,11 +78,8 @@ func TestHealthReadyz_FailsWhenAdapterClosed(t *testing.T) {
 		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
 		defer srv.Close()
 
-		// Released rather than closed directly: Release both closes the
-		// adapter and tells the harness it is gone, so cleanup reopens a
-		// fresh connection instead of failing against a dead one. Closing it
-		// behind the harness's back left this run's keys on the token every
-		// time, reported only into a log line nobody read.
+		// Release, not Close: the harness then reopens a fresh connection for
+		// cleanup instead of failing against a closed one.
 		b.Release()
 
 		resp, err := http.Get(srv.URL + "/readyz")
