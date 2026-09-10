@@ -197,7 +197,7 @@ var ErrDuplicateKey = errors.New("signingkey: the token generated a key it had a
 // public point as pub, ignoring the object named by ownLabel, or "" when
 // there is none.
 //
-// Exported so the check can be tested against a real token on both backends
+// Exported so the check can be tested against a token on both backends
 // rather than only through the path that triggers it: forcing Provision to
 // generate a colliding key is not something a test can arrange on a backend
 // whose RNG works, and a guard nobody can exercise deliberately is a guard
