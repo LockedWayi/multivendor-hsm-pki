@@ -23,37 +23,27 @@ import (
 // establish the token login for the service's lifetime.
 type PINResolver func() ([]byte, error)
 
-// Signer is a crypto.Signer backed by an HSM-resident EC key pair, reached
-// through the Phase 1 VendorAdapter abstraction. It never holds the private
-// key: every Sign call opens its own session, asks the HSM to sign, and
-// closes the session again.
+// Signer is a crypto.Signer backed by an EC key pair on the token, reached
+// through VendorAdapter. It never holds the private key. Every Sign call
+// opens a session, asks the token to sign, and closes the session.
 //
-// It does not log in. The token is authenticated once by Bootstrap via
-// LoginToken and stays that way for the service's lifetime, so the sessions
-// opened here inherit that authentication — PKCS#11 authenticates a token
-// for the whole application, not per session
-// (internal/pkcs11/tokenlogin.go). An earlier version logged in and out
-// around each operation and could not survive two concurrent requests; see
-// withSession below for what that broke.
+// It does not log in. Bootstrap authenticates the token once through
+// LoginToken for the service's lifetime, and PKCS#11 authenticates the
+// token for the whole application, so a session opened here can use
+// private keys at once. See internal/pkcs11/tokenlogin.go.
 //
-// A session is still not held between calls, deliberately: pkcs11.Session
-// enforces an idle timeout and a maximum TTL and fails closed once either
-// elapses, so a signer reusing one session forever would
-// eventually fail every call for a reason unrelated to the request. Those
-// bounds govern a caller's session; the token's authentication is a
-// separate lifetime, held by the adapter's anchor session, which is exactly
-// why the two are no longer entangled.
+// No session is held between calls. pkcs11.Session enforces an idle
+// timeout and a maximum TTL and fails closed when either passes, so a
+// session kept for the process lifetime would eventually fail every call.
 //
-// Signer looks the private key object up by its CKA_LABEL inside every
-// session it opens, rather than caching the ObjectHandle GenerateKeyPair
-// returned. Discovered empirically while building this type: a PKCS#11
-// object handle for a CKA_TOKEN=true key is only valid within the session
-// that obtained it — reusing a handle from the key-generation session in a
-// different one fails CKR_OBJECT_HANDLE_INVALID (observed on SoftHSM2
-// 2.6.1; recorded as a general PKCS#11 trap, not a vendor quirk, in
-// , since nothing here is SoftHSM2-specific
-// behavior). A label-based re-lookup per session is the fix that generalizes
-// to any vendor.
+// The private key object is looked up by CKA_LABEL in every session,
+// rather than caching the handle GenerateKeyPair returned. SoftHSM2 2.6.1
+// returned CKR_OBJECT_HANDLE_INVALID for a handle used after the session
+// that obtained it was closed. PKCS#11 v2.40 scopes object handles to the
+// application, not to one session, and guarantees a handle only for as
+// long as the session that obtained it exists. So the SoftHSM2 behaviour
+// may be implementation behaviour. A lookup per session works on every
+// implementation, which is why the code does that.
 type Signer struct {
 	adapter     pk11.VendorAdapter
 	workspace   pk11.Workspace
@@ -184,16 +174,11 @@ func rawECDSAToASN1(sig []byte) ([]byte, error) {
 	return asn1.Marshal(ecdsaASN1Signature{R: r, S: sVal})
 }
 
-// findKeyByLabel locates the single object of the given class with the
-// given CKA_LABEL within session s. It exists because an ObjectHandle from
-// one session is not valid in another — see the Signer doc comment — so
-// every operation that needs a key handle finds it fresh, in its own
-// session, rather than being handed one from elsewhere.
-// The ambiguity rule it enforces belongs to the PKCS#11 layer rather than
-// to the CA — it is a property of how tokens name objects, and the signing
-// keys in Phase 4.8 need exactly the same refusal — so the logic lives in
-// pkcs11.FindKeyByLabel and this wraps it to keep ca.ErrKeyNotFound as the
-// error callers here already match on.
+// findKeyByLabel locates the single object of the given class and
+// CKA_LABEL within session s. The lookup is done per session; the Signer
+// comment says why a handle is not cached. The ambiguity rule lives in
+// pkcs11.FindKeyByLabel. This wraps it so callers keep matching on
+// ca.ErrKeyNotFound.
 func findKeyByLabel(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, class pk11.ObjectClass, label string) (pk11.ObjectHandle, error) {
 	handle, err := pk11.FindKeyByLabel(ctx, adapter, s, class, label)
 	if errors.Is(err, pk11.ErrKeyNotFound) {
@@ -205,23 +190,15 @@ func findKeyByLabel(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Ses
 	return handle, nil
 }
 
-// withSession opens a session against ws, runs fn, and closes the session
-// afterward — the lifecycle every Signer operation shares.
+// withSession opens a session against ws, runs fn, and closes the session.
 //
-// It does not log in, and that is the point. PKCS#11 authenticates a token
-// for the whole application, not per session, so the token is already
-// authenticated by the time this runs: Bootstrap established it once via
-// LoginToken and it holds for the service's lifetime (see
-// internal/pkcs11/tokenlogin.go). A session opened here inherits that
-// authentication and can use private keys immediately.
+// It does not log in. The token is already authenticated by Bootstrap's
+// LoginToken. An earlier version logged in and out around every operation
+// and failed under concurrency: the second caller's C_Login returned
+// CKR_USER_ALREADY_LOGGED_IN, and the first caller's C_Logout
+// de-authenticated the second one mid-signature.
 //
-// This used to log in and out around every operation. That was not merely
-// wasteful, it was broken under concurrency: the second concurrent caller's
-// C_Login failed with CKR_USER_ALREADY_LOGGED_IN, and the first caller's
-// C_Logout de-authenticated the second one mid-signature. Serializing the
-// calls could not fix it, because the interference happened between them.
-//
-// The zero value of T is returned alongside a non-nil error on any failure.
+// The zero value of T is returned with a non-nil error on any failure.
 func withSession[T any](ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, opts pk11.SessionOptions, fn func(*pk11.Session) (T, error)) (T, error) {
 	var zero T
 
