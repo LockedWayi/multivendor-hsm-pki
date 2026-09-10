@@ -159,12 +159,13 @@ not an accepted one.
 ## The published image, and how to verify it
 
 A push to `main` that clears every gate publishes the service image to
-`ghcr.io/lockedwayi/multivendor-hsm-pki` with a signed CycloneDX SBOM
-attestation. Two tags are written and no more: `sha-<commit>`, and
-`v<x.y.z>` when the commit carries that release tag. There is deliberately
-no `latest` and no moving `main` — both are pointers somebody can move, and
-the argument this repository makes about identity is that a name is not one.
-**The digest is the identity.** Pull the digest form.
+`ghcr.io/lockedwayi/multivendor-hsm-pki`. The bytes are pushed under the
+moving tag `staging`, the digest is signed, and only then are
+`sha-<commit>` and, when the commit carries a release tag, `v<x.y.z>`
+applied. A successful push therefore leaves `staging`, `sha-<commit>` and
+possibly `v<x.y.z>`. `staging` always names the most recent build pushed,
+signed or not, and nothing should pull it. There is no `latest` and no
+moving `main`. **The digest is the identity.** Pull the digest form.
 
 ### Verifying a release
 
