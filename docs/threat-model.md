@@ -187,10 +187,10 @@ limitation, not a claim of safety.
 **Gets:** certificates within whatever profile and naming policy Phase 5b
 grants its identity.
 
-**Does not get:** certificates outside that policy — but only once Phase 5b
-lands. Today there are no profiles: every leaf gets `serverAuth` **and**
-`clientAuth`, and any subject the CSR asks for. Restricting that is
-[Phase 5b's certificate-profile work](phases/phase-5b-issuance-policy-ocsp.md).
+**Does not get:** certificates outside that policy, once profiles exist.
+Today there are no profiles: every leaf gets `serverAuth` **and**
+`clientAuth`, and any subject the CSR asks for. Certificate profiles are
+planned, not built.
 
 ### A3 — Compromised service process ★ the central case
 
@@ -224,9 +224,8 @@ revocations, and read or corrupt the store.
   — an attacker at A3 could have taken the key and kept using it after
   eviction. SoftHSM2 refused to disclose it, so CI was green throughout.
   Fixed and now asserted against both backends by reading the attributes
-  back off the token
-  ([`pkcs11-vendor-notes.md`](pkcs11-vendor-notes.md), "A non-sensitive
-  private key really is readable here").
+  back off the token ([`test-matrix.md`](test-matrix.md), "Expected
+  divergences to look for").
 - **The ability to issue a CA certificate.** The intermediate carries
   `pathlen:0`, enforced by every compliant verifier, not by this code. An
   attacker who issues a sub-CA produces a certificate that fails path
@@ -364,7 +363,7 @@ against *accidental* reuse. They do not achieve it against an attacker,
 because PKCS#11 authentication is per token: any process holding a session
 on a token can find every key on it by label and sign with it.
 
-'s signing-layer diagram currently places
+`architecture.md`'s signing-layer diagram placed
 `ca-intermediate-key-v1`, `image-signing-key-v1` and `artifact-signing-key-v1`
 on one online token. If that is what Phase 4.8 provisions, then A3 —
 compromise of the CA daemon — also yields image and artifact signing, and
@@ -450,9 +449,10 @@ not a threat model:
 
 - Blast-radius reasoning behind the design: [`architecture.md`](architecture.md),
   "The signing layer" and "Two-tier hierarchy rather than a single online CA"
-- The rules these conclusions are enforced by: [`../the engineering contract](../the engineering contract) §3
-- The hierarchy, the store, and the distribution points as built:
-  [`phases/phase-3b-pki-hardening.md`](phases/phase-3b-pki-hardening.md)
+- The rules these conclusions follow: purpose-separated keys, fail closed,
+  identity by serial and digest, verification by another implementation.
+  [`architecture.md`](architecture.md), "Key design decisions", states
+  them with their alternatives.
 - Ceremony and recovery procedures, including the A7 manifest mitigation
   and the A6 wrap-based backup boundary:
   [`key-ceremony-and-recovery.md`](key-ceremony-and-recovery.md)
