@@ -83,9 +83,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   This exists because the obvious thing proves nothing. An inventory, its
   signature and the key that verifies it all living in one repository means
   a check that they agree with each other, which they would also do if
-  whoever can push here rewrote all three. Measured: adding an attacker's key
-  to `docs/keys/key-inventory.json` is refused at the anchor step, because
-  re-signing the inventory needs an offline token in another repository.
+  whoever can push here rewrote all three.
+
+  Corrected 2026-09-10: the first version read the anchor's repository,
+  commit and digest from `ci/scanner-pins.sh`, a file in the tree under
+  verification, so a five-file commit made it print VERIFIED for an
+  attacker's inventory. The inputs are now supplied by the verifier from
+  outside the tree. The property is narrower than "two repositories must
+  be compromised": changing the anchor in place needs write access to the
+  anchor repository; substituting it needs the consumer to accept new
+  inputs. No pull-request review is required on either repository.
 - **The two signatures are now distinguished, and only one is for consumers.**
   Every published image carries the pipeline's *ephemeral* signature, which
   proves the PKCS#11 mechanism end to end and nothing about custody — the key
