@@ -313,12 +313,13 @@ sensitive, one purpose each — plus the verification story built around them.
 Saying cosign "runs on our abstraction" would be the overclaim; it runs on the
 same standard our abstraction implements, against the same token.
 
-Where each half of this is proven follows the same split the rest of the
-repository uses (§2.3 of `CLAUDE.md`): a CI run signs and verifies against a
-SoftHSM2 token created fresh for that run, which proves the mechanism end to
-end with a deliberately ephemeral trust root; signing against a durable,
-persistent token is the maintainer-verified path, and the two are never
-reported as one.
+Two signature paths exist. Every build of `main` is signed keyless by the
+pipeline: a Fulcio certificate for the workflow's GitHub OIDC identity,
+recorded in Rekor. The PKCS#11 path is proved on every publish against a
+throwaway SoftHSM2 token and a throwaway registry, and nothing it signs is
+published. The durable signature, with `image-signing-key-v1` on the
+maintainer's token, is added to release digests by hand. No published
+digest carries it yet.
 
 ---
 

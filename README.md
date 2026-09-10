@@ -122,7 +122,7 @@ different artifact, and a finding from one is invisible to the others:
 | `trivy image` | what was assembled | is the shipped image vulnerable? | yes |
 | `trivy config` + OpenTofu | what would be provisioned | is the infrastructure misconfigured? | yes |
 | trust chain | the key inventory, against an anchor in another repository | can this tree still say which key is which? | yes |
-| run verification | every signature this run made, holding no key material | are they checkable by something that did not make them? | after merge |
+| run verification | the keyless signature, both attestations and the binary bundle this run made | are they checkable from a clean checkout, for this run's exact identity? | after merge |
 
 Every check is a script in `ci/`, run the same way locally and in the
 pipeline, so a red check is reproducible without pushing again.
@@ -159,7 +159,8 @@ not an accepted one.
 ## The published image, and how to verify it
 
 A push to `main` that clears every gate publishes the service image to
-`ghcr.io/lockedwayi/multivendor-hsm-pki`. The bytes are pushed under the
+`ghcr.io/lockedwayi/multivendor-hsm-pki`, signed keyless with a CycloneDX
+SBOM attestation and a SLSA provenance attestation. The bytes are pushed under the
 moving tag `staging`, the digest is signed, and only then are
 `sha-<commit>` and, when the commit carries a release tag, `v<x.y.z>`
 applied. A successful push therefore leaves `staging`, `sha-<commit>` and
@@ -225,31 +226,42 @@ cosign verify-blob --bundle hsm-pki-server.sigstore.json \
 No release exists yet. Until one does, each run on `main` keeps the same
 three files as the `release-binary-<sha>` workflow artifact for 90 days.
 
-### The two signatures, and why only one is for you
+### The two signatures, and which one you can verify today
 
-Every published image carries a **pipeline signature**, made with a SoftHSM2
-token and keys that the run provisions for itself and destroys with the
-runner. It proves the signing mechanism works end to end over a real PKCS#11
-token — which is worth proving — and it proves *nothing whatever* about
-custody, because the key came from the same build that produced the artifact.
-**Do not verify against it.** `ci/verify-release.sh` deliberately refuses an
-image that carries only this signature, and the Kyverno policy in
-`deploy/k8s/policy/` refuses to admit one. An image whose only signature
-comes from a trust root that died with the build should not be deployable
-anywhere, including here.
+**No published image has been counter-signed yet.** Every digest on GHCR
+carries one signature, and every digest published from now on carries the
+pipeline's keyless signature: cosign obtains a short-lived certificate
+from Fulcio for the workflow run's GitHub OIDC identity and records the
+signature in Rekor. The CycloneDX SBOM attestation and the SLSA v1
+provenance attestation are made the same way, on every build of `main`.
+That is what a consumer can verify today, from a machine holding no file
+from this repository:
 
-A **release signature** is added deliberately, by the maintainer, with
-`image-signing-key-v1` on their own token
-(`ci/countersign-release.sh <digest>`). That key is listed in the inventory,
-which is signed by an offline token, whose public half lives in the other
-repository. It is the signature the table above verifies and the one
-admission enforces.
+```sh
+cosign verify \
+    --certificate-identity 'https://github.com/LockedWayi/multivendor-hsm-pki/.github/workflows/ci.yml@refs/heads/main' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+cosign verify-attestation --type cyclonedx       <same identity flags> <same ref>
+cosign verify-attestation --type slsaprovenance1 <same identity flags> <same ref>
+```
 
-CI cannot hold that key without either committing key material or exposing
-the development machine to pipeline execution, and both were rejected with
-reasons. So ordinary `main` builds are development artifacts, and releases
-are the digests a consumer is meant to pull — which is what an
-offline-ish signing key is for, rather than a gap in the automation.
+For a release tag the identity ends in `@refs/tags/v<x.y.z>`. The keyless
+signature says: this workflow, at this ref, built this digest, and Rekor
+recorded it at that time. It is not in the key inventory, so admission
+ignores it and `ci/verify-release.sh` does not accept it.
+
+The **durable path** is what releases use. The maintainer counter-signs a
+release digest with `image-signing-key-v1` on their own token and
+re-attests the SBOM and the provenance with the same key
+(`ci/countersign-release.sh <digest>`). That key is listed in the
+inventory, the inventory is signed by an offline token, and the anchor for
+that signature lives in another repository. Admission accepts only this
+signature. `ci/verify-release.sh` requires the signature and both
+attestations by a key from the inventory. No digest has this yet.
+
+CI does not hold the durable key. Holding it would mean committing key
+material or exposing the maintainer's machine to pipeline execution.
 
 ## What is verified, and how
 
@@ -310,9 +322,11 @@ SoftHSM2 token, and `CONTRIBUTING.md` has the rest.
 
 The PKCS#11 core, the CA and its two-tier hierarchy, the container and its
 Kubernetes deployment with a generated admission policy, the
-infrastructure-as-code modules, the scanning pipeline, and the signing gate
-— image and release binary signed over PKCS#11, SLSA provenance, and an
-independent verifier holding no key material — are built and running.
+infrastructure-as-code modules, the scanning pipeline, and the signing
+layer are built and running: every build of `main` is signed keyless with
+SBOM and SLSA provenance attestations, the PKCS#11 signing path is proved
+on every publish against a throwaway registry, and a release verifier
+checks the durable signature against an anchor outside this tree.
 
 In progress: authentication on the write endpoints (mTLS, using this
 platform's own CA to issue the client certificates), the key-rotation drill
