@@ -407,6 +407,32 @@ things — short CRL lifetimes, and eventually OCSP with stapling (Phase 5b)
 so freshness rides on the connection rather than on a separate fetch the
 attacker can cut.
 
+### 6.3 PIN handling: one copy is outside this code
+
+The service reads the PIN from an environment variable at the point of use
+and copies it into a `SecurePIN`, a buffer allocated with `C.malloc`. The Go
+garbage collector does not move or copy that buffer, so it can be zeroed
+after `C_Login` and the zeroing is known to reach it. The Go-heap slice the
+PIN arrived in is zeroed as well, on every path.
+
+That is not the whole story. The PIN reaches `miekg/pkcs11` v1.1.2 as a Go
+string. Its `Login` calls `C.CString`, which allocates a second C buffer,
+passes it to `C_Login`, and frees it without zeroing. That buffer is outside
+this repository's control. After a login the PIN can remain in freed C heap
+until the allocator reuses it.
+
+Two options:
+
+1. Fork the binding so that `Login` takes a `[]byte` and zeroes its C
+   buffer before freeing it. This removes the copy. It costs a fork of a
+   dependency that this repository would then maintain.
+2. Accept the residual. The window is the time between `C_Login` returning
+   and the freed memory being reused. An attacker able to read freed C
+   heap inside the process is A3, and A3 already holds an authenticated
+   token (§5). The residual adds nothing to what A3 can do.
+
+The residual is accepted. The fork is not implemented.
+
 ---
 
 ## 7. Non-goals
