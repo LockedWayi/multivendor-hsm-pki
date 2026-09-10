@@ -8,7 +8,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 - **The pinning claim in `ci.yml` was false in six places, and nothing
-  checked it.** The header has asserted since Phase 5.1 that every
+  checked it.** The header has asserted since the first gate landed that every
   third-party reference is pinned to an immutable identifier. It was not:
   `ci/softhsm2-dev.Dockerfile` ran on a *tag*, and four scripts reached for a
   bare `alpine:3` while `ci/scanner-pins.sh` sat beside them pinning alpine by
@@ -24,13 +24,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   not compiled with.
 
   `ci/check-image-pins.sh` runs in the suite gate, so the claim fails the
-  build when it stops being true — proven by un-pinning each class in turn
+  build when it stops being true, proven by un-pinning each class in turn
   and watching it go red.
 
 ### Added
 - **SLSA v1.0 provenance, signed by the same HSM-held key and checked for
-  what it says** (Phase 5.9). `cosign attest --type slsaprovenance1` over the
-  same PKCS#11 path as the image signature — no new keys, no new
+  what it says**. `cosign attest --type slsaprovenance1` over the
+  same PKCS#11 path as the image signature, no new keys, no new
   infrastructure. `ci/generate-provenance.sh` **refuses to run outside a
   pipeline** rather than defaulting the fields: provenance is a claim about a
   build environment, and a predicate invented on a laptop signs exactly as
@@ -41,14 +41,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   published key vouch for this statement* (cosign), and *does the statement
   describe this image and this commit* (the in-toto statement is parsed
   here, not taken on cosign's word). Measured: an attestation whose recorded
-  source commit does not match is refused **after** its signature verifies —
+  source commit does not match is refused **after** its signature verifies ,
   a correctly signed claim about a different artifact is worse than no claim,
   since it reads as provenance for this one.
 - **The release binary is signed, and every signature a run makes is
-  re-checked by a job holding no key material** (Phase 5.9). The binary is
-  *extracted from the image that was just signed* rather than rebuilt — a
+  re-checked by a job holding no key material**. The binary is
+  *extracted from the image that was just signed* rather than rebuilt, a
   second `go build` would produce a second binary and the signature would
-  cover bytes that are not the ones shipping — and signed with
+  cover bytes that are not the ones shipping, and signed with
   `artifact-signing-key-v1`, never the image key.
 
   The `verifyrun` job then re-derives every answer with no token, no PIN and
@@ -59,8 +59,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   than being handed it, because a verifier told which digest to check is
   verifying the signer's claim rather than what a consumer would pull.
 
-  What it proves is bounded and stated: not custody — the inventory it reads
-  was signed by the same run — but the thing a signer cannot prove about
+  What it proves is bounded and stated: not custody, the inventory it reads
+  was signed by the same run, but the thing a signer cannot prove about
   itself, that its signatures are checkable by something that did not make
   them. A wrong key published, a bundle naming a different digest, or a
   format only cosign's own writer understands each passes in the signing job
@@ -72,12 +72,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   measured rather than labelled), and a PKCS#11 key must be refused in verify
   mode.
 - **A published image anyone can verify, without trusting this repository**
-  (Phase 5.9). `ci/verify-release.sh` walks a chain whose root is deliberately
-  not in this tree: the anchor is fetched from `LockedWayi/hsm-pki-trust-anchor`
+  `ci/verify-release.sh` walks a chain whose root is not in this tree: the anchor is fetched from `LockedWayi/hsm-pki-trust-anchor`
   (pinned by commit *and* content digest, failing closed rather than falling
   back to `docs/keys/`), the inventory is verified against it **by openssl**
   rather than by code shipped here, and the image key is read *out of* the
-  verified inventory instead of being hardcoded — so a rotation keeps old
+  verified inventory instead of being hardcoded, so a rotation keeps old
   signatures verifiable through the `verify-only` state.
 
   This exists because the obvious thing proves nothing. An inventory, its
@@ -95,7 +94,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   inputs. No pull-request review is required on either repository.
 - **The two signatures are now distinguished, and only one is for consumers.**
   Every published image carries the pipeline's *ephemeral* signature, which
-  proves the PKCS#11 mechanism end to end and nothing about custody — the key
+  proves the PKCS#11 mechanism end to end and nothing about custody, the key
   came from the same build as the artifact. `ci/verify-release.sh` refuses an
   image carrying only that, as admission does. A release gets a durable
   counter-signature from the maintainer's own token
@@ -109,9 +108,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   outright. A verifier that could sign is not independent, whatever the job is
   called.
 - **The service image is built, scanned, pushed and signed on every green
-  merge to `main`** (Phase 5.6), to `ghcr.io/lockedwayi/multivendor-hsm-pki`,
+  merge to `main`**, to `ghcr.io/lockedwayi/multivendor-hsm-pki`,
   with a signed CycloneDX SBOM attestation bound to the digest. Tagged
-  `sha-<commit>` and `v<x.y.z>` only — no `latest`, no moving `main`, because
+  `sha-<commit>` and `v<x.y.z>` only, no `latest`, no moving `main`, because
   the digest is the identity and a tag is a pointer somebody can move. The
   registry credential is the run's own `GITHUB_TOKEN`, so no long-lived
   registry password is stored anywhere.
@@ -132,35 +131,35 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     design. See the README section "The published image, and what its
     signature means".
 - **A coverage badge in the README that CI verifies rather than publishes**
-  (Phase 5.1). `docs/coverage.svg` is committed like a lockfile;
+  `docs/coverage.svg` is committed like a lockfile;
   `COVERAGE_BADGE_CHECK=1` recomputes it in CI and fails on a mismatch. The
-  alternatives — a workflow with `contents: write` pushing to the default
-  branch, or a token and a third-party badge service — both add a
+  alternatives, a workflow with `contents: write` pushing to the default
+  branch, or a token and a third-party badge service, both add a
   credential to a pipeline whose subject is supply-chain provenance. The
   figure rounds down, because a coverage badge that rounds up overstates.
 - **Go module and build caching in CI**, mounted into the dev container
   rather than left on the runner where the container could not see it.
 - **The OpenTofu tree is formatted, validated and scanned in CI**
-  (Phase 5.4). `ci/terraform-scan.sh` existed from Phase 3 and now runs as a
-  job, extended with `tofu fmt -check` and `tofu validate` — not security
-  checks themselves, but what makes the security checks worth reading, since
+  `ci/terraform-scan.sh` existed before the pipeline and now runs as a
+  job, extended with `tofu fmt -check` and `tofu validate`, not security
+  checks themselves, but what makes the security checks meaningful, since
   `trivy config` produces no findings for a file it cannot parse and an
   invalid configuration is otherwise indistinguishable from a clean one.
-  `tofu plan` is deliberately absent until there is a deploy target to plan
+  `tofu plan` is absent until there is a deploy target to plan
   against.
-- **Semgrep as a blocking SAST gate** (Phase 5.2), `ci/scan-code.sh` with
+- **Semgrep as a blocking SAST gate**, `ci/scan-code.sh` with
   `p/golang` and `p/security-audit`. It reads what was *written* here, which
   is the one question none of the other scanners ask. The three pre-existing
-  findings were legitimate and already explained in the code — RFC 5280
+  findings were legitimate and already explained in the code, RFC 5280
   §4.2.1.2's SHA-1 subject key identifier, and the two `unsafe` blocks that
-  keep a PIN in C-heap memory the collector cannot copy — and are suppressed
+  keep a PIN in C-heap memory the collector cannot copy, and are suppressed
   per rule and per line, never by ruleset or path.
 - **Dependency, reachability and image scanning as pipeline gates**
-  (Phase 5.3). `ci/scan-deps.sh` runs `trivy fs` and `govulncheck`;
+  `ci/scan-deps.sh` runs `trivy fs` and `govulncheck`;
   `ci/scan-image.sh` (which already existed) is wired into the workflow for
   the image and its SBOM. The two dependency scanners are kept because they
-  answer different questions — whether a vulnerable version is present at
-  all, and whether this code reaches it — and a pipeline with only one of
+  answer different questions, whether a vulnerable version is present at
+  all, and whether this code reaches it, and a pipeline with only one of
   them either cries wolf or misses a library until the day somebody calls
   it.
 - **One reviewed vulnerability allowlist with mandatory expiry dates**,
@@ -174,7 +173,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   forever. Both measured, both now refused.
 - **`.github/dependabot.yml`** for Go modules, workflow actions and both
   Dockerfile directories. Dependabot alerts and automated security fixes
-  were also enabled on the repository — unlike branch protection, they are
+  were also enabled on the repository, unlike branch protection, they are
   available on a private repository on the free plan.
 
 ### Changed
@@ -195,21 +194,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 - **The dependency gate could be turned red by the network rather than by a
-  vulnerability** (Phase 5.3). `ci/scan-deps.sh` reaches out twice before it
-  analyses anything — once for `govulncheck` itself, once for the module
-  graph — and neither call was retried. A module-proxy reset took `main` red
+  vulnerability**. `ci/scan-deps.sh` reaches out twice before it
+  analyses anything, once for `govulncheck` itself, once for the module
+  graph, and neither call was retried. A module-proxy reset took `main` red
   on a tree whose PR run had been green ninety seconds earlier. Its message
   is the interesting part: govulncheck's package loader has no retry, so a
   dropped connection is reported as `could not import modernc.org/sqlite
   (invalid package name: "")`, which reads like a broken dependency rather
   than a broken socket. The two network steps now retry with backoff and the
-  module cache is populated in its own step; the scan itself is deliberately
+  module cache is populated in its own step; the scan itself is
   not retried, because retrying an answer until it changes is how a gate
   becomes a suggestion.
 - **`reissue-intermediate` checked the root's authority at the wrong
   instant.** `checkRootMaySign` ran only inside `validate()`, against its
   own `time.Now()`, while the certificate's `NotAfter` is computed later
-  from a different one — with an HSM key generation, a token login and an
+  from a different one, with an HSM key generation, a token login and an
   object search in between. The lifetime approved was therefore measured
   from an instant strictly earlier than the one the certificate carries, so
   a root close to its own expiry could produce an intermediate that
@@ -234,9 +233,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   process, a killed process runs no `t.Cleanup`, and the objects survive to
   fail a *different* package's next run through the deterministic RNG.
 
-Phase 5 (CI/CD security gates) is next.
+CI/CD security gates are next.
 
-## [0.1.0] — 2026-09-05
+## [0.1.0], 2026-09-05
 
 First tagged release: Phases 1–4. A vendor-agnostic PKCS#11 layer with two
 backends behind one interface, a two-tier CA whose root is structurally
@@ -252,27 +251,27 @@ that the verified-claim split requires and the tag convention formats.
 - **Routine CA rotation exists in code, not only in prose**
   (`internal/ca/reissue.go`, `hsm-pki-keytool reissue-intermediate`).
   the key lifecycle has always said the hierarchy rotates by "re-issuing the
-  intermediate (routine)"; until now no code path did that — `RunCeremony`
+  intermediate (routine)"; until now no code path did that, `RunCeremony`
   generates both tiers in one run, so the only way to get a new
   intermediate was to mint a new root, which is the *exceptional* case and
   rebuilds every trust store that holds it. `reissue-intermediate` signs a
   new intermediate, over a new key, under the **existing** root, and
   cannot generate a root at all: a root key it cannot find is a hard
-  error, never a fresh key pair. The previous intermediate stays valid —
+  error, never a fresh key pair. The previous intermediate stays valid ,
   the overlap is the transition window, not an oversight. Verified on
-  **both backends** — SoftHSM2 with `openssl verify` accepting both
+  **both backends**, SoftHSM2 with `openssl verify` accepting both
   intermediates against the one root, and ProtectServer with all five
   rotation subtests passing and no divergence in the label-lookup path
   . Per the verified-claim split the
   ProtectServer half is maintainer-verified, never CI-verified.
 - **The service image** (`deploy/docker/Dockerfile`): multi-stage, cgo-enabled
-  build onto a digest-pinned `distroless/cc` base — 53.8 MB, no shell, no
+  build onto a digest-pinned `distroless/cc` base, 53.8 MB, no shell, no
   package manager, non-root UID 65532, read-only-root-filesystem compatible.
-  `cmd/hsm-pki-keytool` is deliberately not in it: it is the only binary here
+  `cmd/hsm-pki-keytool` is not in it: it is the only binary here
   that can reach a root token.
 - **`hsm-pki-server -healthcheck`**, a self-probe against the process's own
   `/healthz`, so the image can carry a `HEALTHCHECK` without gaining a shell
-  or an HTTP client. Liveness only — readiness touches the HSM, and a failed
+  or an HTTP client. Liveness only, readiness touches the HSM, and a failed
   health check causes a restart.
 - **`deploy/docker/run-local.sh`**: the whole platform on a machine with no
   HSM and no vendor SDK. Initializes two SoftHSM2 tokens, runs the real root
@@ -286,25 +285,25 @@ that the verified-claim split requires and the tag convention formats.
   failing closed when the token declined the template. No extractable
   option exists: a supply-chain key is answered by rotation, not by a copy.
 - ****: the seven defects that earned the rules in
-  the engineering contract — what was true, why it survived, which rule it produced.
+  the engineering contract, what was true, why it survived, which rule it produced.
   Five of the seven survived a green test suite.
 - **`ci/scan-image.sh`**: vulnerability gate and SBOM generation for the
   service image, with a pinned scanner. Exits non-zero on any HIGH or
-  CRITICAL, and is verified to do so against a deliberately outdated image
+  CRITICAL, and is verified to do so against an outdated image
   rather than only against a clean one. Baseline for the service image:
   zero HIGH/CRITICAL, 11 OS packages, 25 SBOM components.
 - **Kubernetes manifests** (`deploy/k8s`): base plus a K3s/SoftHSM2 dev
   overlay, running on a real cluster. Single replica with a `Recreate`
-  strategy — a correctness constraint, not a capacity choice, since the CRL
+  strategy, a correctness constraint, not a capacity choice, since the CRL
   is cached per process. No RBAC at all, because the service never calls the
-  Kubernetes API. A deliberately insecure pod is refused by Pod Security
+  Kubernetes API. An insecure pod is refused by Pod Security
   Admission, with the refusal captured in the repository.
 
 ### Changed
 - **The supply-chain signing keys get their own token**, separate from the
   CA intermediate's. PKCS#11 authenticates a token rather than a key, so
   co-locating them would have meant a compromise of the CA daemon also
-  yielding image and release signing — purpose separation's guarantee true
+  yielding image and release signing, purpose separation's guarantee true
   against mistakes and false against the attacker it names. The
   architecture diagram now draws three tokens.
 - **the engineering contract keeps its rules and hands the narratives to
@@ -317,13 +316,13 @@ that the verified-claim split requires and the tag convention formats.
   is mounted at run time, so the backend CI exercises and the backend
   production uses are delivered by one mechanism rather than two. The image
   therefore contains no key store, and the same image runs against SoftHSM2
-  and ProtectToolkit with only `config.yaml` changing — verified both ways.
+  and ProtectToolkit with only `config.yaml` changing, verified both ways.
   The cost, recorded rather than glossed: the image cannot start alone, which
   is what `run-local.sh` above exists to answer.
 
 ### Fixed
 - **A deleted k3d cluster took the CA store with it**, reintroducing the
-  Phase 3b.3 regression — a revoked certificate valid again — at the
+  regression in which a revoked certificate becomes valid again, at the
   deployment level. Host-backing the provisioner's directory did *not* fix
   it: local-path keys each volume to its PVC's UID, so a rebuilt cluster
   provisioned an empty one beside the full one. The store now uses a
@@ -332,7 +331,7 @@ that the verified-claim split requires and the tag convention formats.
 - **`FindObjects` silently truncated every search to 50 objects.** The
   pagination loop broke on the boolean `miekg/pkcs11` returns, which that
   library documents as "deprecated and should be ignored" and computes as
-  `ulCount > max` — a condition `C_FindObjects` can never satisfy. Every
+  `ulCount > max`, a condition `C_FindObjects` can never satisfy. Every
   search therefore returned at most one batch, with no error and a
   well-formed short list, which is invisible on a token holding fewer than
   50 objects. It now loops until a batch comes back empty.
@@ -341,7 +340,7 @@ that the verified-claim split requires and the tag convention formats.
 
 ### Added
 - **`VendorAdapter.DestroyObject`** and per-run object cleanup in the test
-  harnesses, pulled forward from Phase 4.8. A full both-backend run left
+  harnesses. A full both-backend run left
   +215 objects on a persistent token before this and +23 after. It takes an
   object handle rather than a label, because `CKA_LABEL` cannot identify an
   object.
@@ -350,7 +349,7 @@ that the verified-claim split requires and the tag convention formats.
 - **Private keys were generated with `CKA_SENSITIVE` explicitly false, and on
   ProtectToolkit 7.3.3 the private scalar was readable in plaintext by any
   authenticated session.** `KeyPairRequest` carried a `Sensitive` field no
-  caller ever set, so the zero value went into every template — every CA key
+  caller ever set, so the zero value went into every template, every CA key
   this platform had ever created, root included. PKCS#11 permits a token to
   reveal a non-sensitive private key through `C_GetAttributeValue`, and
   `CKA_EXTRACTABLE=false` does not cover that: it governs `C_WrapKey`, a
@@ -358,7 +357,7 @@ that the verified-claim split requires and the tag convention formats.
   Measured on both backends, which disagreed: SoftHSM2 2.6.1 refuses the read
   (`CKR_ATTRIBUTE_SENSITIVE`) even though the attribute permits it, while
   ProtectToolkit returned all 32 bytes. Both are conformant, so the platform's
-  central claim — private keys never leave the HSM — was false on the vendor
+  central claim, private keys never leave the HSM, was false on the vendor
   backend and true on the one CI runs, with a green suite throughout.
   Fixed by removing the choice rather than correcting the call sites:
   `GenerateKeyPair` now forces `CKA_SENSITIVE=true` and the field is gone.
@@ -377,27 +376,27 @@ that the verified-claim split requires and the tag convention formats.
   commands ran against SoftHSM2 alone. They now run against every configured
   backend as a subtest per vendor: a full run executes 59 vendor-parameterised
   subtests on each of SoftHSM2 and ProtectServer, up from 12.
-  Adding nShield and Luna (Phase 7) is one registry entry and an adapter.
-- **`docs/threat-model.md`** (Phase 3b sub-task 3b.5): assets ordered by what
+  Adding nShield or Luna is one registry entry and an adapter.
+- **`docs/threat-model.md`**: assets ordered by what
   their loss costs, six trust boundaries, eight attacker classes, and for
   each one what a compromise yields *and* what it still does not. The
   centrepiece is the compromised-service-process case, since that is the
   compromise the two-tier hierarchy was built against. Seven explicit
-  non-goals, including the two that matter most — the online tier is not
+  non-goals, including the two that matter most, the online tier is not
   defended against host root, and ceremonies in this repository have no
   separation of duties.
-  It states plainly that `POST /certificates` has no authentication until
-  Phase 5.5, so the deployment boundary is currently the authentication
+  It states plainly that `POST /certificates` has no authentication
+  yet, so the deployment boundary is currently the authentication
   boundary.
   Two findings came out of writing it: that a PKCS#11 token login
   authenticates a *token* and not a key, so purpose-separated signing keys
   need separated tokens to deliver what purpose separation claims (now a
-  "decide before provisioning" item in Phase 4.8); and that the revocation
+  "decide before provisioning" item); and that the revocation
   channel's *availability* is a security property, since a blocked CRL fetch
   and an unparseable CRL produce the same "proceed anyway" at the relying
   party.
 - **CRL distribution point and AIA CA-Issuers extensions on every issued
-  certificate** (`internal/ca`, Phase 3b sub-task 3b.4). A leaf now states
+  certificate** (`internal/ca`). A leaf now states
   where its revocation status is published (`<ca.base_url>/crl`) and where
   the certificate that signed it can be fetched
   (`<ca.base_url>/intermediate.crt`), so a relying party holding only the
@@ -407,13 +406,13 @@ that the verified-claim split requires and the tag convention formats.
   `(*ca.CA).Issue` **fails closed** when it has no distribution points
   (`ca.ErrNoDistributionPoints`), checked before the CSR is parsed: an
   extension is fixed by the signature, so a certificate issued without a CDP
-  can never gain one — it can only be revoked into a CRL nobody was told to
+  can never gain one, it can only be revoked into a CRL nobody was told to
   fetch. No OCSP responder URL is written anywhere, and `ca.LeafDistribution`
-  has no field for one, until the responder exists in Phase 5b.
+  has no field for one, until a responder exists.
 - `GET /intermediate.crt` (`internal/api`): the service's own intermediate
   certificate, which is what every leaf's AIA CA-Issuers URL now points at.
   Without it the platform would have shipped certificates naming an endpoint
-  that 404s — the same fail-honest violation it refuses for OCSP, one tier
+  that 404s, the same fail-honest violation it refuses for OCSP, one tier
   down. A server constructed without an issuer answers 503 rather than an
   empty 200, since a successful empty response is indistinguishable from a
   zero-length certificate to whoever fetched it.
@@ -427,7 +426,7 @@ that the verified-claim split requires and the tag convention formats.
   `LogoutToken` / `TokenLoggedIn`. The service authenticates its token once
   at startup and stays authenticated until shutdown; sessions opened
   afterward inherit that authentication and perform no login of their own.
-  This fixes a real defect — PKCS#11 authenticates a token for the whole
+  This fixes a real defect, PKCS#11 authenticates a token for the whole
   application, not per session, so the previous login-and-logout-around-
   every-operation pattern broke with two requests in flight (the second
   `C_Login` returned `CKR_USER_ALREADY_LOGGED_IN`; the first caller's
@@ -435,9 +434,9 @@ that the verified-claim split requires and the tag convention formats.
   calls could not fix it, because the interference happened between them.
   Reproduced identically on SoftHSM2 2.6.1 and ProtectToolkit 7.3.3, which
   is what established it as the spec's model rather than a vendor bug; every
-  test through Phase 2 was sequential, which is why it survived that long.
+  earlier test was sequential, which is why it survived that long.
   The anchor session is held outside the janitor's tracking so it can never
-  expire — an expiring anchor would drop authentication out from under
+  expire, an expiring anchor would drop authentication out from under
   in-flight requests. Verified with 10 concurrent `POST /certificates`
   against the maintainer's real ProtectServer token: all 201, all
   `openssl verify` OK, all serials distinct, zero login errors.
@@ -447,12 +446,12 @@ that the verified-claim split requires and the tag convention formats.
   them. Previously these were only reached indirectly through
   `internal/ca` / `internal/api` tests, which is why `internal/pkcs11`'s
   own coverage profile showed 0.0% on all three despite the anchor-login
-  fix above being otherwise fully verified — found during a maintainer
-  double-check of the whole phase before starting Phase 3. Raised
+  fix above being otherwise fully verified, found during a maintainer
+  double-check before the CA work started. Raised
   `internal/pkcs11`'s package coverage from 74.7% to 82.8% and
   `ci/coverage.sh`'s overall figure from 73.2% to 77.0%.
-- Failure-path coverage completing Phase 2: `TestSigner_Sign_ExpiredSessionFailsClosed`
-  (a white-box test — `Signer.Sign` opens its own session per call, so an
+- Failure-path coverage for the signer: `TestSigner_Sign_ExpiredSessionFailsClosed`
+  (a white-box test, `Signer.Sign` opens its own session per call, so an
   already-expired budget can only be forced after a normal, successful
   construction, not from outside the package) and
   `TestIssueCertificate_AdapterErrorDoesNotLeakDetail` (an adapter-level
@@ -465,7 +464,7 @@ that the verified-claim split requires and the tag convention formats.
   (`request_id`, `method`, `path`, `status`, `duration_ms`).
 - `POST /certificates/{serial}/revoke` and `GET /crl` (`internal/api`,
   `(*ca.CA).BuildCRL`): revocation is idempotent (re-revoking succeeds
-  without error — a one-way state transition has no security effect from
+  without error, a one-way state transition has no security effect from
   being requested twice) and 404s on an unknown serial. The CRL is signed
   through the same HSM-backed `Signer` as certificate issuance, cached
   until its configured `nextUpdate` (`ca.crl_validity_hours`), and
@@ -474,21 +473,21 @@ that the verified-claim split requires and the tag convention formats.
 - `POST /certificates` (`internal/api`): accepts a PEM or DER CSR and
   returns a signed certificate, or a 4xx with a specific reason for a
   malformed body, an unparseable CSR, or any rejection `internal/ca.CA.Issue`
-  itself raises (bad signature, empty subject, disallowed key type) — never
+  itself raises (bad signature, empty subject, disallowed key type), never
   partially processed, and never recorded in `internal/api.Registry` on
   rejection. A 64 KiB body limit and a 15s request timeout are enforced at
   the HTTP transport layer (`http.MaxBytesReader`, `http.TimeoutHandler`);
   the timeout cannot be threaded into the underlying HSM call because
   `crypto.Signer`, the standard interface `Signer` implements, has no
-  context parameter — documented as a real, stated constraint rather than
+  context parameter, documented as a real, stated constraint rather than
   papered over. Verified as a live process: `curl` against a running
   `cmd/hsm-pki-server` with real `openssl req`-generated CSRs, not only
   `httptest`.
 - `internal/ca.CA`, `internal/ca.Bootstrap`: CA domain logic on top of the
-  Phase 2 signer. `Bootstrap` decides between loading an existing CA and
-  creating a new one by checking two independent signals — an HSM key under
+  signer. `Bootstrap` decides between loading an existing CA and
+  creating a new one by checking two independent signals, an HSM key under
   `ca.key_label` and a certificate file at `ca.cert_path` (new config
-  fields) — and refuses to guess when only one is present, rather than risk
+  fields), and refuses to guess when only one is present, rather than risk
   signing under a mismatched key or duplicating a label meant to be unique.
   `Issue` validates a CSR's signature, subject, and key type (EC
   P-256/P-384/P-521 or RSA ≥ 2048 bits) before building a certificate;
@@ -497,7 +496,7 @@ that the verified-claim split requires and the tag convention formats.
   `crypto/x509` round trip.
 - `internal/ca.Signer`: a `crypto.Signer` backed by an HSM-resident EC key
   pair, reached through `VendorAdapter`. Every `Sign` call opens its own
-  session and closes it again — it never holds one
+  session and closes it again, it never holds one
   for its lifetime (`pkcs11.Session` fails closed on idle timeout / max TTL,
   so a service-lifetime session would eventually start failing every call
   for reasons unrelated to the request). `pkcs11.DecodeECPoint` moved from a
@@ -505,10 +504,10 @@ that the verified-claim split requires and the tag convention formats.
   length bug the test-only version had for any EC point ≥128 bytes.
   Verified: `x509.CreateCertificate` produces a certificate over a
   SoftHSM2-resident key, and `cert.CheckSignatureFrom` accepts it.
-- `cmd/hsm-pki-server`, `internal/config`, `internal/api`: the Phase 2 service
+- `cmd/hsm-pki-server`, `internal/config`, `internal/api`: the service
   skeleton. `internal/config` loads `config.yaml`, validates the selected
   adapter and its module path/workspace label/PIN-env-var name, and fails
-  fast on an unknown adapter or a PIN environment variable that isn't set —
+  fast on an unknown adapter or a PIN environment variable that isn't set ,
   before any HSM call is attempted. The PIN's value itself is never held on
   the `Config` struct; it is read once, at the point of use. `main.go`
   proves the configured adapter can actually open a session and log in
@@ -527,27 +526,27 @@ that the verified-claim split requires and the tag convention formats.
   SoftHSM2-backed test suite runs the same way on any machine or in CI.
 - `internal/pkcs11/protectserver.go`: `ProtectServerAdapter`, a full,
   independently-written second implementation of `VendorAdapter` against
-  Thales ProtectToolkit-C. Every operation in the interface — session
+  Thales ProtectToolkit-C. Every operation in the interface, session
   lifecycle, key generation, sign/verify, encrypt/decrypt, wrap/unwrap,
-  generate random, find/get-attributes, close — is confirmed working
+  generate random, find/get-attributes, close, is confirmed working
   against the maintainer's own ProtectToolkit installation by the
   conformance suite below.
 - `internal/pkcs11/conformance_test.go`: `TestConformance`, one behavioral
   suite parameterized over a `VendorAdapter` factory, run against both
   backends. SoftHSM2's subtests run whenever its module is present (CI);
   ProtectServer's run only when `PROTECTSERVER_MODULE` is set and skip
-  cleanly otherwise — the suite stays green either way. Every test vector is
-  a real digest, plaintext, or key, never a degenerate stand-in — the earlier
+  cleanly otherwise, the suite stays green either way. Every test vector is
+  a real digest, plaintext, or key, never an all-zero stand-in; the earlier
   false "ProtectServer cannot verify" divergence (below) came from exactly
   that shortcut.
 -: manual setup for the Thales ProtectToolkit
-  backend — module paths, user-token initialization, and why this path is
+  backend, module paths, user-token initialization, and why this path is
   local-only and never in CI.
 - `ci/coverage.sh` and `ci/coverage-exclude.txt`: the coverage floor,
   computed over CI-reachable code only. `ProtectServerAdapter` now contains
   real, non-trivial logic that CI structurally cannot execute (no
   proprietary SDK), so a blanket `go test ./... -cover` no longer measures
-  what it used to — it conflates "untested" with "untestable here." The
+  what it used to, it conflates "untested" with "untestable here." The
   excluded files are validated instead by the conformance suite passing
   against ProtectToolkit-C software emulation, and that claim stays labelled maintainer-verified,
   never blended into a CI-reported percentage.
@@ -557,8 +556,8 @@ that the verified-claim split requires and the tag convention formats.
   mechanisms) that are easy to write and hard to notice. Every adapter reads
   it before being written and adds to it afterwards.
 - First cross-vendor comparison run: pointing the SoftHSM2 adapter at the
-  ProtectToolkit module showed the entire exercised surface — sessions, login,
-  key generation, signing, verification, object lookup, attributes —
+  ProtectToolkit module showed the entire exercised surface, sessions, login,
+  key generation, signing, verification, object lookup, attributes ,
   transfers unchanged. One narrow divergence recorded: ProtectToolkit's
   `C_Verify` rejects a signature over an all-zero digest that its own
   `C_Sign` produced, where SoftHSM2 accepts it. Benign, since a real digest is
@@ -568,31 +567,29 @@ that the verified-claim split requires and the tag convention formats.
   stated as the platform's single signing foundation rather than only the CA's
   key store: certificates, container images, and release artifacts are each
   signed by their own HSM-held key over the same custody boundary. Recorded as
-  a non-negotiable rule in purpose separation (three purpose-separated keys —
-  `ca-root-key`, `image-signing-key`, `artifact-signing-key` — never
+  a non-negotiable rule in purpose separation (three purpose-separated keys ,
+  `ca-root-key`, `image-signing-key`, `artifact-signing-key`, never
   interchangeable, fail-closed on anything unsigned) and explained in
-  under "The signing layer: one core, three purposes",
+  `docs/architecture.md` under "The signing layer: one core, three purposes",
   with the two design decisions behind it: purpose-separated keys rather than
   one platform key, and cosign rather than a first-party signing tool.
-  The delivery checklist follows the dependency line:
-  phase-4-container-k8s.md` gains 4.8 (key provisioning through the Phase 1
-  core via `cmd/hsm-pki-keytool`), 4.9 (release-artifact signing with
-  `cosign sign-blob` over PKCS#11, cross-checked independently in Go with
-  `crypto/ecdsa`), and 4.10 (image signing by digest, verified at admission by
-  the Kyverno installed in 4.7); gains 5.9,
-  which turns all of it into a blocking pipeline gate.
+  The delivery order follows the dependency line: key provisioning through
+  the PKCS#11 core via `cmd/hsm-pki-keytool`, then release-artifact signing
+  with `cosign sign-blob` over PKCS#11 (cross-checked in Go with
+  `crypto/ecdsa`), then image signing by digest verified at admission by
+  Kyverno, then the blocking pipeline gate.
   Two facts established by reading cosign's own source rather than assuming
   them, and recorded where they will be needed: PKCS#11 support sits behind
   cosign's `pkcs11key` build tag, so the `pivkey-pkcs11key` release build is
   required and the default binary cannot open a token at all; and cosign opens
   the token through its own PKCS#11 binding, not through this repository's
-  `VendorAdapter` — so what the CA path and the signing path share is the token
+  `VendorAdapter`, so what the CA path and the signing path share is the token
   and the standard, not our Go code, and the documentation says exactly that
   instead of implying more.
 
 ### Changed
 - **Breaking (API, `internal/api`):** the artifacts behind the URLs embedded
-  in certificates are served as **DER**, not PEM — `/root.crt`,
+  in certificates are served as **DER**, not PEM, `/root.crt`,
   `/root.crl` and `/intermediate.crt`, under `application/pkix-cert` and
   `application/pkix-crl` (RFC 2585 §3). `api.RootArtifacts` carries
   `CertDER`/`CRLDER` accordingly. PEM remains the on-disk format the
@@ -601,7 +598,7 @@ that the verified-claim split requires and the tag convention formats.
   rather than a preference.
 - **Breaking (config):** `ca.base_url` is now required. Defaulting it, or
   omitting the extensions when it is unset, would mean the service silently
-  issues certificates whose revocation cannot be discovered — and would do so
+  issues certificates whose revocation cannot be discovered, and would do so
   most readily in exactly the deployment that forgot to configure it.
 - **Breaking (API, `internal/ca`):** `NewCA` takes a fourth argument, a
   `ca.LeafDistribution`, and `ca.LoadIntermediateParams` gains a
@@ -611,28 +608,25 @@ that the verified-claim split requires and the tag convention formats.
 - `internal/pkcs11/base.go`: the shared PKCS#11 plumbing (`pkcs11Adapter`)
   extracted from `SoftHSM2Adapter` and `ProtectServerAdapter` now that both
   have been run against ProtectToolkit-C 7.3.3 software emulation. Every operation the conformance
-  suite exercises turned out to need zero vendor-specific code on those two implementations — the one
+  suite exercises turned out to need zero vendor-specific code on those two implementations, the one
   real divergence found (an all-zero-digest `Verify` rejection, ProtectServer
   only) is HSM behavior, not adapter logic, so it stays a documented fact in
   `protectserver.go` rather than a branch. `SoftHSM2Adapter` and
   `ProtectServerAdapter` are now each a named type embedding
-  `*pkcs11Adapter` plus a constructor. Phase 1 sub-task 1.8; completes
-  Phase 1.
-- Phase files now carry a `Sub-tasks` checklist with observable **Done when**
-  criteria, so progress mid-phase is readable from the document rather than
-  inferred from commit history. All seven phases are broken down; where a
-  choice is the maintainer's to make, it is recorded as an explicit
-  "Decide before starting" item rather than defaulted silently.
-- the engineering contract gained the tracking discipline this depends on: discovered
-  work — prerequisites, workarounds, defects found in passing, work belonging
-  to a later phase — is added to the relevant checklist rather than silently
-  absorbed, and a decision the agent cannot make blocks its sub-task rather
-  than the phase.
+  `*pkcs11Adapter` plus a constructor.
+- The planning files in the private repository now carry a `Sub-tasks`
+  checklist with observable **Done when** criteria, so progress is readable
+  from the document rather than inferred from commit history. Where a choice
+  is the maintainer's to make, it is recorded as an explicit "Decide before
+  starting" item rather than defaulted silently.
+- The engineering contract gained the tracking discipline this depends on:
+  discovered work (prerequisites, workarounds, defects found in passing) is
+  added to the relevant checklist rather than silently absorbed.
 - ProtectServer environment prepared: Admin token PINs initialized and a
-  labelled user token created on slot 0. now
+  labelled user token created on slot 0. The private vendor guide now
   documents the sequence that actually works, including the mid-run label
   prompt that is easy to answer with a PIN by mistake.
-- Phase 1 scope now includes a second, real-vendor adapter (ProtectServer)
+- The PKCS#11 core now includes a second vendor adapter (ProtectServer)
   alongside SoftHSM2, and its acceptance criteria are split into CI-verifiable
   and maintainer-verified halves so a reader can tell which claims an automated
   run backs.
@@ -646,7 +640,7 @@ that the verified-claim split requires and the tag convention formats.
   distribution point.** `/root.crl` served PEM, and a client following a CRL
   distribution point expects a single DER object (RFC 5280 §4.2.1.13,
   RFC 2585 §3). Measured against OpenSSL 3.x, the PEM body fails with
-  "No supported data to decode. Input type: DER" — which a verifier is most
+  "No supported data to decode. Input type: DER", which a verifier is most
   likely to treat as "revocation unavailable" and carry on past. This
   affected the one channel by which anyone learns the *intermediate* has
   been revoked, and the URL was fixed by the offline root at ceremony time.
@@ -660,7 +654,7 @@ that the verified-claim split requires and the tag convention formats.
   CRL. `basicConstraints` presence is now asserted explicitly alongside it.
 - **Neither the intermediate nor the issuer was checked against its own
   validity window.** `ca.LoadIntermediate` refuses an expired or not-yet-valid
-  certificate at startup and `ca.CA.Issue` re-checks per issuance — a service
+  certificate at startup and `ca.CA.Issue` re-checks per issuance, a service
   that started before the expiry is still running after it. New sentinel
   `ca.ErrIssuerNotValid`.
 - **A leaf could be issued that outlives its issuer** (`ca.ErrValidityExceedsIssuer`).
@@ -673,14 +667,14 @@ that the verified-claim split requires and the tag convention formats.
   clamped to the intermediate's `NotAfter`.
 - **The service resolved its HSM workspace by first label match.**
   PKCS#11 places no uniqueness constraint on `CKA_LABEL`, so the driver's
-  enumeration order decided which token held the CA key — possibly
+  enumeration order decided which token held the CA key, possibly
   differently on the next boot. It now lists the colliding
   serials and refuses. `cmd/hsm-pki-keytool` already behaved this way.
 - **The ceremony's root CRL carried no clock-skew backdate** while the
   certificates signed beside it did, so a verifier with a trailing clock
   could fetch the root CDP and find a CRL that is not valid yet.
 - **A multi-block PEM file was silently reduced to its first block**, in
-  both `ca.intermediate_cert_path` and the root artifact paths — a chain
+  both `ca.intermediate_cert_path` and the root artifact paths, a chain
   pasted in by an operator would have had file order decide which
   certificate the CA ran as. Both reject now, and the root artifacts are
   parsed at startup rather than trusted for having a well-formed envelope.
@@ -695,7 +689,7 @@ that the verified-claim split requires and the tag convention formats.
   and a zero or negative PKCS#11 session budget.
 - Certificate `KeyUsage` now follows the subject's key algorithm.
   `keyEncipherment` was asserted unconditionally, which describes an RSA
-  operation an EC key cannot perform (RFC 5480 §3) — and P-256 is this CA's
+  operation an EC key cannot perform (RFC 5480 §3), and P-256 is this CA's
   default curve, so every ECDSA certificate it issued carried a capability
   claim that was simply false.
 - `ca.GenerateSerial` redraws rather than returning a zero serial. RFC 5280
@@ -707,16 +701,16 @@ that the verified-claim split requires and the tag convention formats.
   moment it is issued.
 - CRL numbers are now monotonic across a service restart. The counter
   started from zero on every start, so a restarted service reissued low
-  numbers while verifiers held a higher-numbered CRL — which they may then
+  numbers while verifiers held a higher-numbered CRL, which they may then
   keep, ignoring every later update and the revocations in it. With no
-  persistent storage in Phase 2 (deliberately), the wall clock supplies the
+  persistent storage at that time, the wall clock supplies the
   monotonic component. Milliseconds, not seconds: a test written for this
   caught a same-second restart reissuing an identical number.
 - A CRL's `thisUpdate` is backdated by the same clock-skew allowance
   `Issue` applies to `NotBefore`.
 - `newRequestID` handles a `crypto/rand` failure instead of discarding it.
   A failed read left the buffer zeroed, giving every concurrent request the
-  id `0000000000000000` — the one outcome that defeats a correlation id
+  id `0000000000000000`, the one outcome that defeats a correlation id
   entirely, arriving exactly when logs matter most.
 - The logging middleware's `ResponseWriter` wrapper ignores a second
   `WriteHeader` (so the access log cannot disagree with the wire) and
@@ -728,7 +722,7 @@ that the verified-claim split requires and the tag convention formats.
 - `pkcs11.Login` now zeroes the caller's PIN slice on every return path, not
   only once execution reaches `NewSecurePIN`. The guard clauses ahead of it
   (cancelled context, expired session) previously returned with the
-  caller's PIN still readable in the Go heap — the one copy this package can
+  caller's PIN still readable in the Go heap, the one copy this package can
   deterministically wipe, left unwiped.
 - `pkcs11.CloseSession` no longer removes a session from the adapter's map
   before the token has actually released it. A failed `C_CloseSession`
@@ -739,31 +733,30 @@ that the verified-claim split requires and the tag convention formats.
   turned a wrong-but-plausible request (200 bits) into a non-standard
   25-byte key that some tokens accept rather than reject; a negative value
   was worse.
-- `pkcs11.DecodeECPoint` (introduced in sub-task 2.2) tried the ASN.1
+- `pkcs11.DecodeECPoint` tried the ASN.1
   OCTET-STRING-unwrap interpretation of a `CKA_EC_POINT` value before the
   raw-point one. An uncompressed point's leading byte (`0x04`) collides
   with ASN.1's OCTET STRING tag, so a bare, unwrapped point could be
   misparsed roughly 1 time in 256 (whenever the point's second byte matched
-  the remaining byte count) — a public-key-reconstruction failure with no
+  the remaining byte count), a public-key-reconstruction failure with no
   vendor trigger, just unlucky key material. Caught by an intermittent
-  `TestDecodeECPoint_BareUnwrapped` failure during Phase 2 sub-task 2.6's
+  `TestDecodeECPoint_BareUnwrapped` failure during a
   full-suite verification run, not by the function's own tests, since the
   original tests never exercised the colliding byte value. Fixed by trying
   the raw interpretation first; added a test that deterministically
   reproduces the exact collision instead of depending on chance.
 - `.gitignore` did not exclude `config.yaml`, despite `config.example.yaml`
-  stating that it did — the file intended to hold real values was trackable.
+  stating that it did, the file intended to hold real values was trackable.
   Also added guards against committing proprietary vendor SDK binaries.
 - `(*server).nextCRLNumber`'s doc comment still said "Unix seconds" after
   the underlying implementation had already switched to `UnixMilli()` to
   fix the same-second-restart collision (see the CRL-monotonicity entry
-  above) — the code was correct, only the comment had gone stale. Caught
-  during a maintainer double-check of the whole phase before starting
-  Phase 3.
+  above), the code was correct, only the comment had gone stale. Caught
+  during a maintainer double-check before the CA work started.
 
 <!--
-v0.1.0 was cut at the end of Phase 4 rather than after Phase 1: the convention
-below stands, but the first four phases landed before the first tag, so they
-share one release. Each phase producing a user-visible capability bumps at
-least the minor version from here.
+v0.1.0 was cut after the container and Kubernetes work rather than after
+the PKCS#11 core: the convention below stands, but the first four delivery
+stages landed before the first tag, so they share one release. Each stage
+producing a user-visible capability bumps at least the minor version.
 -->

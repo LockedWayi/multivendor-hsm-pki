@@ -1,4 +1,4 @@
-# A deliberately insecure pod, kept in the repository as a test input.
+# An insecure pod, kept in the repository as a test input.
 #
 # A guardrail that has never rejected anything is a guardrail nobody has
 # tested. This manifest violates every rule the platform's own pods obey --

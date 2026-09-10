@@ -1,23 +1,21 @@
-# gitleaks configuration for this repository (Phase 5.2's gate, pulled
-# forward with 5.1 —).
+# gitleaks configuration for this repository.
 #
-# The escape hatches here are deliberately of two different shapes, because
+# The escape hatches here are of two different shapes, because
 # the two kinds of finding they exempt are different in kind:
 #
 #   - A *recurring public string* gets an exact-match allowlist regex below.
-#     `inventory-signing-key-v1` is a published key LABEL — its public half
+#     `inventory-signing-key-v1` is a published key LABEL. Its public half
 #     is committed at docs/keys/, so the string can never be a secret, and
 #     it legitimately recurs (scripts, keyaudit, tests, docs). A per-commit
 #     fingerprint would have to be re-granted on every commit that touches
 #     such a line; an exact public string cannot mask anything else.
 #   - A *one-off historical finding* gets a commit-pinned fingerprint in
-#     .gitleaksignore: the fake credential deliberately planted and removed
-#     by Phase 3.6 to prove the Terraform scanner catches one. Editing or
-#     moving anything re-triggers, which is the property the phase note
-#     asks for.
+#     .gitleaksignore: the fake credential planted and removed to prove
+#     the Terraform scanner catches one. Editing or moving anything
+#     re-triggers, which is the required property.
 #
-# What is deliberately NOT done: no path allowlists over source (a path
-# exemption grows silently) and no rule disabled repository-wide —
+# What is not done: no path allowlists over source (a path
+# exemption grows silently) and no rule disabled repository-wide;
 # generic-api-key is the rule most likely to catch a real leak.
 
 [extend]
@@ -34,7 +32,7 @@ regexes = [
 ]
 
 # .local/ is gitignored developer state (throwaway tokens, trivy's
-# vulnerability database — ~50 spurious hits) and is never committed; the
+# vulnerability database, ~50 spurious hits) and is never committed; the
 # path allowlist matters only for working-tree (`gitleaks dir`) scans,
 # since a history scan cannot see unversioned files at all.
 [[allowlists]]

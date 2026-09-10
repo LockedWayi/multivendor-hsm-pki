@@ -8,13 +8,12 @@
 # that will never run in CI, or get quietly lowered until it protects
 # nothing. Excluding these files keeps the floor meaningful for the code CI
 # actually exercises. The adapters listed here are instead validated by the
-# conformance suite passing against real hardware in the maintainer's own
-# environment, and that claim is labelled maintainer-verified, not
+# conformance suite passing against ProtectToolkit-C software emulation in
+# the maintainer's own environment, and that claim is labelled maintainer-verified, not
 # CI-verified, everywhere it is made.
 #
-# As Phase 7 adds nShield and Luna adapters with the same constraint, add
-# their files here — this list, not a naming convention or a build tag, is
-# the single place that decision lives.
+# When nShield and Luna adapters arrive with the same constraint, add their
+# files here. This list is the single place that decision lives.
 internal/pkcs11/protectserver.go
 #
 # internal/hsmtest is test scaffolding that has to be a package rather than a

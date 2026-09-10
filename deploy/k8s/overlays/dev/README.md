@@ -5,10 +5,10 @@ enforces Pod Security Admission at `restricted`.
 
 ## What you must create first, and why it is not in this repository
 
-Two objects are deliberately absent from the manifests.
+Two objects are absent from the manifests.
 
-**The PIN Secret.** No secret enters this repository, ever (the engineering contract
-the no-secrets rule). `secret.example.yaml` documents the shape:
+**The PIN Secret.** No secret enters this repository. `secret.example.yaml`
+documents the shape:
 
 ```sh
 kubectl -n hsm-pki-dev create secret generic hsm-pki-pin \
@@ -20,7 +20,7 @@ reaches the shell history and the process list.
 
 **The config ConfigMap.** It carries the ceremony's output, which is
 produced by running the ceremony, not by anything checked in. None of it is
-key material — the certificates and the CRL are public artifacts, and
+key material. The certificates and the CRL are public artifacts, and
 `config.yaml` names the environment variable the PIN comes from rather than
 holding a PIN:
 
@@ -64,35 +64,34 @@ sudo chmod 0770 /opt/hsm-pki/tokens
 ```
 
 Copy the **real object**, not `/usr/lib/softhsm/libsofthsm2.so`, which on
-Debian is a symlink — mounting a symlink reproduces a dangling link inside
+Debian is a symlink. Mounting a symlink reproduces a dangling link inside
 the container and fails exactly like an absent module.
 
-The token store must also actually contain the intermediate's token, and
-must **not** contain the root's. On hardware that separation is a token in a
-safe; here it is which directories you copy.
+The token store must contain the intermediate's token, and must **not**
+contain the root's. On a hardware HSM that separation is a token in a safe.
+Here it is which directories you copy.
 
 ## Why the module arrives as a PersistentVolumeClaim
 
 `restricted` forbids a pod from declaring a `hostPath` volume, and the
-module has to come from the node. The resolution is not to weaken the
-namespace: a pod may use a PVC whose PersistentVolume is node-local, and
-that is the distinction the rule draws rather than a loophole. A `hostPath`
-in a pod spec means whoever can create a pod can mount any path on the node
-— the authority sits with the workload author. A PersistentVolume is
-cluster-scoped and only an administrator can create one; the workload
-receives a claim to something already chosen for it. Same bytes on the node,
-authority in the right place.
+module has to come from the node. The namespace is not weakened. A pod may
+use a PVC whose PersistentVolume is node-local, and that is the distinction
+the rule draws. A `hostPath` in a pod spec means whoever can create a pod
+can mount any path on the node: the authority sits with the workload
+author. A PersistentVolume is cluster-scoped and only an administrator can
+create one. The workload receives a claim to something already chosen for
+it. Same bytes on the node, authority with the administrator.
 
 ## On k3d, where "the node" is a container
 
-This overlay was developed and verified against K3s running under **k3d**,
-so the cluster leaves nothing behind on the host — no systemd unit, no
-containerd, no iptables rules — and `k3d cluster delete` removes it
-entirely. The only difference that matters is that the node is a Docker
-container, so the node prerequisite above is staged inside it and the image
-has to be imported rather than pulled.
+This overlay was developed and verified against K3s running under **k3d**.
+The cluster leaves nothing behind on the host: no systemd unit, no
+containerd, no iptables rules. `k3d cluster delete` removes it entirely.
+The one difference that matters is that the node is a Docker container, so
+the node prerequisite above is staged inside it and the image has to be
+imported rather than pulled.
 
-**Use [`k3d-up.sh`](k3d-up.sh) rather than these commands by hand** — it
+**Use [`k3d-up.sh`](k3d-up.sh) rather than these commands by hand.** It
 encodes the host-backed volume the CA store depends on, confirms the image
 reached the node before applying, and creates the two operator-supplied
 objects:
@@ -102,12 +101,11 @@ deploy/k8s/overlays/dev/k3d-up.sh              # create (or reuse) and apply
 deploy/k8s/overlays/dev/k3d-up.sh --recreate   # destroy the cluster, keep the state
 ```
 
-`--recreate` is the one worth running once: it deletes the cluster entirely
-and brings it back, and the CA's issued and revoked records survive, because
-a fixed-path PersistentVolume keeps them outside the cluster. Backing the
-default provisioner's directory instead does *not* work — it keys each
-volume to the PVC's UID, so a rebuilt cluster gets a new empty one
-(`module-mount.yaml` has the measurement).
+`--recreate` deletes the cluster entirely and brings it back, and the CA's
+issued and revoked records survive, because a fixed-path PersistentVolume
+keeps them outside the cluster. Backing the default provisioner's directory
+instead does *not* work. It keys each volume to the PVC's UID, so a rebuilt
+cluster gets a new empty one (`module-mount.yaml` has the measurement).
 
 What it runs, for reference:
 
@@ -127,15 +125,15 @@ docker run --rm -v "$PWD/.local/dev/tokens":/t \
     | docker exec -i $N tar -C /opt/hsm-pki/tokens -xf -
 docker exec $N sh -c 'chown -R 65532:65532 /opt/hsm-pki/tokens; chmod 0770 /opt/hsm-pki/tokens'
 
-# There is no registry yet (4.10 stands one up), so the locally built image
-# is loaded into the node directly.
+# The image is built locally and loaded into the node directly. k3d-up.sh
+# also stands up a local registry so the image signature can be verified.
 k3d image import hsm-pki-server:local -c hsm-pki
 ```
 
 Copy only the **intermediate's** token directory. `run-local.sh` has already
 moved the root's out of `.local/dev/tokens`, so copying that directory
-wholesale is correct — but check, because the whole two-tier guarantee is
-that the running service cannot reach the root.
+wholesale is correct. Check anyway. The two-tier guarantee is that the
+running service cannot reach the root.
 
 ## Applying
 
@@ -166,13 +164,12 @@ never rejected anything has not been tested.
 
 ## Reading a failure
 
-The service fails closed at startup by design, so a misconfiguration is a
-pod that exits rather than one that serves errors. The distinctions worth
-knowing:
+The service fails closed at startup, so a misconfiguration is a pod that
+exits rather than one that serves errors.
 
 | Symptom | Cause |
 |---|---|
-| Pod `Pending`, PVC unbound | The node-local PVs are missing — the prerequisite above was not run |
+| Pod `Pending`, PVC unbound | The node-local PVs are missing. The prerequisite above was not run |
 | `failed to load module` | `/pkcs11` has no module, or the copied file was the symlink |
 | `CKR_SLOT_ID_INVALID` / workspace not found | The token store on the node does not hold a token with the configured label |
 | `CKR_PIN_INCORRECT` | The Secret's value is not the token's user PIN |
@@ -181,11 +178,11 @@ knowing:
 ## Two constraints that are not negotiable here
 
 - **`replicas: 1` and `strategy: Recreate`.** Not capacity choices. The
-  store is single-writer, and the CRL is cached per process — a second pod
+  store is single-writer, and the CRL is cached per process. A second pod
   would serve a CRL missing another pod's revocations until `nextUpdate`,
   which is a wrong security answer rather than an error. `deployment.yaml`
   has the full reasoning.
 - **`kubectl drain` on this node will block.** The PodDisruptionBudget is
   `minAvailable: 1` against a single replica, so taking the only CA offline
-  is a deliberate act rather than a side effect of node maintenance. Scale
+  is an explicit act rather than a side effect of node maintenance. Scale
   to zero first if that is what you mean.
