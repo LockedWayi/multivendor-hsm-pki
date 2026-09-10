@@ -5,13 +5,13 @@
 # an update mechanism produces a red pipeline that stays red, because the
 # work of raising the upgrade is still manual and still nobody's job. This
 # file is that mechanism: Dependabot opens the PR, and the PR goes through
-# the same gates as any other change — which is the point, because an
+# the same gates as any other change, because an
 # automated dependency bump is exactly the change most likely to be merged
 # without being read.
 version: 2
 updates:
   # Go modules. Grouped rather than one PR per module: this repository has a
-  # deliberately small dependency set (four direct, ten indirect), so
+  # small dependency set (four direct, ten indirect), so
   # separate PRs would be noise without being more reviewable.
   - package-ecosystem: gomod
     directory: /

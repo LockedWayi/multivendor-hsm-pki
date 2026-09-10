@@ -1,5 +1,5 @@
 # The environment the official cosign release binary runs in, so that the
-# signing steps of Phase 4.9 and 4.10 need nothing installed on the host.
+# signing steps need nothing installed on the host.
 #
 # Why cosign gets an image of its own rather than joining ci/softhsm2-dev
 # .Dockerfile, which already plays "operator workstation" for hsm-pki-keytool:
@@ -30,8 +30,8 @@ FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c70
 #                 over distroless/base for the service image (4.1), applied
 #                 to the signing side. libstdc++6 brings libgcc_s.so.1.
 #
-# No PKCS#11 module is installed here, deliberately. The module arrives as a
-# read-only mount exactly as it does for the service (4.3's decision), so
+# No PKCS#11 module is installed here. The module arrives as a read-only
+# mount exactly as it does for the service, so
 # there is no second copy that could quietly become the one in use.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpcsclite1 libssl3 libstdc++6 ca-certificates \

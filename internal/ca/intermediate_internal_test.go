@@ -1,11 +1,9 @@
 package ca
 
-// White-box tests for the intermediate-certificate gate. They build
-// certificates in software rather than on a token: every property under test
-// here is a property of the certificate, not of the key that signed it, so an
-// HSM would add minutes of setup and prove nothing extra. The HSM-backed path
-// (LoadIntermediate end to end, including the key-matches-certificate check)
-// is covered in intermediate_test.go.
+// White-box tests for the intermediate-certificate checks. They build
+// certificates in software: every property here is a property of the
+// certificate, not of the key. The token-backed path is in
+// intermediate_test.go.
 
 import (
 	"crypto/ecdsa"
@@ -23,9 +21,8 @@ import (
 	"time"
 )
 
-// intermediateOpts describes a certificate to build for these tests. The
-// zero value is a valid intermediate; each test changes exactly one thing,
-// so a failure names the property that broke it.
+// intermediateOpts describes a certificate to build. The zero value is a
+// valid intermediate; each test changes one thing.
 type intermediateOpts struct {
 	notCA                 bool
 	noBasicConstraints    bool
@@ -105,9 +102,7 @@ func buildIntermediateWithKey(t *testing.T, o intermediateOpts) (*x509.Certifica
 		tpl.MaxPathLen, tpl.MaxPathLenZero = 1, false
 	}
 	if o.notCA {
-		// crypto/x509 refuses to encode a path length on a non-CA template,
-		// so the "not a CA" case has to drop it — which is what a real
-		// end-entity certificate looks like anyway.
+		// crypto/x509 refuses a path length on a non-CA template.
 		tpl.MaxPathLen, tpl.MaxPathLenZero = 0, false
 	}
 
@@ -132,12 +127,10 @@ func TestCheckIntermediateCert_AcceptsAWellFormedIntermediate(t *testing.T) {
 	}
 }
 
-// TestCheckIntermediateCert_RejectsMissingKeyUsages is the gap this test file
-// was added for. keyUsage is enforced by a compliant verifier independently
-// of basicConstraints (RFC 5280 §4.2.1.3), so an intermediate that is a CA
-// but does not assert keyCertSign issues certificates that this platform
-// accepts and the rest of the world rejects — the worst place for the
-// disagreement to surface.
+// TestCheckIntermediateCert_RejectsMissingKeyUsages: a compliant verifier
+// enforces keyUsage independently of basicConstraints (RFC 5280
+// §4.2.1.3), so an intermediate without keyCertSign issues certificates
+// the rest of the world rejects.
 func TestCheckIntermediateCert_RejectsMissingKeyUsages(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -162,9 +155,7 @@ func TestCheckIntermediateCert_RejectsMissingKeyUsages(t *testing.T) {
 }
 
 // TestCheckIntermediateCert_RejectsOutsideValidityWindow covers both ends.
-// RFC 5280 §6.1.3 validates every certificate in a path against one instant,
-// so nothing an expired issuer signs can chain — the service must not come
-// up on one.
+// RFC 5280 §6.1.3 validates every certificate in a path at one instant.
 func TestCheckIntermediateCert_RejectsOutsideValidityWindow(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
@@ -202,10 +193,9 @@ func TestCheckIntermediateCert_RejectsStructuralFaults(t *testing.T) {
 	}
 }
 
-// TestLoadCertPEM_RejectsMoreThanOneBlock pins that a chain pasted into
-// ca.intermediate_cert_path is refused rather than silently reduced to its
-// first certificate. Picking the first would let file order decide which
-// certificate the CA runs as.
+// TestLoadCertPEM_RejectsMoreThanOneBlock: a chain pasted into
+// ca.intermediate_cert_path is refused rather than reduced to its first
+// certificate.
 func TestLoadCertPEM_RejectsMoreThanOneBlock(t *testing.T) {
 	cert := buildIntermediate(t, intermediateOpts{})
 	single := pemBlock(t, cert.Raw)
@@ -233,9 +223,8 @@ func TestLoadCertPEM_RejectsMoreThanOneBlock(t *testing.T) {
 }
 
 // TestKeyUsageFor_CoversEveryAllowedKeyType pins keyUsageFor's switch to
-// validateCSR's allow-list. The two functions are separate and a key type
-// added to one but not the other would be issued a certificate whose
-// keyUsage was decided by a default branch rather than by anyone.
+// validateCSR's allow-list, so a key type added to one and not the other
+// does not get a keyUsage decided by a default branch.
 func TestKeyUsageFor_CoversEveryAllowedKeyType(t *testing.T) {
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -244,9 +233,8 @@ func TestKeyUsageFor_CoversEveryAllowedKeyType(t *testing.T) {
 	if got := keyUsageFor(&ecKey.PublicKey); got != x509.KeyUsageDigitalSignature {
 		t.Fatalf("ECDSA keyUsage = %v, want digitalSignature only: an EC key cannot do keyEncipherment (RFC 5480 §3)", got)
 	}
-	// RSA is exercised through Issue in ca_test.go, where a real 2048-bit
-	// key is already generated; generating another here would cost seconds
-	// for no additional coverage of this function's branch.
+	// RSA is exercised through Issue in ca_test.go, where a 2048-bit key is
+	// already generated.
 }
 
 func pemBlock(t *testing.T, der []byte) []byte {
@@ -280,12 +268,8 @@ func testCSR(t *testing.T) *x509.CertificateRequest {
 	return csr
 }
 
-// TestIssue_RefusesAnIssuerOutsideItsOwnValidityWindow covers the case a
-// long-running service reaches without restarting: startup validated the
-// intermediate, and then it expired while the process kept serving.
-// RFC 5280 §6.1.3 validates the whole path against one instant, so every
-// certificate signed after that point is invalid the moment it is issued —
-// and the holder finds out, not this CA.
+// TestIssue_RefusesAnIssuerOutsideItsOwnValidityWindow: startup validated
+// the intermediate, and then it expired while the process kept serving.
 func TestIssue_RefusesAnIssuerOutsideItsOwnValidityWindow(t *testing.T) {
 	now := time.Now()
 	for _, tc := range []struct {
@@ -305,11 +289,7 @@ func TestIssue_RefusesAnIssuerOutsideItsOwnValidityWindow(t *testing.T) {
 	}
 }
 
-// TestIssue_RefusesALeafThatWouldOutliveItsIssuer pins the reject-rather-
-// than-clamp decision. The certificate would claim a NotAfter the chain
-// cannot honor: it stops working when the issuer expires no matter what it
-// says about itself. Clamping instead would hand the caller a lifetime they
-// did not ask for and would not discover until renewal.
+// TestIssue_RefusesALeafThatWouldOutliveItsIssuer pins refuse over clamp.
 func TestIssue_RefusesALeafThatWouldOutliveItsIssuer(t *testing.T) {
 	now := time.Now()
 	cert, key := buildIntermediateWithKey(t, intermediateOpts{
@@ -324,9 +304,7 @@ func TestIssue_RefusesALeafThatWouldOutliveItsIssuer(t *testing.T) {
 		t.Fatalf("Issue error = %v, want ErrValidityExceedsIssuer", err)
 	}
 
-	// The same CA issues normally for a TTL that fits inside the window,
-	// which is what shows the guard is bounded by the issuer's expiry
-	// rather than refusing outright.
+	// A TTL inside the window still issues.
 	c = NewCA(cert, key, time.Minute, testDist())
 	leaf, err := c.Issue(testCSR(t))
 	if err != nil {

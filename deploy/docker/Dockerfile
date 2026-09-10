@@ -53,7 +53,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # package manager, no compiler -- verified by test, not by trust
 # (deploy/docker/README.md).
 #
-# cmd/hsm-pki-keytool is deliberately NOT copied here. It is the offline
+# cmd/hsm-pki-keytool is not copied here. It is the offline
 # ceremony tool: it is the one binary in this repository that knows how to
 # reach a root token, and the whole point of the two-tier hierarchy is that
 # nothing running online can. An operator tool in the online image would put

@@ -1,11 +1,11 @@
 # Dev/test environment for internal/pkcs11: Go plus a real SoftHSM2 module,
 # so `go test ./internal/pkcs11/...` runs against an actual PKCS#11 backend
 # with zero vendor hardware.
-# This is not the shipped service image (see /deploy/docker for that) — it
-# exists purely so the SoftHSM2-backed test suite is reproducible from code,
+# This is not the shipped service image (see /deploy/docker for that). It
+# exists so the SoftHSM2-backed test suite is reproducible from code,
 # on a laptop or in CI, without every contributor hand-installing softhsm2.
 # Pinned by digest, and to the SAME digest as deploy/docker/Dockerfile's
-# build stage deliberately. ci.yml's header claims every third-party ref
+# build stage. ci.yml's header claims every third-party ref
 # here is pinned to an immutable identifier, and until 2026-09-08 this line
 # was the exception -- a tag, on the image that runs the entire test suite
 # and the coverage floor, that `run-local.sh` runs the CA in, and that

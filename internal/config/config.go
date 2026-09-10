@@ -1,8 +1,6 @@
-// Package config loads the service's configuration file and turns it into
-// the runtime objects the rest of the service needs (a *pkcs11.VendorAdapter,
-// a resolved session budget). See config.example.yaml for the file format and
-// the reasoning behind it — most importantly, that it never holds a PIN
-// itself, only the name of the environment variable the PIN is read from
+// Package config loads the service's configuration file and builds the
+// runtime objects the service needs. The file never holds a PIN, only the
+// name of the environment variable the PIN is read from.
 package config
 
 import (
@@ -43,9 +41,8 @@ type PKCS11Config struct {
 	SoftHSM2      *VendorConfig `yaml:"softhsm2"`
 	ProtectServer *VendorConfig `yaml:"protectserver"`
 
-	// SessionOptions is derived from Session by Load. Use this field, not
-	// Session, once a Config has come back from Load — Session only holds
-	// the raw, not-yet-parsed YAML strings.
+	// SessionOptions is derived from Session by Load. Session holds the raw
+	// YAML strings.
 	SessionOptions pkcs11.SessionOptions `yaml:"-"`
 }
 
@@ -57,33 +54,21 @@ type SessionConfig struct {
 }
 
 // VendorConfig configures one PKCS#11 backend. PINEnv names the environment
-// variable the login PIN is read from — never a literal PIN value.
+// variable the login PIN is read from, never a literal PIN value.
 type VendorConfig struct {
 	ModulePath     string `yaml:"module_path"`
 	WorkspaceLabel string `yaml:"workspace_label"`
 	PINEnv         string `yaml:"pin_env"`
 }
 
-// CAConfig configures certificate issuance policy and where the service's
-// signing identity lives: the **intermediate's** key pair on the HSM (by
-// label) and the ceremony-produced intermediate certificate on disk (by
-// path) — see internal/ca.LoadIntermediate for how the two are used
-// together.
+// CAConfig configures issuance and where the service's signing identity
+// lives: the intermediate's key pair on the token, by label, and the
+// ceremony-produced intermediate certificate on disk, by path.
 //
-// # What this struct deliberately cannot express
-//
-// There is no field here naming the root's token, workspace, or key label,
-// and adding one would be a defect rather than a feature. The root is
-// reachable only from the offline ceremony (internal/ca.RunCeremony,
-// cmd/hsm-pki-keytool), so a compromise of this service cannot reach it —
-// that is the whole point of the two-tier hierarchy this phase introduced
-//
-// RootCertPath and RootCRLPath are not exceptions to that. Both name public
-// artifacts the ceremony emitted — a certificate and a CRL, containing no
-// key material and conferring no ability to use the root's key. The service
-// serves them as static files so that the CDP and AIA URLs baked into the
-// intermediate at ceremony time actually resolve; see TestConfig_NoRootKeyReferences,
-// which pins the distinction so a future field cannot quietly cross it.
+// There is no field naming the root's token, workspace or key label, and
+// adding one is a defect. The root is reachable only from the offline
+// ceremony. RootCertPath and RootCRLPath name public artifacts with no key
+// material. TestConfig_NoRootKeyReferences pins the distinction.
 type CAConfig struct {
 	CurveName    string `yaml:"curve"`
 	CertTTLHours int    `yaml:"cert_ttl_hours"`
@@ -94,64 +79,43 @@ type CAConfig struct {
 	// (PEM). The service refuses to start if it is self-signed.
 	IntermediateCertPath string `yaml:"intermediate_cert_path"`
 	// RootCertPath is the ceremony-produced root certificate (PEM), served
-	// as a static artifact at the AIA CA-Issuers URL. Public, no key
-	// material — see the type's doc comment.
+	// at the AIA CA-Issuers URL. Public.
 	RootCertPath string `yaml:"root_cert_path"`
 	// RootCRLPath is the ceremony-produced root CRL (PEM), served as a
 	// static artifact at the intermediate's CRL distribution point. It
 	// covers exactly one certificate: the intermediate itself.
 	RootCRLPath string `yaml:"root_crl_path"`
-	// BaseURL is the externally reachable origin of this service, and the
-	// stem of the CRL distribution point and AIA CA-Issuers URL written into
-	// every certificate it issues (internal/api.LeafDistributionFor).
-	//
-	// Required, with no default. There is nothing sensible to default it to:
-	// server.listen_addr is what the process binds, which behind a load
-	// balancer or an ingress is not what a relying party can resolve, and a
-	// wrong guess here is not a startup failure — it is a correctly-signed
-	// certificate pointing at a CRL nobody can fetch, discovered by a
-	// verifier months later. Getting it wrong is recoverable only by
-	// re-issuing every certificate signed since, so the operator states it.
+	// BaseURL is the origin a relying party can resolve, and the stem of
+	// the CRL distribution point and AIA URL in every issued certificate.
+	// Required, with no default. server.listen_addr is what the process
+	// binds, which behind a load balancer is not resolvable. A wrong value
+	// is a correctly signed certificate pointing at a CRL nobody can fetch,
+	// and every certificate signed since has to be re-issued.
 	BaseURL string `yaml:"base_url"`
 	// CRLValidityHours is how long a generated CRL is valid for
-	// (thisUpdate to nextUpdate). Optional — defaulted by Load when zero.
+	// (thisUpdate to nextUpdate). Optional, defaulted by Load when zero.
 	CRLValidityHours int `yaml:"crl_validity_hours"`
-	// StorePath is the embedded SQLite database holding issued and revoked
-	// records and the CRL number counter. Required: losing revocation state
-	// on restart is a security regression, so there is no in-memory fallback
-	// to default to (internal/store).
+	// StorePath is the embedded SQLite database. Required: losing
+	// revocation state on restart is a security regression, so there is no
+	// in-memory fallback.
 	StorePath string `yaml:"store_path"`
-	// CRLNumberFloor raises the number a *fresh* store seeds its CRL counter
-	// with. Optional, and normally absent.
-	//
-	// It exists for one recovery case. A rebuilt store seeds its counter
-	// from the wall clock, which is above any number the old store issued as
-	// long as the clock has not moved backwards. If it has — a restored host
-	// with a bad clock, a VM whose time source was wrong — the new sequence
-	// could land below numbers verifiers already hold, and RFC 5280 §5.2.3
-	// then lets them ignore every CRL this CA issues afterward. Nothing can
-	// recover the last number automatically, because the thing that
-	// remembered it is what was lost; an operator who does know it sets it
-	// here. An existing counter is never affected.
+	// CRLNumberFloor raises the number a fresh store seeds its CRL counter
+	// with. Normally absent. A rebuilt store seeds from the wall clock;
+	// when the clock has moved backwards, the sequence could land below
+	// numbers verifiers hold, and RFC 5280 §5.2.3 lets them ignore every
+	// later CRL. An operator who knows the last number sets it here. An
+	// existing counter is never affected.
 	CRLNumberFloor string `yaml:"crl_number_floor"`
 }
 
-// defaultCRLValidityHours is used when ca.crl_validity_hours is left at zero
-// in config.yaml.
-//
-// There is no default subject common name any more: the service no longer
-// creates a certificate, so it has no subject to name. The intermediate's
-// subject was fixed at ceremony time and is read off the certificate.
+// defaultCRLValidityHours applies when ca.crl_validity_hours is zero.
 const defaultCRLValidityHours = 24
 
-// Load reads and validates the config file at path. Validation is
-// deliberately strict and fails fast: an unknown adapter name or a missing
-// PIN environment variable is rejected here, before anything tries to open
-// an HSM session (fail closed).
-//
-// Load never reads the PIN's value — only confirms the environment variable
-// named by pin_env is set. The value itself is read once, at the point of
-// use, by ResolvePIN.
+// Load reads and validates the config file at path. An unknown adapter
+// name or a missing PIN environment variable is rejected here, before any
+// token is opened. Load never reads the PIN's value; it only confirms the
+// variable is set and not empty. ResolvePIN reads the value at the point
+// of use.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -175,12 +139,8 @@ func Load(path string) (*Config, error) {
 	if vendor.PINEnv == "" {
 		return nil, fmt.Errorf("config: pkcs11.%s.pin_env is empty", c.PKCS11.Adapter)
 	}
-	// Present-but-empty is checked, not just present. LookupEnv reports
-	// true for PIN="", so a deployment that exports the variable without a
-	// value would pass startup validation and then fail at ResolvePIN, at
-	// the point of an HSM login — which is both later and further from the
-	// cause than it needs to be. The value is compared
-	// against "" and never read into anything that outlives this check.
+	// Present but empty is checked too. LookupEnv reports true for PIN="",
+	// and the failure would otherwise surface at the token login.
 	if pin, ok := os.LookupEnv(vendor.PINEnv); !ok {
 		return nil, fmt.Errorf("config: environment variable %s (pkcs11.%s.pin_env) is not set",
 			vendor.PINEnv, c.PKCS11.Adapter)
@@ -201,11 +161,9 @@ func Load(path string) (*Config, error) {
 	if c.CA.CertTTLHours <= 0 {
 		return nil, fmt.Errorf("config: ca.cert_ttl_hours must be positive, got %d", c.CA.CertTTLHours)
 	}
-	// Each of these is required rather than defaulted. The service no longer
-	// creates a CA when it finds none (see internal/ca.LoadIntermediate), so
-	// an unset path is a misconfiguration to report at startup, not a state
-	// to repair — and a defaulted path would silently point the service
-	// somewhere the operator never chose.
+	// Required, not defaulted. The service never creates a CA when it finds
+	// none, and a defaulted path would point somewhere the operator did not
+	// choose.
 	for field, v := range map[string]string{
 		"ca.intermediate_key_label": c.CA.IntermediateKeyLabel,
 		"ca.intermediate_cert_path": c.CA.IntermediateCertPath,
@@ -226,11 +184,7 @@ func Load(path string) (*Config, error) {
 		if !ok {
 			return nil, fmt.Errorf("config: ca.crl_number_floor %q is not a decimal integer", c.CA.CRLNumberFloor)
 		}
-		// RFC 5280 §5.2.3 makes the CRL number a non-negative integer, and
-		// ca.BuildCRL rejects a non-positive one outright. Catching it here
-		// means a typed minus sign fails at startup rather than at the
-		// first GET /crl, which is when this field's whole purpose —
-		// surviving a rebuilt store — would be needed most.
+		// A negative number fails here rather than at the first GET /crl.
 		if floor.Sign() < 0 {
 			return nil, fmt.Errorf("config: ca.crl_number_floor %q is negative; RFC 5280 §5.2.3 CRL numbers are non-negative", c.CA.CRLNumberFloor)
 		}
@@ -243,17 +197,10 @@ func Load(path string) (*Config, error) {
 }
 
 // validateBaseURL checks ca.base_url the way the certificate extensions it
-// will end up in demand.
-//
-// The scheme/host rules are shared with the ceremony's own distribution
-// URLs (ca.ValidateDistributionURL) — one rule, one implementation, because
-// they are the same rule: a URL that will be embedded in a certificate has
-// to be one a relying party can fetch.
-//
-// The query/fragment rejection is specific to a *base* URL. Path components
-// are appended to it, so "https://pki.example.test/?v=1" would compose into
-// "https://pki.example.test/?v=1/crl" — a URL that parses, points nowhere,
-// and would be discovered only by whoever tried to fetch the CRL.
+// ends up in demand. The scheme and host rules are ca.ValidateDistributionURL's.
+// A query or fragment is refused because paths are appended to the base:
+// "https://pki.example.test/?v=1" would compose into a URL that parses and
+// points nowhere.
 func validateBaseURL(raw string) error {
 	if err := ca.ValidateDistributionURL("ca.base_url", raw); err != nil {
 		return fmt.Errorf("config: %w", err)
@@ -299,9 +246,8 @@ func (c *CAConfig) Curve() pkcs11.ECCurve {
 	return curve
 }
 
-// selectedVendor returns the VendorConfig for whichever adapter
-// pkcs11.adapter names, or an error if that name is unknown or its block is
-// missing from the config file.
+// selectedVendor returns the VendorConfig for the adapter pkcs11.adapter
+// names.
 func (p *PKCS11Config) selectedVendor() (*VendorConfig, error) {
 	switch p.Adapter {
 	case AdapterSoftHSM2:
@@ -324,11 +270,8 @@ func (p *PKCS11Config) selectedVendor() (*VendorConfig, error) {
 // pkcs11.SessionOptions, defaulting either one that was left empty.
 func (s SessionConfig) parse() (pkcs11.SessionOptions, error) {
 	d := pkcs11.DefaultSessionOptions()
-	// time.ParseDuration accepts "-5m" and "0s" happily. A session budget
-	// that is zero or negative is not a shorter budget, it is a session
-	// that is already over its limit the instant it opens — so it is
-	// rejected here rather than handed to the adapter's janitor to
-	// interpret.
+	// A zero or negative budget is a session that is over its limit the
+	// instant it opens. Rejected here.
 	if s.IdleTimeout != "" {
 		v, err := time.ParseDuration(s.IdleTimeout)
 		if err != nil {
@@ -358,11 +301,8 @@ func (c *Config) Vendor() (*VendorConfig, error) {
 	return c.PKCS11.selectedVendor()
 }
 
-// NewVendorAdapter constructs the pkcs11.VendorAdapter named by
-// pkcs11.adapter. It only loads and initializes the PKCS#11 module — it does
-// not open a session or log in; callers do that afterward (see
-// cmd/hsm-pki-server for the startup sequence that proves the connection
-// actually works before serving traffic).
+// NewVendorAdapter loads and initializes the PKCS#11 module named by
+// pkcs11.adapter. It opens no session and does not log in.
 func (c *Config) NewVendorAdapter() (pkcs11.VendorAdapter, error) {
 	vendor, err := c.PKCS11.selectedVendor()
 	if err != nil {
@@ -379,10 +319,8 @@ func (c *Config) NewVendorAdapter() (pkcs11.VendorAdapter, error) {
 	}
 }
 
-// ResolvePIN reads the login PIN from the environment variable named by the
-// configured adapter's pin_env, at the point of use — it is never cached on
-// Config, so its lifetime as a value this package is responsible for is as
-// short as the call chain from here to pkcs11.SecurePIN's construction.
+// ResolvePIN reads the PIN from the configured environment variable at the
+// point of use. It is never cached on Config.
 func (c *Config) ResolvePIN() ([]byte, error) {
 	vendor, err := c.PKCS11.selectedVendor()
 	if err != nil {

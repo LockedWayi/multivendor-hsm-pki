@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 #
-# Exercise ci/assert-publishable.sh, in both directions.
-#
-# A guard nobody has watched fail proves nothing: it is indistinguishable,
-# from the outside, from a script that exits 0 unconditionally. So every
-# refusal below is asserted to happen, and the accept case is asserted not
-# to. This runs in CI as part of a required check, so a guard that stops
-# guarding blocks the merge that broke it.
+# Exercise ci/assert-publishable.sh in both directions. Every refusal is
+# asserted to happen, and the accept cases are asserted to pass. This runs
+# in a required check, so a guard that stops guarding blocks the merge that
+# broke it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,9 +21,8 @@ accepts() {
     if env "$@" "$GUARD" >/dev/null 2>&1; then pass "$name"; else fail "$name (expected accept, got refusal)"; fi
 }
 
-# refuses <name> <expected-substring> -- the guard must exit non-zero AND
-# say why. The message is asserted too: a refusal for the wrong reason is
-# how a test passes while the thing it tests is broken.
+# refuses <name> <expected-substring>: the guard must exit non-zero and
+# say why. A refusal for the wrong reason would pass a broken guard.
 refuses() {
     local name="$1" want="$2"; shift 2
     local out status
@@ -52,9 +48,15 @@ refuses "a fork's pull_request_target never publishes" "not 'push'" \
     PUBLISH_EVENT=pull_request_target PUBLISH_REF=refs/heads/main PUBLISH_GATES="$ALL_GREEN"
 refuses "an unset event never publishes" "<unset>" \
     PUBLISH_EVENT= PUBLISH_REF=refs/heads/main PUBLISH_GATES="$ALL_GREEN"
-refuses "a push to another branch never publishes" "not 'refs/heads/main'" \
+refuses "a push to another branch never publishes" "not 'refs/heads/main' or a release tag" \
     PUBLISH_EVENT=push PUBLISH_REF=refs/heads/feature PUBLISH_GATES="$ALL_GREEN"
-refuses "a tag push never publishes" "not 'refs/heads/main'" \
+refuses "a pre-release tag never publishes" "not 'refs/heads/main' or a release tag" \
+    PUBLISH_EVENT=push PUBLISH_REF=refs/tags/v9.9.9-rc1 PUBLISH_GATES="$ALL_GREEN"
+refuses "a tag of another shape never publishes" "not 'refs/heads/main' or a release tag" \
+    PUBLISH_EVENT=push PUBLISH_REF=refs/tags/release-9 PUBLISH_GATES="$ALL_GREEN"
+
+echo "== the release-tag accept =="
+accepts "push of a release tag with every gate green" \
     PUBLISH_EVENT=push PUBLISH_REF=refs/tags/v9.9.9 PUBLISH_GATES="$ALL_GREEN"
 
 echo "== a gate that did not pass =="
@@ -72,7 +74,7 @@ for gate in suite sast gitleaks deps image terraform trustchain; do
         PUBLISH_EVENT=push PUBLISH_REF=refs/heads/main \
         PUBLISH_GATES="$(printf '%s' "$ALL_GREEN" | sed "s/${gate}=success//")"
 done
-refuses "no results at all blocks the publish" "absence of evidence" \
+refuses "no results at all blocks the publish" "no gate results were supplied" \
     PUBLISH_EVENT=push PUBLISH_REF=refs/heads/main PUBLISH_GATES=
 
 echo "== drift between ci.yml and the required list =="

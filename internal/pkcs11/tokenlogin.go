@@ -7,66 +7,36 @@ import (
 	p11 "github.com/miekg/pkcs11"
 )
 
-// Token login ("anchor login").
+// Token login.
 //
-// # Why this exists
+// PKCS#11 authenticates the token for the whole application, not one
+// session. Once any session logs in as CKU_USER, every session the
+// application holds on that token is authenticated. A second C_Login
+// returns CKR_USER_ALREADY_LOGGED_IN. C_Logout de-authenticates every
+// session at once. SoftHSM2 2.6.1 and ProtectToolkit-C 7.3.3 software
+// emulation behave the same way.
 //
-// PKCS#11 authenticates the *token for the whole application*, not the one
-// session handle passed to C_Login. Once any session logs in as CKU_USER,
-// every other session the application holds on that token is authenticated
-// too; a second C_Login returns CKR_USER_ALREADY_LOGGED_IN, and C_Logout
-// de-authenticates every session at once, including ones another caller is
-// midway through using. Verified identical on SoftHSM2 2.6.1 and
-// ProtectToolkit 7.3.3 — the symmetry across two unrelated implementations
-// is what establishes it as the spec's model rather than a vendor quirk
+// A login and logout around each operation therefore cannot be made safe
+// under concurrency by serializing the calls. The interference happens
+// between them. The service logs in once at startup on an anchor session
+// and stays logged in until it shuts down. Every later operation opens an
+// ordinary session and uses it without a login of its own.
 //
+// The anchor session is a raw handle held by the adapter. It is not a
+// *Session and it is not registered with the janitor. A session that
+// expires would drop the token's authentication under every caller.
 //
-// The consequence is that a per-operation login/logout cycle cannot be made
-// concurrency-safe by serializing the individual calls, because the
-// interference happens *between* them. The service that does that breaks
-// the moment two requests overlap, which is what this replaces.
-//
-// # The model
-//
-// A CA service is a daemon. It authenticates its token once at startup and
-// stays authenticated until it shuts down, which is what the underlying
-// PKCS#11 semantics were describing all along. LoginToken opens one
-// internal anchor session and logs in on it; every later operation opens
-// an ordinary session and simply uses it, with no login of its own,
-// because the token is already authenticated. Close logs out.
-//
-// # What the anchor session is, and is not
-//
-// It is a raw PKCS#11 session handle held by the adapter, deliberately not
-// a *Session and deliberately not registered with the janitor. Sessions in
-// this package carry an idle timeout and a max TTL, and expiring is exactly
-// what the anchor must never do — its expiry would silently drop the
-// token's authentication out from under every in-flight caller. Keeping it
-// outside that machinery is what makes "the session budget bounds a
-// caller's session, never the daemon's authentication" true by
-// construction rather than by a carefully chosen timeout.
-//
-// # The trade being accepted
-//
-// The token stays authenticated for the process's lifetime rather than for
-// the span of one signature. That is the deliberate choice: it is what a
-// PKI daemon does, it is the only model the per-token semantics actually
-// support without serializing all work, and the PIN's exposure is
-// unchanged either way (it lives in a C-heap buffer for the duration of one
-// C_Login call and is zeroed immediately after — see SecurePIN). What it
-// does mean is that a process compromised while running has an
-// authenticated token available to it; the mitigation for that is the
-// service not being compromised, not a login window measured in
-// milliseconds that an attacker inside the process can simply wait for.
+// The token stays authenticated for the process lifetime. A process
+// compromised while running has an authenticated token available to it.
+// The PIN lives in a SecurePIN for the duration of one C_Login call and is
+// zeroed after it. One more copy exists that this package does not
+// control: miekg/pkcs11's Login copies the PIN with C.CString and frees
+// that buffer without zeroing it. See SecurePIN.
 
-// LoginToken authenticates the token backing ws for this adapter, and keeps
-// it authenticated until LogoutToken or Close. pin is consumed: it is
-// zeroed in place before this returns, on every path.
-//
-// Calling it twice is an error rather than a silent no-op: a second call
-// means a caller believes it is establishing authentication that another
-// caller already owns, and quietly agreeing would leave the two of them
-// disagreeing about who gets to log out.
+// LoginToken authenticates the token backing ws and keeps it authenticated
+// until LogoutToken or Close. pin is zeroed in place before this returns,
+// on every path. A second call is an error: two callers would then
+// disagree about who logs out.
 func (a *pkcs11Adapter) LoginToken(ctx context.Context, ws Workspace, pin []byte, role Role) error {
 	defer zeroizeBytes(pin)
 
@@ -95,9 +65,8 @@ func (a *pkcs11Adapter) LoginToken(ctx context.Context, ws Workspace, pin []byte
 			return a.ctx.Login(handle, uint(role), pinStr)
 		})
 		if err != nil {
-			// Do not leak the anchor session on a failed login — a wrong
-			// PIN is the expected way this fails, and a service that
-			// retries would otherwise leak one session slot per attempt.
+			// A wrong PIN is the expected failure. Closing the session
+			// keeps a retrying service from leaking one session per attempt.
 			_ = a.ctx.CloseSession(handle)
 			return fmt.Errorf("C_Login (anchor): %w", err)
 		}
@@ -109,20 +78,16 @@ func (a *pkcs11Adapter) LoginToken(ctx context.Context, ws Workspace, pin []byte
 }
 
 // LogoutToken drops the token's authentication and releases the anchor
-// session. Idempotent: logging out when not logged in is not an error,
-// since the desired end state is already the actual one.
-//
-// Every session on the token is de-authenticated by this, including any a
-// caller still holds — that is C_Logout's defined behaviour, not this
-// method's choice.
+// session. Logging out when not logged in is not an error. C_Logout
+// de-authenticates every session on the token, including any a caller
+// still holds.
 func (a *pkcs11Adapter) LogoutToken(ctx context.Context) error {
 	a.loginMu.Lock()
 	defer a.loginMu.Unlock()
 	return a.logoutTokenLocked()
 }
 
-// logoutTokenLocked requires a.loginMu. Close uses it too, which is why it
-// is factored out.
+// logoutTokenLocked requires a.loginMu. Close uses it too.
 func (a *pkcs11Adapter) logoutTokenLocked() error {
 	if !a.tokenLoggedIn {
 		return nil
@@ -133,10 +98,8 @@ func (a *pkcs11Adapter) logoutTokenLocked() error {
 		}
 		return nil
 	})
-	// Release the anchor session and clear the flag whatever C_Logout
-	// reported. Leaving tokenLoggedIn set after a failed logout would
-	// permanently block LoginToken from re-establishing authentication,
-	// turning a transient error into an unrecoverable one.
+	// The flag is cleared whatever C_Logout reported. Leaving it set after
+	// a failed logout would block LoginToken for good.
 	_ = a.withStateLock(func() error {
 		return a.ctx.CloseSession(a.anchorSession)
 	})
@@ -146,8 +109,7 @@ func (a *pkcs11Adapter) logoutTokenLocked() error {
 	return err
 }
 
-// TokenLoggedIn reports whether this adapter currently holds the token
-// authenticated.
+// TokenLoggedIn reports whether this adapter holds the token authenticated.
 func (a *pkcs11Adapter) TokenLoggedIn() bool {
 	a.loginMu.Lock()
 	defer a.loginMu.Unlock()

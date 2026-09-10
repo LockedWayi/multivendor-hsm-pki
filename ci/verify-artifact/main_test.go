@@ -8,7 +8,10 @@ import (
 	"testing"
 )
 
-// The gate is exercised against the same real cosign signature the
+// The gate is exercised against the real cosign signature the artifactsig
+// package uses. What is checked is the command: a non-nil error for every
+// way verification can fail, because the exit status is the interface.
+
 // artifactsig package uses -- a bundle produced over the HSM, not one this
 // test made. What is checked here is the *command*: that its exit path is
 // non-nil error for every way verification can fail, since exit status is

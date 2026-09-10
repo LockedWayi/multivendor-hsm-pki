@@ -1,33 +1,19 @@
 #!/usr/bin/env bash
-# Static checks for the OpenTofu tree: formatting, validity, and
-# misconfiguration/secret scanning.
+# Static checks for the OpenTofu tree: formatting, validity,
+# misconfiguration and secret scanning.
 #
-# trivy, not tfsec: tfsec is deprecated and merged into Trivy (Aqua
-# Security), so `trivy config` is the maintained tool the phase file's
-# "tfsec (or trivy config)" choice resolves to.
+# trivy config, not tfsec: tfsec is deprecated and merged into Trivy.
 #
-# A clean `trivy config` run here is a narrower claim than it looks for this
-# repo: Hostinger's `hostinger_vps` is not a resource type Trivy ships
-# rules for (confirmed empirically, not assumed -- see
-#), so a zero-finding
-# run proves the tool executed and found nothing to say about *this*
-# provider, not that the configuration is free of every possible
-# misconfiguration class.
+# A clean trivy config run here is a narrow claim. Trivy ships no rules for
+# Hostinger's hostinger_vps, so a zero-finding run shows the tool ran and
+# had nothing to say about this provider. Trivy's secret scanner runs over
+# the same tree; it pattern-matches file contents regardless of provider,
+# and it caught a planted token once.
 #
-# Because those cloud-misconfiguration rules have zero coverage for this
-# provider, the script also runs Trivy's secret scanner over the same tree.
-# That check *is* reachable regardless of provider: it pattern-matches file
-# contents for real-looking credentials, independent of any resource
-# schema. It is what caught the deliberate demonstration mistake in
-# sub-task 3.6 -- a hardcoded-looking token left in a variable's `default`.
+# fmt and validate are here because trivy config parses HCL, and a file it
+# cannot parse produces no findings rather than an error.
 #
-# `fmt` and `validate` are not security checks and are here anyway. They are
-# what makes the security checks worth reading: `trivy config` parses HCL,
-# and a file it cannot parse produces no findings rather than an error, so
-# an invalid configuration is indistinguishable from a clean one unless
-# something else has already established that it parses.
-#
-# Usage: ci/terraform-scan.sh
+#   ci/terraform-scan.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,10 +23,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 TF_DIR="${REPO_ROOT}/deploy/terraform"
 
-# Both tools run in pinned containers rather than off the host's PATH. The
-# previous version of this script called whatever `trivy` and `tofu` the
-# developer happened to have installed, which made "it passed locally" a
-# statement about that machine.
+# Both tools run in pinned containers, not off the host's PATH.
 tofu() {
     docker run --rm -v "${REPO_ROOT}":/repo -w /repo \
         -e TF_IN_AUTOMATION=1 \
@@ -56,12 +39,8 @@ mkdir -p "${REPO_ROOT}/.local/scan/cache"
 echo "==> tofu fmt -check"
 tofu fmt -check -recursive -diff /repo/deploy/terraform
 
-# tofu init writes a .terraform/ directory into each root module it
-# touches, as root, because the container is root. Left behind on a
-# developer's machine those are root-owned files inside a user-owned
-# checkout -- gitignored, so invisible to git status, and removable only
-# with the same privilege that made them. Cleaned up here rather than
-# explained in a troubleshooting note later.
+# tofu init writes a root-owned .terraform/ directory into each root
+# module. Cleaned up here.
 cleanup_tofu_state() {
     docker run --rm -v "${REPO_ROOT}":/repo -w /repo "${TOFU_CLEANUP_IMAGE}" \
         sh -c 'rm -rf deploy/terraform/environments/*/.terraform' || true
@@ -70,29 +49,15 @@ trap cleanup_tofu_state EXIT
 
 echo
 echo "==> tofu validate, per root module"
-# -backend=false is required, not a shortcut: the backend is a self-hosted
-# MinIO bucket that CI cannot reach and holds no credentials for. Skipping
-# it installs the providers -- which is all `validate` needs -- without
-# touching remote state. A validate that needed state would be a validate
-# that could not run on a pull request from a fork.
-# Root modules only. `validate` on a root module also validates the child
-# modules it calls -- measured, not assumed: an undeclared variable
-# introduced in modules/compute/main.tf failed `validate` in
-# environments/dev, reported against the module's own file and line. So
-# iterating modules/ separately would re-check the same code while making
-# tofu write a .terraform.lock.hcl into a directory that should not carry
-# one, since a module does not choose its own provider versions.
-#
-# The gap this leaves, stated rather than hidden: a module no environment
-# references would go unvalidated. Both environments use modules/compute
-# today.
+# -backend=false: the backend is a MinIO bucket CI cannot reach, and
+# validate needs the providers, not the state. Root modules only: validate
+# on a root module also validates the child modules it calls. A module no
+# environment references would go unvalidated; both use modules/compute.
 validated=0
 for dir in "${TF_DIR}"/environments/*/; do
-    # compgen, not `[ -e "${dir}"*.tf ]`: that form expands to several
-    # words when a directory holds several .tf files, which makes `test`
-    # fail as a syntax error rather than as "no match". The first version
-    # of this loop did exactly that and skipped every directory in
-    # silence -- a validate step that validated nothing and said nothing.
+    # compgen, not a test on a glob: the test form expands to several
+    # words when a directory holds several .tf files and fails as a syntax
+    # error. The first version of this loop skipped every directory.
     compgen -G "${dir}*.tf" >/dev/null || continue
     rel="${dir#"${REPO_ROOT}/"}"
     echo "    ${rel}"
@@ -101,11 +66,7 @@ for dir in "${TF_DIR}"/environments/*/; do
     validated=$((validated + 1))
 done
 
-# Fail closed on an empty loop. Whatever the cause -- a
-# moved directory, a glob that stops matching, the quoting bug above -- a
-# check that silently examined nothing must not report success, because
-# nothing distinguishes it from a check that examined everything and
-# approved.
+# A check that examined nothing must not report success.
 if [ "${validated}" -eq 0 ]; then
     echo "terraform-scan: validated 0 directories under ${TF_DIR}; expected at least one" >&2
     exit 1

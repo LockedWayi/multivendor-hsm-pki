@@ -4,8 +4,7 @@
 # escalation, all capabilities dropped, a seccomp profile, no host
 # namespaces, no hostPath volumes. The base manifest satisfies it already --
 # but a namespace that only warns lets a future manifest quietly stop
-# satisfying it, and a guardrail nobody can fail is not a guardrail
-# (sub-task 4.5).
+# satisfying it, and a guardrail nobody can fail is not a guardrail.
 #
 # audit and warn are set alongside enforce so a violation is visible in the
 # API server's audit log and at kubectl time, not only as a rejection.

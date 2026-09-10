@@ -24,25 +24,17 @@ import (
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
-// newTestCA returns the issuing CA these tests exercise: a real,
-// ceremony-produced **intermediate** over two freshly provisioned SoftHSM2
-// tokens.
-//
-// It used to bootstrap a self-signed root, which is what the service itself
-// used to do. Phase 3b removed that from the product, so it is removed from
-// the tests too — running the issuance suite against a root would exercise a
-// configuration this platform now refuses to start in.
+// newTestCA returns the issuing CA these tests exercise: a ceremony-produced
+// intermediate over two freshly provisioned tokens. The service refuses to
+// run on a root, so the tests do not run against one either.
 func newTestCA(t *testing.T, b *ceremonyBackend) *ca.CA {
 	t.Helper()
 	c, _ := newTestCAWithRoot(t, b)
 	return c
 }
 
-// newTestCAWithRoot is newTestCA plus the ceremony's root certificate, for
-// the tests that need to build or verify a full chain. The root is returned
-// as DER and is only ever used as a trust anchor — nothing in these tests
-// signs with it, which mirrors the platform: after the ceremony, the root's
-// key is not reachable from anything that runs online.
+// newTestCAWithRoot is newTestCA plus the ceremony's root certificate as
+// DER, used only as a trust anchor. Nothing here signs with the root.
 func newTestCAWithRoot(t *testing.T, b *ceremonyBackend) (*ca.CA, []byte) {
 	t.Helper()
 	ctx := context.Background()
@@ -68,9 +60,8 @@ func newTestCAWithRoot(t *testing.T, b *ceremonyBackend) (*ca.CA, []byte) {
 	return ca.NewCA(interCert, signer, time.Hour, testLeafDistribution()), result.RootCertDER
 }
 
-// signedCSR builds and signs a CSR with priv (an *ecdsa.PrivateKey,
-// *rsa.PrivateKey, or ed25519.PrivateKey), then parses it back — exercising
-// the exact bytes Issue would receive over the wire.
+// signedCSR builds and signs a CSR with priv, then parses it back, so the
+// test exercises the bytes Issue receives over the wire.
 func signedCSR(t *testing.T, priv crypto.Signer, subject pkix.Name) *x509.CertificateRequest {
 	t.Helper()
 	template := &x509.CertificateRequest{Subject: subject}
@@ -104,16 +95,10 @@ func TestIssue_Success(t *testing.T) {
 	})
 }
 
-// TestIssue_OpenSSLVerify is sub-task 2.3's Done-when criterion, carried
-// forward into the two-tier hierarchy: an issued certificate passes
-// `openssl verify` against the real chain.
-//
-// The verification changed shape in Phase 3b and the change is the point.
-// It used to be `openssl verify -CAfile <the CA's own cert> leaf.pem`, which
-// worked only because that certificate was self-signed and therefore its own
-// trust anchor. Now the issuer is an intermediate, so the trust anchor is
-// the offline root and the intermediate is supplied as an untrusted
-// path-building certificate — exactly what a relying party has to do.
+// TestIssue_OpenSSLVerify: an issued certificate passes openssl verify
+// against the real chain. The trust anchor is the offline root and the
+// intermediate is supplied as an untrusted path-building certificate,
+// which is what a relying party does.
 func TestIssue_OpenSSLVerify(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		if _, err := exec.LookPath("openssl"); err != nil {
@@ -195,11 +180,9 @@ func TestIssue_InvalidSignatureRejected(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
-		// x509.CreateCertificateRequest verifies its own output before
-		// returning, so a CSR with a genuinely mismatched signature cannot be
-		// built through it — construct one honestly, then flip a bit inside the
-		// trailing signature BIT STRING to invalidate it without touching the
-		// surrounding DER's length-prefixed structure.
+		// x509.CreateCertificateRequest verifies its own output, so the CSR
+		// is built honestly and a bit is flipped inside the signature BIT
+		// STRING afterwards.
 		template := &x509.CertificateRequest{Subject: pkix.Name{CommonName: "bad-signature.example.test"}}
 		der, err := x509.CreateCertificateRequest(rand.Reader, template, priv)
 		if err != nil {
@@ -278,10 +261,9 @@ func TestIssue_UnsupportedKeyAlgorithmRejected(t *testing.T) {
 	})
 }
 
-// TestIssue_KeyUsageMatchesKeyAlgorithm guards a standards bug: the
-// template asserted keyEncipherment unconditionally, which describes an
-// RSA operation an EC key cannot perform (RFC 5480 §3) — and P-256 is this
-// CA's default curve, so every certificate it issued carried it wrongly.
+// TestIssue_KeyUsageMatchesKeyAlgorithm: the template once asserted
+// keyEncipherment unconditionally, an RSA operation an EC key cannot
+// perform (RFC 5480 §3), on every P-256 certificate this CA issued.
 func TestIssue_KeyUsageMatchesKeyAlgorithm(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		c := newTestCA(t, b)
@@ -347,15 +329,9 @@ func TestBuildCRL_RejectsInvertedValidityWindow(t *testing.T) {
 	})
 }
 
-// TestIssue_SetsDistributionPoints is sub-task 3b.4's core assertion: every
-// leaf says where its revocation status is published and where the
-// certificate that signed it can be fetched.
-//
-// The negative half matters as much as the positive one. No OCSP responder
-// URL is written, because no responder exists until Phase 5b — a verifier
-// configured to require OCSP would fail closed against a pointer that was
-// never going to answer, which is a worse outcome than having no pointer at
-// all and falling back to the CRL.
+// TestIssue_SetsDistributionPoints: every leaf says where its revocation
+// status is published and where the issuing certificate can be fetched.
+// No OCSP URL is written, because no responder exists.
 func TestIssue_SetsDistributionPoints(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		c := newTestCA(t, b)
@@ -377,27 +353,19 @@ func TestIssue_SetsDistributionPoints(t *testing.T) {
 			t.Fatalf("IssuingCertificateURL = %v, want [%s]", got, testLeafIssuerURL)
 		}
 		if len(cert.OCSPServer) != 0 {
-			t.Fatalf("leaf names an OCSP responder %v, but none exists until Phase 5b", cert.OCSPServer)
+			t.Fatalf("leaf names an OCSP responder %v, but no responder exists", cert.OCSPServer)
 		}
-		// The leaf's CDP must be the intermediate's own CRL, never the root's:
-		// the root CRL covers the intermediate and would never list this leaf,
-		// so a relying party following it would conclude the leaf is unrevoked
-		// no matter what this CA has published.
+		// The leaf's CDP must be the intermediate's CRL, never the root's,
+		// which never lists a leaf.
 		if cert.CRLDistributionPoints[0] == testRootCRLURL {
 			t.Fatal("leaf CDP points at the root CRL, which covers the intermediate and never lists leaves")
 		}
 	})
 }
 
-// TestIssue_FailsClosedWithoutDistributionPoints proves the guard in Issue
-// is a guard and not a default.
-//
-// A certificate's extensions are fixed by its signature, so a leaf issued
-// without a CRL distribution point can never gain one — it can only be
-// revoked into a CRL nobody has been told to fetch. Refusing to issue is
-// therefore the only fail-closed answer available. No HSM
-// is needed: the check runs before anything is signed, which is itself part
-// of what this asserts.
+// TestIssue_FailsClosedWithoutDistributionPoints: a leaf issued without a
+// CRL distribution point can never gain one, so Issue refuses. No token is
+// needed; the check runs before anything is signed.
 func TestIssue_FailsClosedWithoutDistributionPoints(t *testing.T) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -417,9 +385,8 @@ func TestIssue_FailsClosedWithoutDistributionPoints(t *testing.T) {
 		{"unfetchable issuer scheme", ca.LeafDistribution{CRLURL: testLeafCRLURL, IssuerCertURL: "file:///etc/intermediate.crt"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// A nil signer is safe here and deliberate: if the guard ever
-			// stopped running first, this test would panic rather than
-			// quietly pass, which is the louder failure.
+			// A nil signer: if the guard ever stopped running first, this
+			// would panic rather than pass.
 			c := ca.NewCA(&x509.Certificate{}, nil, time.Hour, tc.dist)
 			if _, err := c.Issue(csr); !errors.Is(err, ca.ErrNoDistributionPoints) {
 				t.Fatalf("Issue error = %v, want ErrNoDistributionPoints", err)
@@ -428,14 +395,8 @@ func TestIssue_FailsClosedWithoutDistributionPoints(t *testing.T) {
 	}
 }
 
-// TestIssue_OpenSSLShowsDistributionPoints is sub-task 3b.4's "assert the
-// openssl x509 -text output in a test, do not eyeball it" item.
-//
-// Go's own parser already confirmed the fields round-trip
-// (TestIssue_SetsDistributionPoints); this asserts that an independent
-// implementation reads the same DER the same way. Encoding a CDP or an AIA
-// block that only crypto/x509 can interpret would be indistinguishable from
-// a correct one until a relying party using OpenSSL tried to fetch it.
+// TestIssue_OpenSSLShowsDistributionPoints asserts that openssl reads the
+// same CDP and AIA out of the DER that crypto/x509 does.
 func TestIssue_OpenSSLShowsDistributionPoints(t *testing.T) {
 	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
 		if _, err := exec.LookPath("openssl"); err != nil {
@@ -471,7 +432,7 @@ func TestIssue_OpenSSLShowsDistributionPoints(t *testing.T) {
 			}
 		}
 		if strings.Contains(text, "OCSP - URI") {
-			t.Fatalf("openssl x509 -text output names an OCSP responder, which does not exist until Phase 5b:\n%s", text)
+			t.Fatalf("openssl x509 -text output names an OCSP responder, and no responder exists:\n%s", text)
 		}
 	})
 }

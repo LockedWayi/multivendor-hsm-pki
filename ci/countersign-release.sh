@@ -1,141 +1,141 @@
 #!/usr/bin/env bash
 #
 # Counter-sign a published image with the durable key, so that somebody who
-# does not trust this repository can verify it (Phase 5.9).
+# does not trust this repository can verify it.
 #
-#   ci/countersign-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
+#   HSM_PKI_TRUST_ANCHOR_REPO=... HSM_PKI_TRUST_ANCHOR_COMMIT=... HSM_PKI_TRUST_ANCHOR_SHA256=... \
+#   COSIGN_PKCS11_PIN=... ci/countersign-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:<digest>
 #
-# # Why this is a separate, manual step and not part of the pipeline
+# The pipeline signs every published digest keyless. That signature names
+# the workflow that made it. It is not in the key inventory, so admission
+# ignores it and ci/verify-release.sh does not accept it.
 #
-# The pipeline signs every published image, but with keys it provisions for
-# the run and destroys with the runner. That proves the signing mechanism
-# end to end over a real PKCS#11 token, and it proves nothing about custody:
-# the key came from the same build that produced the artifact, so a consumer
-# checking it learns only that the build agreed with itself.
+# This script adds what a release needs, all made by image-signing-key-v1
+# on the maintainer's own token:
 #
-# A signature that means something to a stranger has to be made by a key
-# whose authority does not come from the thing being signed. That key is
-# image-signing-key-v1 on the maintainer's own token -- listed in the
-# inventory, which is signed by an offline token, whose public half lives in
-# a separate repository. CI cannot have that key without either committing
-# key material or exposing the development machine to pipeline execution,
-# and both were rejected with reasons (phase 5.9).
+#   1. the image signature
+#   2. the CycloneDX SBOM attestation
+#   3. the SLSA provenance attestation
 #
-# So the durable signature is applied deliberately, by a person, to the
-# digests that are meant to be consumed. That is not a workaround for a
-# missing feature; it is what an offline-ish signing key is for. Ordinary
-# `main` builds stay development artifacts, and the README says so.
+# The two predicates are not regenerated here. They are read back from the
+# keyless attestations the pipeline attached, after the keyless identity is
+# verified, so the durable key signs the statements the pipeline made. A
+# digest with no keyless attestations is refused.
 #
-# # Where the durable token actually is
+# Each of the three is skipped when the durable key already made it, so a
+# run interrupted half way can be repeated. The success criterion is that
+# ci/verify-release.sh passes afterwards.
 #
-# HSM_PKI_SIGNING_STATE defaults to .local/signing inside this checkout, which
-# is right for whoever provisioned the keys here. It is worth saying out loud
-# that a fresh clone has no such directory -- the token is wherever
-# deploy/docker/provision-signing-keys.sh was first run, which is not
-# necessarily this working copy:
-#
-#   HSM_PKI_SIGNING_STATE=/path/to/that/checkout/.local/signing \
-#   COSIGN_PKCS11_PIN=... ci/countersign-release.sh <digest>
-#
-# Getting this wrong fails closed rather than quietly: ci/cosign.sh refuses
-# a missing store by name instead of inventing one, and the key check below
-# refuses a keys directory that is not docs/keys.
-#
-# # What "done" means here
-#
-# Not "cosign exited 0". This script's success criterion is that
-# ci/verify-release.sh -- the verification a stranger runs, anchored outside
-# this tree -- passes afterwards and failed before. A signature nobody else
-# can check is the thing this exists to stop producing.
+# Environment:
+#   COSIGN_PKCS11_PIN                          required
+#   HSM_PKI_TRUST_ANCHOR_REPO, _COMMIT, _SHA256  required by ci/verify-release.sh
+#   HSM_PKI_SIGNING_STATE      the token store, default .local/signing
+#   HSM_PKI_DOCKER_CONFIG      registry credentials, default ~/.docker
+#   HSM_PKI_IMAGE_KEY_LABEL    default image-signing-key-v1
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=ci/keyless-identity.sh
+. "$REPO_ROOT/ci/keyless-identity.sh"
 
 die() { echo "countersign-release: $*" >&2; exit 1; }
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 REF="${1:-}"
-[ -n "$REF" ] || die "usage: ci/countersign-release.sh <image-reference>@sha256:<digest>"
-
+[ -n "$REF" ] || die "usage: ci/countersign-release.sh <image>@sha256:<digest>"
 case "$REF" in
     *@sha256:*) ;;
-    *) die "refusing to sign a tag: $REF
-A signature is made over a digest. Signing whatever a name points at right
-now attests to nothing that survives the next push (CLAUDE.md 3.8)." ;;
+    *) die "refusing to sign a tag: $REF. A signature is made over a digest." ;;
 esac
+DIGEST="${REF#*@}"
 
 [ -n "${COSIGN_PKCS11_PIN:-}" ] || die \
-    "set COSIGN_PKCS11_PIN. The PIN reaches cosign as an environment
-variable and never inside a PKCS#11 URI (CLAUDE.md 3.1)."
+    "set COSIGN_PKCS11_PIN. The PIN reaches cosign as an environment variable and never inside a PKCS#11 URI."
+for v in HSM_PKI_TRUST_ANCHOR_REPO HSM_PKI_TRUST_ANCHOR_COMMIT HSM_PKI_TRUST_ANCHOR_SHA256; do
+    [ -n "${!v:-}" ] || die "$v is not set. ci/verify-release.sh needs the anchor inputs; see its header."
+done
 
-# Writing a signature is a registry PUSH, so cosign needs the operator's
-# credentials -- and it runs in a container that mounts only what it is told
-# to. Left unset, cosign is silently anonymous and the push fails with an
-# authentication error from a step whose subject is signing, which sends the
-# reader to the key and the token. Defaulted here to the place `docker login`
-# actually writes, so the ordinary case works without anybody having to know
-# this paragraph exists.
+# Signing is a registry push, so cosign needs the operator's credentials.
 if [ -z "${HSM_PKI_DOCKER_CONFIG:-}" ] && [ -d "$HOME/.docker" ]; then
     export HSM_PKI_DOCKER_CONFIG="$HOME/.docker"
 fi
 [ -n "${HSM_PKI_DOCKER_CONFIG:-}" ] || die \
-    "no registry credentials to sign with.
-Counter-signing pushes a signature to the registry, so it needs a login:
+    "no registry credentials. Run: docker login ghcr.io -u <you>   (a token with write:packages)"
 
-    docker login ghcr.io -u <you>       # a token with write:packages
-
-Then re-run. (Or point HSM_PKI_DOCKER_CONFIG at a directory holding a
-config.json, which is what DOCKER_CONFIG names.)"
-
-# The durable state, explicitly. Defaulting to it would be enough, but this
-# script must never silently counter-sign with whatever token happens to be
-# configured -- pointing HSM_PKI_SIGNING_STATE at a CI store and getting a
-# "successful" counter-signature from an ephemeral key is exactly the
-# confusion this whole step exists to remove.
 STATE="${HSM_PKI_SIGNING_STATE:-$REPO_ROOT/.local/signing}"
 KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
 [ "$KEYS_DIR" = "$REPO_ROOT/docs/keys" ] || die \
     "refusing to counter-sign with keys from $KEYS_DIR.
-The durable signature must be made by the key the published inventory lists,
-which is the one in docs/keys. If you are testing the mechanism, use
-ci/publish-image.sh's ephemeral path instead."
+The durable signature is made by the key the published inventory lists,
+which is the one in docs/keys."
+KEY_LABEL="${HSM_PKI_IMAGE_KEY_LABEL:-image-signing-key-v1}"
+PUBLIC_KEY="docs/keys/$KEY_LABEL.pub"
+[ -f "$REPO_ROOT/$PUBLIC_KEY" ] || die "no public key at $PUBLIC_KEY"
+export HSM_PKI_SIGNING_STATE="$STATE" HSM_PKI_KEYS_DIR="$KEYS_DIR"
+export HSM_PKI_REGISTRY_ALLOW_HTTP="${HSM_PKI_REGISTRY_ALLOW_HTTP:-false}"
+
+WORK="$REPO_ROOT/.local/countersign"
+mkdir -p "$WORK"
 
 log "checking the chain BEFORE counter-signing"
-# Establishes the negative. A script that only ever runs its check after the
-# change cannot tell a working signature from a check that always passes.
 if "$REPO_ROOT/ci/verify-release.sh" "$REF" >/dev/null 2>&1; then
-    echo "    already verifiable -- this digest is counter-signed already."
-    echo "    Nothing to do."
+    echo "    already verifiable: signature and both attestations are in place."
     exit 0
 fi
-echo "    not verifiable yet, as expected"
+echo "    not verifiable yet"
 
-log "counter-signing with the durable key on $STATE"
-# ci/sign-image.sh defaults plaintext to ALLOWED, which dates from the local
-# k3d registry. A release counter-signature must not inherit that: stated
-# here so the safe value is the one nobody has to remember.
-HSM_PKI_SIGNING_STATE="$STATE" HSM_PKI_KEYS_DIR="$KEYS_DIR" \
-HSM_PKI_REGISTRY_ALLOW_HTTP="${HSM_PKI_REGISTRY_ALLOW_HTTP:-false}" \
+# durable_present <subcommand> [args]: does the durable key already vouch?
+durable_present() {
+    HSM_PKI_COSIGN_VERSION=v2 HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" "$@" \
+        --key "/repo/$PUBLIC_KEY" --insecure-ignore-tlog=true \
+        --allow-http-registry="$HSM_PKI_REGISTRY_ALLOW_HTTP" "$REF" >/dev/null 2>&1
+}
+
+log "reading the pipeline's keyless attestations back from the registry"
+# Verified against the workflow identity before anything is read out of
+# them. cosign v3 reads the layout the pipeline wrote.
+"$REPO_ROOT/ci/cosign.sh" fetch >/dev/null
+fetch_predicate() {   # fetch_predicate <type> <out>
+    local envelope="$WORK/$1.dsse.json"
+    HSM_PKI_COSIGN_VERSION=v3 HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" verify-attestation \
+        --certificate-identity-regexp "$KEYLESS_IDENTITY_REGEXP" \
+        --certificate-oidc-issuer "$KEYLESS_OIDC_ISSUER" \
+        --type "$1" --allow-http-registry="$HSM_PKI_REGISTRY_ALLOW_HTTP" \
+        "$REF" > "$envelope" 2>/dev/null \
+        || die "this digest carries no keyless $1 attestation from the pipeline.
+Only digests the pipeline published are counter-signed."
+    "$REPO_ROOT/ci/extract-predicate.sh" "$envelope" "$DIGEST" "$2"
+}
+fetch_predicate cyclonedx "$WORK/sbom.cdx.json"
+fetch_predicate slsaprovenance1 "$WORK/provenance.json"
+"$REPO_ROOT/ci/check-provenance.sh" <(printf '%s\n' "$(cat "$WORK/slsaprovenance1.dsse.json")") "$DIGEST" \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["buildDefinition"]["resolvedDependencies"][0]["digest"]["gitCommit"])' "$WORK/provenance.json")"
+
+log "counter-signing with $KEY_LABEL on $STATE"
+if durable_present verify; then
+    echo "    signature already made by $KEY_LABEL, skipping"
+else
     "$REPO_ROOT/ci/sign-image.sh" "$REF"
+fi
+
+log "re-attesting the SBOM and the provenance with $KEY_LABEL"
+if durable_present verify-attestation --type cyclonedx && durable_present verify-attestation --type slsaprovenance1; then
+    echo "    both attestations already made by $KEY_LABEL, skipping"
+else
+    "$REPO_ROOT/ci/attest-image.sh" "$REF" "$WORK/sbom.cdx.json" "$WORK/provenance.json"
+fi
 
 log "checking the chain AFTER counter-signing"
-# The real gate. If this fails the signature exists but is useless to
-# everyone except us, which is worse than no signature: it looks protected.
 "$REPO_ROOT/ci/verify-release.sh" "$REF" || die \
     "counter-signed, but the independent verification still fails.
-The signature exists and nobody else can act on it. Investigate before
-announcing this digest as a release."
+Investigate before announcing this digest as a release."
 
-cat <<EOF
+cat <<EOT
 
-This digest is now verifiable by anyone, with no secret of ours:
+This digest is now verifiable by anyone who holds the anchor inputs:
 
+  HSM_PKI_TRUST_ANCHOR_REPO=$HSM_PKI_TRUST_ANCHOR_REPO \\
+  HSM_PKI_TRUST_ANCHOR_COMMIT=$HSM_PKI_TRUST_ANCHOR_COMMIT \\
+  HSM_PKI_TRUST_ANCHOR_SHA256=$HSM_PKI_TRUST_ANCHOR_SHA256 \\
   ci/verify-release.sh $REF
-
-or by hand, which is the version worth reading once:
-
-  curl -fsSL https://raw.githubusercontent.com/$(sed -n 's/^TRUST_ANCHOR_REPO="\(.*\)"$/\1/p' "$REPO_ROOT/ci/scanner-pins.sh")/$(sed -n 's/^TRUST_ANCHOR_COMMIT="\(.*\)"$/\1/p' "$REPO_ROOT/ci/scanner-pins.sh")/inventory-signing-key-v1.pub -o anchor.pub
-  openssl dgst -sha256 -verify anchor.pub \\
-      -signature docs/keys/key-inventory.json.sig docs/keys/key-inventory.json
-  # then verify the image with the image key listed in that inventory
-EOF
+EOT

@@ -3,7 +3,7 @@
 # which is the property that makes this the narrow escape hatch
 #
 
-# Phase 3.6's deliberate, temporary fake credential — planted to prove the
+# A temporary fake credential, planted to prove the
 # Terraform scanner catches a hardcoded secret, removed in the next commit,
 # permanent in history. The string is a hand-typed hex pattern, not a real
 # token; see commit 2f37c6f's own message.

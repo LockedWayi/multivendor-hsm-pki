@@ -1,28 +1,14 @@
 package pkcs11_test
 
-// TestConformance is the cross-vendor behavioral suite: every subtest here
-// runs, unchanged, against every backend the environment makes available.
-// SoftHSM2 needs no hardware and no proprietary SDK, so it is expected to
-// always be present (inside the dev container — see CONTRIBUTING.md) and
-// carries CI. ProtectServer requires a real Thales ProtectToolkit
-// installation and is only exercised when PROTECTSERVER_MODULE is set
-//; with it unset, that backend's subtests
-// skip and the suite stays green — the same graceful-skip pattern SoftHSM2
-// itself uses when its module is absent.
+// TestConformance is the cross-vendor suite: every subtest runs, unchanged,
+// against every backend the environment provides. SoftHSM2 is always
+// present in the dev container and carries CI. ProtectServer runs when
+// PROTECTSERVER_MODULE is set and skips otherwise.
 //
-// A single suite run against two independent implementations is the whole
-// point of Phase 1 (see "Why two adapters rather than one" in
-//): an abstraction validated once is a
-// guess, and a bug that only one backend's adapter has is exactly what a
-// shared test body — not two hand-copies of it — is built to catch.
-//
-// Every test vector here is a real digest, a real plaintext, a real key —
-// never an all-zero or empty stand-in. That is not a style preference: an
-// earlier diagnostic used make([]byte, 32) as a digest and produced a false
-// "ProtectServer cannot verify signatures" finding, corrected in
-//. Degenerate vectors exercise exactly the
-// edges where conforming implementations are allowed to disagree, so they
-// manufacture divergences that no real call path ever hits.
+// Every test vector is a real digest, a real plaintext, a real key, never
+// an all-zero stand-in. An all-zero digest is a case where conforming
+// implementations may disagree, and one produced a false "ProtectServer
+// cannot verify" finding once.
 
 import (
 	"context"
@@ -55,14 +41,9 @@ const (
 	protectServerWrongPIN         = "0000"
 )
 
-// conformanceBackend is one vendor's ready-to-use adapter, plus the
-// credentials the suite needs to exercise it. runID is folded into every
-// object label this run creates, so re-running the suite against a
-// persistent token (ProtectServer's emulator token lives on disk between
-// runs; SoftHSM2's is a fresh temp token every time, but the same
-// discipline costs nothing there and keeps both paths identical) never
-// finds a same-named leftover from a previous run and misreports it as a
-// duplicate.
+// conformanceBackend is one vendor's adapter plus the credentials the
+// suite needs. runID is folded into every object label, so a persistent
+// token never shows a leftover from an earlier run as a duplicate.
 type conformanceBackend struct {
 	name     string
 	adapter  pk11.VendorAdapter
@@ -79,20 +60,11 @@ func (b *conformanceBackend) label(suffix string) string {
 	return fmt.Sprintf("conf-%s-%s", b.runID, suffix)
 }
 
-// conformanceBackends is this suite's own vendor list, deliberately separate
-// from internal/hsmtest's registry.
-//
-// The separation is not drift. This suite needs a backend shape the harness
-// does not provide — a deliberately *wrong* PIN, and tolerance for the
-// adapter being closed part-way through, because
-// AdapterClose_RejectsFurtherUse is one of the behaviours it pins. Folding
-// that into the shared harness would push this suite's needs onto every
-// other suite that uses it. docs/test-matrix.md records the duplication as
-// accepted, with that reasoning.
-//
-// What must never happen is the two lists disagreeing about *which vendors
-// exist*, which is what TestConformanceCoversEveryRegisteredVendor below
-// enforces.
+// conformanceBackends is this suite's own vendor list, separate from
+// internal/hsmtest's registry. This suite needs a wrong PIN and tolerance
+// for the adapter being closed part-way through, which the shared harness
+// does not provide. TestConformanceCoversEveryRegisteredVendor keeps the
+// two lists equal.
 var conformanceBackends = []struct {
 	name  string
 	setup func(t *testing.T) *conformanceBackend
@@ -101,18 +73,10 @@ var conformanceBackends = []struct {
 	{"ProtectServer", setupProtectServerBackend},
 }
 
-// TestConformanceCoversEveryRegisteredVendor fails when a vendor is added to
-// internal/hsmtest's registry and not to this suite.
-//
-// Without it, that omission is invisible in the worst possible way: the new
-// vendor runs in every suite *except* the conformance one — the suite whose
-// entire purpose is to catch vendor divergence. Everything stays green, and
-// the backend nobody checked for conformance is the one nobody checked.
-//
-// The check is by name and in order, so a rename or a reordering is caught
-// too. It compares only names because the setup functions genuinely differ
-// (see conformanceBackends' comment); requiring identical constructors would
-// be requiring the merge this repository has decided not to make yet.
+// TestConformanceCoversEveryRegisteredVendor fails when a vendor is in
+// internal/hsmtest's registry and not in this suite. Without it the new
+// vendor would run in every suite except the one that finds vendor
+// divergence. Names and order are compared.
 func TestConformanceCoversEveryRegisteredVendor(t *testing.T) {
 	var covered []string
 	for _, be := range conformanceBackends {
@@ -128,8 +92,7 @@ func TestConformanceCoversEveryRegisteredVendor(t *testing.T) {
 	}
 }
 
-// TestConformance runs the full behavioral suite against every available
-// backend. See the package-level doc comment above for why.
+// TestConformance runs the full suite against every available backend.
 func TestConformance(t *testing.T) {
 	for _, be := range conformanceBackends {
 		be := be
@@ -154,7 +117,7 @@ func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
 			t.Fatalf("SOFTHSM2_MODULE=%s not found: %v", modulePath, err)
 		}
 		t.Skip("SoftHSM2 module not found at " + modulePath +
-			" — run inside the dev container (see CONTRIBUTING.md)")
+			"; run inside the dev container (see CONTRIBUTING.md)")
 	}
 
 	runID := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -172,10 +135,7 @@ func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
 	if err := os.WriteFile(confPath, []byte(conf), 0600); err != nil {
 		t.Fatalf("WriteFile(softhsm2.conf): %v", err)
 	}
-	// SOFTHSM2_CONF is process-wide; TestConformance's backends run
-	// sequentially (never t.Parallel()), so there is no cross-backend race,
-	// but a future parallelization of this suite would need to give each
-	// backend its own subprocess or drop this shared-env approach.
+	// SOFTHSM2_CONF is process-wide. The backends run sequentially.
 	if err := os.Setenv("SOFTHSM2_CONF", confPath); err != nil {
 		t.Fatalf("Setenv(SOFTHSM2_CONF): %v", err)
 	}
@@ -210,41 +170,21 @@ func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
 	return b
 }
 
-// registerCleanup destroys every object this run created, once the suite
-// has finished with the backend.
-//
-// The conformance suite is the heaviest key producer in the repository, and
-// a vendor's tokens persist between runs: without this it deposited dozens
-// of key pairs per run on the maintainer's token, permanently. Hardware
-// token memory is finite, so a suite that cannot clean up cannot be pointed
-// at an nShield or a Luna more than a handful of times
-// (docs/test-matrix.md).
-//
-// Only this run's objects are touched — matched by the runID prefix every
-// label from b.label carries. Litter from earlier runs is left alone,
-// because a test suite deleting objects it did not create is a destructive
-// operation aimed at somebody else's token.
+// registerCleanup destroys every object this run created once the suite
+// is done with the backend. A vendor's tokens persist between runs, and
+// token memory is finite. Only this run's objects are touched.
 func (b *conformanceBackend) registerCleanup(t *testing.T) {
 	t.Helper()
-	// This suite closes the adapter on purpose — AdapterClose_RejectsFurtherUse
-	// is one of the behaviours it pins — and cleanup then cannot use it. That
-	// went unnoticed for a long time because the failure is a log line: cleanup
-	// reported "adapter is closed" and returned, and the run's key pairs stayed
-	// on the token. It was found only when a duplicate-key check turned
-	// leftover keys into a hard failure on a backend whose RNG repeats
-	//. So this reopens rather than giving up.
+	// This suite closes the adapter on purpose, so cleanup reopens it. An
+	// earlier version logged the closed adapter and left the keys behind.
 	t.Cleanup(func() {
 		ctx := context.Background()
 		adapter := b.adapter
-		// Log out first: PKCS#11 authenticates a token application-wide, so
-		// a session opened while another token is authenticated cannot see
-		// this one's private objects, and cleanup would silently remove
-		// only the public half of every key pair.
+		// A session opened while another token is authenticated cannot see
+		// this one's private objects.
 		_ = adapter.LogoutToken(ctx)
 		if err := adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
-			// Close the first connection before opening a second: a PKCS#11
-			// library permits one C_Initialize per process, and
-			// ProtectToolkit rejects a second outright.
+			// One C_Initialize per process.
 			adapter.Close()
 			fresh, reopenErr := b.reopen()
 			if reopenErr != nil {
@@ -364,9 +304,7 @@ func (b *conformanceBackend) openLoggedInSession(t *testing.T, opts pk11.Session
 }
 
 // runConformanceSuite exercises the full VendorAdapter contract against b.
-// Subtests run in declared order (Go runs t.Run subtests sequentially
-// unless they call t.Parallel), which matters for the last one: closing
-// b.adapter must happen after every other subtest, not before.
+// Subtests run in declared order, and the last one closes b.adapter.
 func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	ctx := context.Background()
 
@@ -429,12 +367,8 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
-	// Login_ZeroizesCallerPINOnEarlyReturn pins the "pin is consumed"
-	// contract to every return path, not just the success path. The guard
-	// clauses ahead of NewSecurePIN (cancelled context here; an expired
-	// session is the other one) used to return with the caller's PIN still
-	// readable in the Go heap — the one copy this package can
-	// deterministically wipe, left unwiped.
+	// The PIN is zeroed on every return path, including the guard clauses
+	// before NewSecurePIN.
 	t.Run("Login_ZeroizesCallerPINOnEarlyReturn", func(t *testing.T) {
 		s, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
 		if err != nil {
@@ -466,21 +400,10 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
-	// LoginToken_AnchorLifecycle exercises the anchor-login model directly
-	// at the pkcs11 layer, not only through internal/ca's CA-level
-	// concurrency test. Discovered during Phase 2's final review: every
-	// tokenlogin.go function was only ever reached indirectly, through
-	// internal/ca/internal/api tests, which showed as 0% coverage on this
-	// package's own per-package profile and meant no test here pinned
-	// LoginToken's edge cases (a rejected empty PIN, a rejected second
-	// login, idempotent logout) at the layer that actually implements them
-	//
-	//
-	// Runs immediately after "Logout" above, which is the one earlier
-	// subtest guaranteed to leave the token de-authenticated — every
-	// subtest from here on that calls openLoggedInSession relies on that
-	// being true at its start, so this block logs the token back out
-	// before returning.
+	// LoginToken_AnchorLifecycle pins LoginToken's edge cases at this layer:
+	// an empty PIN, a second login, an idempotent logout. It runs right
+	// after "Logout", which leaves the token de-authenticated, and logs
+	// the token out again before returning.
 	t.Run("LoginToken_AnchorLifecycle", func(t *testing.T) {
 		if b.adapter.TokenLoggedIn() {
 			t.Fatal("TokenLoggedIn() = true before any LoginToken call")
@@ -507,11 +430,9 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatal("TokenLoggedIn() = false after a successful LoginToken")
 		}
 
-		// The load-bearing premise sub-task 2.8 was built on: a session
-		// opened after the anchor login inherits its authentication and can
-		// use a CKA_PRIVATE=true key with no login of its own. Pinned here
-		// so a regression fails at this layer, not three layers up in an
-		// HTTP concurrency test.
+		// A session opened after the anchor login inherits its
+		// authentication and can use a CKA_PRIVATE=true key without a login
+		// of its own.
 		label := b.label("anchor-inherits")
 		genSess, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
 		if err != nil {
@@ -535,10 +456,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 		_ = b.adapter.CloseSession(ctx, signSess)
 
-		// A second LoginToken while already logged in is an error, not a
-		// silent no-op — see LoginToken's doc comment for why silently
-		// agreeing would leave two callers disagreeing about who owns the
-		// eventual logout.
+		// A second LoginToken while logged in is an error.
 		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); !errors.Is(err, pk11.ErrTokenAlreadyLoggedIn) {
 			t.Fatalf("second LoginToken = %v, want ErrTokenAlreadyLoggedIn", err)
 		}
@@ -558,9 +476,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatalf("second LogoutToken (idempotent) = %v, want nil", err)
 		}
 
-		// Not a one-shot resource: the token can be re-authenticated after
-		// a logout, which is exactly what a long-lived daemon needs across
-		// its lifetime even though Phase 2 never re-logs-in on its own.
+		// The token can be authenticated again after a logout.
 		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
 			t.Fatalf("LoginToken after LogoutToken: %v", err)
 		}
@@ -569,12 +485,8 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
-	// LoginToken_ConcurrentCallsSerializeToOneWinner exercises loginMu
-	// directly: sub-task 2.8's fix is only real if concurrent LoginToken
-	// callers cannot both believe they established the anchor. Complements
-	// internal/api's TestIssueCertificate_ConcurrentRequests, which proves
-	// concurrent signing works once one caller has already logged in, but
-	// never exercises concurrent callers racing the login itself.
+	// Concurrent LoginToken callers cannot both believe they established
+	// the anchor.
 	t.Run("LoginToken_ConcurrentCallsSerializeToOneWinner", func(t *testing.T) {
 		if b.adapter.TokenLoggedIn() {
 			t.Fatal("TokenLoggedIn() = true before this subtest")
@@ -739,8 +651,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatalf("GenerateKeyPair: %v", err)
 		}
 
-		// A real SHA-256 digest of real data — never an all-zero or
-		// otherwise degenerate stand-in. See the package doc comment.
+		// A real digest of real data.
 		digest := sha256.Sum256([]byte("hsm-pki-platform " + b.name + " conformance"))
 		sig, err := b.adapter.Sign(ctx, s, kp.Private, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:])
 		if err != nil {
@@ -754,10 +665,9 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatalf("Verify (device-side) = %v, want nil", err)
 		}
 
-		// Cross-check the HSM's raw r||s signature against Go's own ECDSA
-		// verifier, using the public key read back off the HSM — this
-		// proves the produced signature is standards-conformant, not just
-		// internally self-consistent.
+		// The token's raw r||s signature is checked by crypto/ecdsa with the
+		// public key read back off the token, so the signature is
+		// standards-conformant and not only self-consistent.
 		attrs, err := b.adapter.GetAttributes(ctx, s, kp.Public, []pk11.AttributeType{pk11.AttrEcPoint})
 		if err != nil {
 			t.Fatalf("GetAttributes: %v", err)
@@ -773,7 +683,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatal("crypto/ecdsa.Verify rejected the HSM-produced signature")
 		}
 
-		// Tamper with the digest — verification must fail, not silently pass.
+		// A changed digest must fail.
 		digest[0] ^= 0xFF
 		if err := b.adapter.Verify(ctx, s, kp.Public, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:], sig); err == nil {
 			t.Fatal("Verify accepted a signature over a tampered digest")
@@ -781,18 +691,11 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	})
 
 	t.Run("GenerateKeyPair_PrivateKeyIsSensitiveAndNonExtractable", func(t *testing.T) {
-		// The property this whole platform rests on: a private key can be
-		// used through the token and cannot be taken out of it.
-		//
-		// The assertion deliberately asks the *token* rather than trusting
-		// the request that was sent. CKA_SENSITIVE used to be whatever
-		// KeyPairRequest's zero value happened to be, so every CA key was
-		// created explicitly non-sensitive — and no test noticed, because
-		// SoftHSM2 refused to disclose the scalar regardless. ProtectToolkit
-		// 7.3.3 did disclose it, all 32 bytes, to any authenticated session.
-		// A test that only checked what we asked for would have passed on
-		// both backends while one of them was handing out the key
-		//
+		// A private key can be used through the token and cannot be taken
+		// out of it. The token is asked, not the request. CKA_SENSITIVE was
+		// once whatever the request's zero value was, and ProtectToolkit
+		// 7.3.3 disclosed all 32 bytes to any authenticated session while
+		// SoftHSM2 refused.
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 		kp, err := b.adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
 			Curve: pk11.P256, Label: b.label("protection"), Sign: true, Verify: true,
@@ -819,15 +722,9 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	})
 
 	t.Run("FindObjects_ReturnsMoreThanOneBatch", func(t *testing.T) {
-		// C_FindObjects is paginated, and the pagination used to stop after
-		// the first batch of 50 — so every search silently returned at most
-		// 50 objects, with no error and a perfectly well-formed result.
-		// Invisible on a token holding fewer than 50 objects, which was
-		// every test token this repository had.
-		//
-		// 60 AES keys under one label: cheap to generate, and more than one
-		// batch by construction. The assertion is a count, because the
-		// defect was a count.
+		// C_FindObjects is paginated. The loop once stopped after the first
+		// batch of 50, so every search returned at most 50 objects with no
+		// error. 60 keys under one label is more than one batch.
 		const want = 60
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 		label := b.label("batching")
@@ -846,7 +743,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatalf("FindObjects: %v", err)
 		}
 		if len(found) != want {
-			t.Fatalf("FindObjects returned %d objects, want %d — the search is truncating", len(found), want)
+			t.Fatalf("FindObjects returned %d objects, want %d; the search is truncating", len(found), want)
 		}
 
 		for _, o := range found {
@@ -857,9 +754,8 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	})
 
 	t.Run("DestroyObject_RemovesTheObject", func(t *testing.T) {
-		// The operation the key lifecycle needs to retire a version
-		// and the one every test suite needs to not
-		// accumulate keys on a token that persists between runs.
+		// Retiring a key version needs this, and so does cleanup on a token
+		// that persists between runs.
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 		label := b.label("destroy-me")
 		kp, err := b.adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
@@ -875,8 +771,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			}
 		}
 
-		// Asked of the token, not inferred from the absence of an error:
-		// the point of the operation is that the object is gone.
+		// Asked of the token: the object must be gone.
 		found, err := b.adapter.FindObjects(ctx, s, []pk11.Attribute{
 			{Type: pk11.AttrLabel, Value: []byte(label)},
 		})
@@ -959,27 +854,13 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
-	// WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip is the demo sub-task 3b.6
-	// asks for: wrap → destroy → unwrap → sign, proving the wrap-based
-	// backup design in docs/key-ceremony-and-recovery.md actually round-trips
-	// rather than merely being described. It is a primitive proof, not the
-	// ceremony itself — a real backup unwraps onto a *different* token under
-	// separate custody, but C_UnwrapKey does not care which token performs
-	// it, so exercising both halves on one token here proves the mechanism
-	// without needing a third token in the harness.
-	//
-	// Extractable: true on the EC key pair is the one deliberate exception
-	// to this platform's default (KeyPairRequest's doc comment, the engineering contract
-	// the key-and-PIN rule) — it is what makes this key backup-eligible at all.
-	// CKA_SENSITIVE stays forced true regardless (GenerateKeyPair never
-	// takes it as a parameter), so C_WrapKey is the only door this key can
-	// leave through — C_GetAttributeValue still refuses it, per the finding
-	// in.
-	//
-	// This test is also where the two backends were found to diverge on
-	// whether a restore honors the restrictive attributes the operator
-	// asked for — see the comment on the final GetAttributes call below,
-	// and.
+	// WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip: wrap, destroy, unwrap,
+	// sign. It shows the wrap-based backup in
+	// docs/key-ceremony-and-recovery.md round-trips. A real backup unwraps
+	// onto a different token; C_UnwrapKey does not care which token
+	// performs it, so one token proves the mechanism. Extractable: true is
+	// the one exception to the platform default, and CKA_SENSITIVE stays
+	// true, so C_WrapKey is the only door this key can leave through.
 	t.Run("WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip", func(t *testing.T) {
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 
@@ -997,9 +878,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatalf("GenerateKeyPair: %v", err)
 		}
 
-		// A real digest of real data — never an all-zero or otherwise
-		// degenerate stand-in (see the package doc comment on why that
-		// matters here specifically).
+		// A real digest of real data.
 		digest := sha256.Sum256([]byte("wrap-based backup round trip, " + b.name))
 		originalSig, err := b.adapter.Sign(ctx, s, kp.Private, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:])
 		if err != nil {
@@ -1018,18 +897,15 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatal("Wrap returned empty ciphertext")
 		}
 
-		// The original object is destroyed here — simulating the token it
-		// lived on being lost. Everything below this line works only from
-		// the wrapped backup, not from any surviving handle to the original.
+		// The original is destroyed. Everything below works from the wrapped
+		// backup only.
 		if err := b.adapter.DestroyObject(ctx, s, kp.Private); err != nil {
 			t.Fatalf("DestroyObject (original private key): %v", err)
 		}
 
-		// No CKA_EC_PARAMS in this template, deliberately — SoftHSM2 2.6.1
-		// rejects an explicit value here with CKR_ATTRIBUTE_READ_ONLY,
-		// because it derives the curve from the wrapped object itself
-		// rather than accepting the caller's assertion of it. Both backends
-		// unwrap correctly without it.
+		// No CKA_EC_PARAMS in the template. SoftHSM2 2.6.1 rejects an
+		// explicit value with CKR_ATTRIBUTE_READ_ONLY; it derives the curve
+		// from the wrapped object. Both backends unwrap without it.
 		restored, err := b.adapter.Unwrap(ctx, s, wrappingKey, mech, wrapped, []pk11.Attribute{
 			pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPrivateKey)),
 			pk11.NumericAttribute(pk11.AttrKeyType, uint64(pk11.KeyTypeEC)),
@@ -1048,26 +924,18 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		if err != nil {
 			t.Fatalf("Sign (after restore): %v", err)
 		}
-		// Verified against the *original* public key, which was never
-		// touched: this is the proof that restore produced the same key,
-		// not merely a working one.
+		// Verified against the original public key: the restore produced the
+		// same key.
 		if err := b.adapter.Verify(ctx, s, kp.Public, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:], restoredSig); err != nil {
-			t.Fatalf("Verify (after restore) = %v, want nil — the restored key should produce signatures the original public key still accepts", err)
+			t.Fatalf("Verify (after restore) = %v, want nil; the restored key should produce signatures the original public key still accepts", err)
 		}
 
-		// Whether the restored object actually stays non-extractable is not
-		// something this platform's own code can guarantee here: Unwrap is
-		// a generic primitive — WrapUnwrap_AESKeyWrapRoundTrip above needs
-		// it to honor Extractable: true for a payload key — so there is no
-		// place to force this attribute the way GenerateKeyPair forces
-		// CKA_SENSITIVE (3b.7). Measured, not assumed:
-		// SoftHSM2 2.6.1 honors the template's CKA_EXTRACTABLE=false;
-		// ProtectToolkit 7.3.3 does not — the restored key comes back
-		// extractable regardless of what the template asked for
-		//. The operational consequence is in
-		// docs/key-ceremony-and-recovery.md: a real restore reads this
-		// attribute back off the token before trusting it, on every vendor,
-		// rather than trusting the template it sent.
+		// Unwrap is a generic primitive, so this platform cannot force
+		// CKA_EXTRACTABLE here the way GenerateKeyPair forces CKA_SENSITIVE.
+		// SoftHSM2 2.6.1 honours the template's CKA_EXTRACTABLE=false.
+		// ProtectToolkit 7.3.3 does not: the restored key comes back
+		// extractable. A real restore reads this attribute back before
+		// trusting the key.
 		attrs, err := b.adapter.GetAttributes(ctx, s, restored, []pk11.AttributeType{pk11.AttrExtractable})
 		if err != nil {
 			t.Fatalf("GetAttributes (restored): %v", err)
@@ -1075,15 +943,12 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		gotExtractable := len(attrs[0].Value) > 0 && attrs[0].Value[0] != 0
 		t.Logf("restored private key CKA_EXTRACTABLE=%v (template asked for false)", gotExtractable)
 		if b.name == "SoftHSM2" && gotExtractable {
-			t.Fatal("SoftHSM2 restored private key is CKA_EXTRACTABLE=true, contradicting the unwrap template — this backend was previously observed honoring it")
+			t.Fatal("SoftHSM2 restored private key is CKA_EXTRACTABLE=true, contradicting the unwrap template; this backend was previously observed honoring it")
 		}
 	})
 
-	// GenerateSecretKey_InvalidKeySizeRejected checks the adapter refuses a
-	// bad AES key length itself rather than passing bits/8 down and letting
-	// each vendor decide. 200 bits is the interesting case: it divides to a
-	// 25-byte CKA_VALUE_LEN, which is a plausible-looking value a token
-	// might accept as a non-standard key rather than reject.
+	// 200 bits divides to a 25-byte CKA_VALUE_LEN, which a token might
+	// accept as a non-standard key. The adapter refuses it first.
 	t.Run("GenerateSecretKey_InvalidKeySizeRejected", func(t *testing.T) {
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 		for _, bits := range []int{1, 127, 200, 512, -256} {
@@ -1096,57 +961,19 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
-	// No concurrency subtest lives here, and that absence is deliberate.
-	//
-	// One was written while reviewing base.go's lock discipline: eight
-	// goroutines calling Workspaces at once. It exposed two real things and
-	// then had to be removed, because it destabilizes the ProtectServer run
-	// for the rest of the suite — after that burst, a later C_OpenSession
-	// hangs, and the suite times out rather than failing cleanly.
-	//
-	// What it found is recorded where it belongs instead:
-	//   - ProtectToolkit deadlocks inside a concurrently-entered
-	//     C_GetSlotList despite CKF_OS_LOCKING_OK. This is why Workspaces
-	//     holds the exclusive lock; see its doc comment and
-	//
-	//   - PKCS#11 login state is per-token, not per-session, on BOTH
-	//     backends, which makes the current open/login/op/logout-per-call
-	//     pattern unsafe under concurrent callers. That is a live defect,
-	//     tracked as Phase 2 sub-task 2.8, and it is blocked on a
-	//     maintainer decision — the test that proves it fixed belongs with
-	//     that fix, not ahead of it.
-	//
-	// Anything added here that runs operations from several goroutines must
-	// be tested against ProtectServer with the full suite ahead of it, not
-	// in isolation: neither failure reproduces in a freshly started process
-	// that only makes the one call.
+	// There is no concurrency subtest here. One was written, eight
+	// goroutines calling Workspaces at once, and it destabilized the
+	// ProtectServer run for the rest of the suite: a later C_OpenSession
+	// hung and the suite timed out. What it found is recorded on
+	// Workspaces in base.go. Anything added here that runs operations from
+	// several goroutines must be tested against ProtectServer with the full
+	// suite ahead of it; the deadlock does not reproduce in a fresh process
+	// that makes only the one call.
 
-	t.Run("GenerateRandom_ReturnsDistinctBytes", func(t *testing.T) {
-		s := b.openLoggedInSession(t, pk11.SessionOptions{})
-		a, err := b.adapter.GenerateRandom(ctx, s, 32)
-		if err != nil {
-			t.Fatalf("GenerateRandom: %v", err)
-		}
-		if len(a) != 32 {
-			t.Fatalf("GenerateRandom returned %d bytes, want 32", len(a))
-		}
-		c, err := b.adapter.GenerateRandom(ctx, s, 32)
-		if err != nil {
-			t.Fatalf("GenerateRandom: %v", err)
-		}
-		if string(a) == string(c) {
-			t.Fatal("two GenerateRandom calls returned identical output")
-		}
-	})
-
-	// AdapterClose must run last: PKCS#11's C_Initialize is a per-module,
-	// per-process resource, so a second Ctx over the same .so path while
-	// this one is still live would fail with CKR_CRYPTOKI_ALREADY_INITIALIZED
-	// — there is no way to test Close() on a disposable second instance
-	// without that collision. Naming this subtest last (t.Run calls run in
-	// declared order) keeps every earlier subtest's use of b.adapter valid.
-	// t.Cleanup's own Close() call after this is a no-op since Close is
-	// idempotent.
+	// AdapterClose must run last. A second Ctx over the same module while
+	// this one is live fails with CKR_CRYPTOKI_ALREADY_INITIALIZED, so
+	// Close cannot be tested on a disposable instance. t.Cleanup's own
+	// Close afterwards is a no-op.
 	t.Run("AdapterClose_RejectsFurtherUse", func(t *testing.T) {
 		if err := b.adapter.Close(); err != nil {
 			t.Fatalf("Close: %v", err)

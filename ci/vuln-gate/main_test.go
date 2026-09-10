@@ -9,8 +9,7 @@ import (
 	"time"
 )
 
-// A fixed clock. Every expiry assertion in this file is relative to it, so
-// none of these tests start failing on a date nobody chose.
+// A fixed clock, so no test starts failing on a date.
 var testNow = time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 
 func writeAllowlist(t *testing.T, body string) string {
@@ -22,10 +21,8 @@ func writeAllowlist(t *testing.T, body string) string {
 	return path
 }
 
-// govulncheck's real output shape, trimmed to what the gate reads. Captured
-// from govulncheck v1.7.0 against golang.org/x/text v0.3.0 rather than
-// invented, so a change in that format shows up as a test failure here
-// instead of as a gate that silently stops finding anything.
+// govulncheck's real output shape, captured from v1.7.0 against
+// golang.org/x/text v0.3.0, so a format change shows up here.
 const gvcCalled = `{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck"}}
 {"osv":{"id":"GO-2021-0113","aliases":["CVE-2021-38561","GHSA-ppp9-7jff-5vj2"],"summary":"Out-of-bounds read in golang.org/x/text/language"}}
 {"finding":{"osv":"GO-2021-0113","fixed_version":"v0.3.7","trace":[{"module":"golang.org/x/text","version":"v0.3.0"}]}}
@@ -36,8 +33,8 @@ const gvcCalled = `{"config":{"protocol_version":"v1.0.0","scanner_name":"govuln
 const gvcClean = `{"config":{"protocol_version":"v1.0.0","scanner_name":"govulncheck"}}
 `
 
-// The gate's reason for existing: govulncheck in JSON mode exits 0 on a
-// called vulnerability, so the verdict has to come from the content.
+// govulncheck in JSON mode exits 0 on a called vulnerability, so the
+// verdict comes from the content.
 func TestReachableVulnerabilityBlocks(t *testing.T) {
 	var out bytes.Buffer
 	err := run([]string{"-allowlist", writeAllowlist(t, "vulnerabilities: []\n"), "-govulncheck", "-"},
@@ -48,9 +45,7 @@ func TestReachableVulnerabilityBlocks(t *testing.T) {
 	if !strings.Contains(out.String(), "BLOCKING: GO-2021-0113") {
 		t.Fatalf("output does not name the blocking vulnerability:\n%s", out.String())
 	}
-	// The two shallower findings for the same vulnerability must be
-	// reported as context, never as blockers — otherwise the gate is just
-	// trivy with extra steps.
+	// The two shallower findings are reported as context, not blockers.
 	if !strings.Contains(out.String(), "imported, not called") {
 		t.Fatalf("output does not distinguish the unreachable findings:\n%s", out.String())
 	}
@@ -64,8 +59,7 @@ func TestCleanScanPasses(t *testing.T) {
 	}
 }
 
-// The single-allowlist claim: govulncheck names this GO-2021-0113, a human
-// reviewing it writes down the CVE. One file has to serve both.
+// govulncheck names this GO-2021-0113; a reviewer writes down the CVE.
 func TestAllowlistSuppressesByCVEAlias(t *testing.T) {
 	list := writeAllowlist(t, `vulnerabilities:
   - id: CVE-2021-38561
@@ -95,15 +89,14 @@ func TestExpiredEntryStopsSuppressing(t *testing.T) {
 	if err == nil {
 		t.Fatal("an entry that expired yesterday still suppressed its finding")
 	}
-	// And the log has to say the entry expired, or the finding's return
-	// looks like a new vulnerability appearing from nowhere.
+	// The log says the entry expired.
 	if !strings.Contains(out.String(), "EXPIRED CVE-2021-38561") {
 		t.Fatalf("expiry was not reported:\n%s", out.String())
 	}
 }
 
-// The defect trivy cannot catch, because trivy accepts it: an entry with no
-// expiry date suppresses forever (measured against trivy 0.67.0).
+// trivy accepts an entry with no expiry and suppresses forever (measured
+// against trivy 0.67.0).
 func TestEntryWithoutExpiryIsRefused(t *testing.T) {
 	list := writeAllowlist(t, `vulnerabilities:
   - id: CVE-2021-38561
@@ -143,8 +136,7 @@ func TestExpiryBeyondTheHorizonIsRefused(t *testing.T) {
 	}
 }
 
-// Two decisions on file for one vulnerability means the one that applies is
-// picked by position in the file, which is nobody's decision.
+// Two entries for one id: position would choose between them.
 func TestDuplicateEntryIsRefused(t *testing.T) {
 	list := writeAllowlist(t, `vulnerabilities:
   - id: CVE-2021-38561
@@ -160,8 +152,8 @@ func TestDuplicateEntryIsRefused(t *testing.T) {
 	}
 }
 
-// A misspelled key must not read as an absent one: `expires_at` silently
-// ignored would produce exactly the never-expiring entry this file forbids.
+// A misspelled key must not read as an absent one; expires_at ignored
+// would be a never-expiring entry.
 func TestUnknownFieldIsRefused(t *testing.T) {
 	list := writeAllowlist(t, `vulnerabilities:
   - id: CVE-2021-38561
@@ -174,8 +166,7 @@ func TestUnknownFieldIsRefused(t *testing.T) {
 	}
 }
 
-// Empty input and a clean scan are the same exit status in JSON mode, so
-// the gate must be able to tell them apart from the content alone.
+// Empty input and a clean scan have the same exit status in JSON mode.
 func TestTruncatedGovulncheckOutputIsRefused(t *testing.T) {
 	var out bytes.Buffer
 	err := run([]string{"-allowlist", writeAllowlist(t, "vulnerabilities: []\n"), "-govulncheck", "-"},
@@ -185,8 +176,7 @@ func TestTruncatedGovulncheckOutputIsRefused(t *testing.T) {
 	}
 }
 
-// No accepted findings is the honest state of a clean repository, and it
-// must not need a file to say so.
+// A repository with no accepted findings needs no file.
 func TestMissingAllowlistIsNotAnError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
 	var out bytes.Buffer
@@ -196,8 +186,7 @@ func TestMissingAllowlistIsNotAnError(t *testing.T) {
 	}
 }
 
-// The file this repository actually ships has to satisfy its own validator,
-// or the gate is green only because nobody has run it against the real one.
+// The file this repository ships must satisfy its own validator.
 func TestRepositoryAllowlistIsValid(t *testing.T) {
 	var out bytes.Buffer
 	if err := run([]string{"-allowlist", filepath.Join("..", "vuln-allowlist.yaml")},

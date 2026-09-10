@@ -190,11 +190,8 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 	})
 }
 
-// TestIssueCertificate_AdapterErrorDoesNotLeakDetail covers Phase 2
-// sub-task 2.7's other failure path: an adapter-level failure (here, the
-// adapter having been closed — the same failure mode as a service mid-
-// shutdown or an HSM connection drop) must surface as a 500 whose body
-// never contains internal error detail, only a fixed generic message
+// TestIssueCertificate_AdapterErrorDoesNotLeakDetail: an adapter failure,
+// here a closed adapter, is a 500 whose body carries no internal detail.
 func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -260,13 +257,10 @@ func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 	})
 }
 
-// TestIssueCertificate_ConcurrentRequests is sub-task 2.8's Done-when
-// criterion. Before the anchor-login change this failed reliably: PKCS#11
-// authenticates a token for the whole application, so the second concurrent
-// request's C_Login returned CKR_USER_ALREADY_LOGGED_IN, and the first
-// request's C_Logout de-authenticated the second one mid-signature. Every
-// other test in Phases 1 and 2 is sequential, which is exactly why the
-// defect survived to be found by hand.
+// TestIssueCertificate_ConcurrentRequests: before the anchor login this
+// failed. PKCS#11 authenticates a token for the whole application, so the
+// second request's C_Login returned CKR_USER_ALREADY_LOGGED_IN and the
+// first request's C_Logout de-authenticated the second mid-signature.
 func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -341,14 +335,9 @@ func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 	})
 }
 
-// TestIssueCertificate_ReturnsFullChain pins sub-task 3b.2's requirement
-// that issuance hands back a path a relying party can actually build with:
-// the leaf, then the intermediate that signed it.
-//
-// It also pins what must NOT be there. The root is absent by design — it is
-// the trust anchor, and a relying party that accepted a root handed to it by
-// the same server that issued the certificate would not be verifying
-// anything.
+// TestIssueCertificate_ReturnsFullChain: issuance returns the leaf and the
+// intermediate that signed it, and not the root, which is the trust anchor
+// and is distributed out of band.
 func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -407,8 +396,8 @@ func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 			t.Fatalf("returned leaf is not signed by the returned intermediate: %v", err)
 		}
 
-		// The chain the response carries must verify to the root the ceremony
-		// produced, with no certificate fetched from anywhere else.
+		// The chain must verify to the ceremony's root with nothing fetched
+		// from elsewhere.
 		root, err := x509.ParseCertificate(rootArtifacts.CertDER)
 		if err != nil {
 			t.Fatalf("parsing root: %v", err)
@@ -433,10 +422,8 @@ func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 	})
 }
 
-// TestRootArtifactEndpoints checks that the URLs baked into the
-// intermediate's CDP and AIA extensions at ceremony time actually resolve to
-// the artifacts they name. A CDP pointing at nothing means no relying party
-// can ever learn the intermediate was revoked.
+// TestRootArtifactEndpoints: the URLs in the intermediate's CDP and AIA
+// resolve to the artifacts they name.
 func TestRootArtifactEndpoints(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -456,9 +443,7 @@ func TestRootArtifactEndpoints(t *testing.T) {
 			if ct := resp.Header.Get("Content-Type"); ct != api.ContentTypeCert {
 				t.Fatalf("Content-Type = %q, want %q (RFC 2585 §3)", ct, api.ContentTypeCert)
 			}
-			// Parsed as DER directly, with no PEM decode: this is exactly what
-			// a client following the AIA URL does, and it is the assertion that
-			// would have caught the PEM body this used to serve.
+			// Parsed as DER directly, as a client following the AIA URL does.
 			root, err := x509.ParseCertificate(body)
 			if err != nil {
 				t.Fatalf("parsing served root as DER: %v", err)
@@ -485,9 +470,8 @@ func TestRootArtifactEndpoints(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parsing served root CRL as DER: %v", err)
 			}
-			// The root CRL covers the intermediate and nothing else, so a fresh
-			// ceremony's CRL is empty. It must never carry the leaf revocations
-			// that GET /crl serves -- those are the intermediate's business.
+			// The root CRL covers the intermediate only, so a fresh
+			// ceremony's is empty.
 			if len(crl.RevokedCertificateEntries) != 0 {
 				t.Fatalf("root CRL carries %d entries, want 0", len(crl.RevokedCertificateEntries))
 			}
@@ -512,13 +496,8 @@ func TestRootArtifactEndpoints(t *testing.T) {
 }
 
 // TestIntermediateCertEndpoint covers GET /intermediate.crt, the AIA
-// CA-Issuers target of every leaf this service issues.
-//
-// A relying party that holds only a leaf follows this URL to obtain the
-// certificate that signed it. The endpoint therefore has to serve the
-// service's *own* intermediate — not the root, and not whatever certificate
-// happens to be at hand — or path building silently ends at the wrong
-// issuer.
+// CA-Issuers target of every leaf. It must serve the service's own
+// intermediate, not the root.
 func TestIntermediateCertEndpoint(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
@@ -545,21 +524,16 @@ func TestIntermediateCertEndpoint(t *testing.T) {
 			t.Fatalf("served certificate is %q, want this service's own intermediate %q",
 				served.Subject, c.Certificate().Subject)
 		}
-		// The distinction that matters: this is the issuer, not the trust
-		// anchor. A self-signed certificate here would mean the endpoint is
-		// handing out a root, which /root.crt exists for and which a relying
-		// party must obtain out of band anyway.
+		// The issuer, not the trust anchor.
 		if err := served.CheckSignatureFrom(served); err == nil {
 			t.Fatal("served certificate is self-signed, so it is a root, not the intermediate")
 		}
 	})
 }
 
-// TestIntermediateCertEndpoint_MissingIssuerFailsHonestly pins the absent
-// case. NewServer takes the issuer by value and cannot reject a nil one, so
-// the handler must answer 503 rather than 200 with an empty body: a relying
-// party handed a successful, empty response has no way to tell "the issuer
-// is unavailable" from "the issuer is this zero-length certificate".
+// TestIntermediateCertEndpoint_MissingIssuerFailsHonestly: NewServer
+// cannot reject a nil issuer, so the handler answers 503, not an empty
+// 200.
 func TestIntermediateCertEndpoint_MissingIssuerFailsHonestly(t *testing.T) {
 	srv := httptest.NewServer(api.NewServer(nil, nil, pk11.Workspace{}, store.NewMemory(), 24*time.Hour, api.RootArtifacts{}, testLogger()))
 	defer srv.Close()
@@ -574,19 +548,11 @@ func TestIntermediateCertEndpoint_MissingIssuerFailsHonestly(t *testing.T) {
 	}
 }
 
-// TestIssuedLeafDistributionPointsResolve is sub-task 3b.4's Done-when
-// criterion, end to end: the URLs inside a freshly issued certificate are
-// fetched, and what comes back is the CRL that governs *that* leaf and the
-// certificate that actually signed it.
-//
-// Note the ordering the test has to perform, because a deployment performs
-// the same one. A certificate's extensions are fixed by its signature, so
-// the CA must know the service's external URL before it issues anything —
-// which means the listener's address has to exist before the handler is
-// built. httptest.NewUnstartedServer gives exactly that: a bound listener
-// whose address is known, with the handler attached afterwards. In
-// production the same ordering is why ca.base_url is operator-supplied
-// configuration rather than something the process discovers about itself.
+// TestIssuedLeafDistributionPointsResolve fetches the URLs inside a
+// freshly issued certificate. The listener's address has to exist before
+// the handler is built, because the CA must know its external URL before
+// it issues; httptest.NewUnstartedServer gives that. In production the
+// same ordering is why ca.base_url is operator-supplied.
 func TestIssuedLeafDistributionPointsResolve(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		srv := httptest.NewUnstartedServer(nil)
@@ -630,9 +596,7 @@ func TestIssuedLeafDistributionPointsResolve(t *testing.T) {
 			if err := leaf.CheckSignatureFrom(issuer); err != nil {
 				t.Fatalf("the certificate at %s did not sign the leaf: %v", aiaURL, err)
 			}
-			// AKI/SKI is what a path builder actually matches on, so a served
-			// certificate that verifies but whose key identifier does not match
-			// would still break automated path building.
+			// A path builder matches on AKI and SKI.
 			if !bytes.Equal(leaf.AuthorityKeyId, issuer.SubjectKeyId) {
 				t.Fatalf("leaf AKI %x does not match the served issuer's SKI %x", leaf.AuthorityKeyId, issuer.SubjectKeyId)
 			}
@@ -645,10 +609,8 @@ func TestIssuedLeafDistributionPointsResolve(t *testing.T) {
 			}
 		})
 
-		// The strongest form of "the CRL that governs that leaf": revoke it and
-		// confirm it appears at the URL the certificate itself names. A CDP that
-		// serves a valid but unrelated CRL would pass every check above and
-		// still leave the certificate unrevocable in practice.
+		// Revoke the leaf and confirm it appears at the URL the certificate
+		// names. A CDP serving an unrelated CRL would pass every check above.
 		t.Run("revoking the leaf makes it appear at its own CDP", func(t *testing.T) {
 			revokeResp, err := http.Post(srv.URL+"/certificates/"+leaf.SerialNumber.String()+"/revoke", "application/json", nil)
 			if err != nil {
@@ -683,9 +645,7 @@ func getCertificate(t *testing.T, url string) *x509.Certificate {
 		t.Fatalf("GET %s: status = %d, want 200", url, resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	// DER, not PEM: RFC 2585 §3 is what a client following an AIA URL
-	// implements, and parsing it this way here is what keeps that promise
-	// under test.
+	// DER, not PEM: RFC 2585 §3.
 	cert, err := x509.ParseCertificate(body)
 	if err != nil {
 		t.Fatalf("parsing the certificate served at %s as DER: %v", url, err)
@@ -693,8 +653,7 @@ func getCertificate(t *testing.T, url string) *x509.Certificate {
 	return cert
 }
 
-// getCRL fetches a DER CRL from url — the encoding GET /crl serves, which is
-// what a relying party following a distribution point expects.
+// getCRL fetches a DER CRL from url.
 func getCRL(t *testing.T, url string) *x509.RevocationList {
 	t.Helper()
 	resp, err := http.Get(url)
@@ -713,10 +672,7 @@ func getCRL(t *testing.T, url string) *x509.RevocationList {
 	return crl
 }
 
-// TestLeafDistributionFor covers URL composition on its own, without an HSM.
-// The end-to-end proof that these paths match real routes is
-// TestIssuedLeafDistributionPointsResolve; this covers the shapes of
-// baseURL an operator may reasonably write in config.yaml.
+// TestLeafDistributionFor covers URL composition without a token.
 func TestLeafDistributionFor(t *testing.T) {
 	for _, tc := range []struct {
 		name, base, wantCRL, wantIssuer string
@@ -728,17 +684,12 @@ func TestLeafDistributionFor(t *testing.T) {
 			"https://pki.example.test/intermediate.crt",
 		},
 		{
-			// Tolerated rather than rejected: a trailing slash is a typo an
-			// operator should not have to lose a certificate over, and the
-			// resulting URL is unambiguous either way.
 			"trailing slash",
 			"https://pki.example.test/",
 			"https://pki.example.test/crl",
 			"https://pki.example.test/intermediate.crt",
 		},
 		{
-			// A CA served under a path on a shared host: the prefix has to
-			// survive, or every URL points at the host's root.
 			"path prefix",
 			"https://shared.example.test/pki",
 			"https://shared.example.test/pki/crl",

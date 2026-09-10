@@ -19,12 +19,12 @@
 # ephemeral container attached to a running pod was refused with the
 # policy's own message. The two conditions answer different questions --
 # whether the admission webhook is wired, and whether the reports controller
-# can build a policy report — and only the first decides what is admitted.
+# can build a policy report, and only the first decides what is admitted.
 #
-# It is still worth fixing, for a reason that has nothing to do with
+# It is still fixed, for a reason that has nothing to do with
 # reporting. An operator running `kubectl get vpol` sees `READY false` next
 # to the policy that protects the cluster. The next step from there is not
-# "read the condition", it is "this is broken" — and the repair somebody
+# "read the condition", it is "this is broken", and the repair somebody
 # reaches for is deleting the policy. A control that looks broken while
 # working is a control with a shorter life than one that looks fine.
 #

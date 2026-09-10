@@ -10,8 +10,8 @@ metadata:
     app.kubernetes.io/name: hsm-pki
     app.kubernetes.io/component: ca
 spec:
-  # SINGLE INSTANCE, DELIBERATELY. Raising this number is a correctness bug,
-  # not a scaling decision, and it fails silently in both of its modes:
+  # Single instance. Raising this number is a correctness bug, and it fails
+  # silently in both of its modes:
   #
   #  1. The store is single-writer. The connection pool is capped at one
   #     inside a process, which says nothing about two processes opening the
@@ -33,12 +33,11 @@ spec:
   # exists to prevent -- so the default strategy would reintroduce the defect
   # during every deployment, briefly and invisibly.
   #
-  # The cost is honest and stated: an update has a downtime window. The
-  # phase file originally asked for a strategy that "never drops to zero
-  # ready replicas", which is unachievable together with "never runs two" on
-  # a single-writer store. Of the two, never-two is the one that protects
-  # correctness; never-zero only protects availability, and the CA being
-  # briefly unreachable is a fetch that retries, not a wrong answer.
+  # The cost: an update has a downtime window. A strategy that never drops
+  # to zero ready replicas cannot be combined with one that never runs two
+  # on a single-writer store. Never-two protects correctness. Never-zero
+  # protects availability, and a CA that is briefly unreachable is a fetch
+  # that retries, not a wrong answer.
   strategy:
     type: Recreate
 
@@ -69,10 +68,8 @@ spec:
       containers:
         - name: hsm-pki-server
           # Overlays set the image. It is a tag here and must become a
-          # digest once a registry exists: a tag is a mutable pointer, so
-          # deploying one means deploying whatever it points at today, and a
-          # signature over a tag attests to nothing durable (the identity rule,
-          # sub-task 4.10).
+          # digest once a registry exists: a tag is a mutable pointer, and a
+          # signature over a tag attests to nothing durable.
           image: hsm-pki-server:local
           imagePullPolicy: IfNotPresent
 
@@ -84,13 +81,11 @@ spec:
               protocol: TCP
 
           env:
-            # PHASE 6 PLACEHOLDER, and labelled as one deliberately. A
-            # Kubernetes Secret is base64-encoded, not encrypted: it is
-            # readable by anyone who can read Secrets in this namespace, and
-            # it sits in etcd. This is not the final custody solution -- that
-            # is Vault (Phase 6), which is why the config file names the
-            # variable rather than holding the value, so the source can
-            # change without the service changing.
+            # Placeholder until Vault holds the PIN. A Kubernetes Secret is
+            # base64-encoded, not encrypted: it is readable by anyone who can
+            # read Secrets in this namespace, and it sits in etcd. The config
+            # file names the variable rather than holding the value, so the
+            # source can change without the service changing.
             - name: HSM_PKI_INTERMEDIATE_PIN
               valueFrom:
                 secretKeyRef:
@@ -148,8 +143,8 @@ spec:
           # from zero (thirty issuances completed in 0.59s wall clock).
           #
           # The requests are far above that on purpose. What was measured is
-          # the SoftHSM2 path; a vendor client library -- ProtectToolkit's
-          # netclient, and the nShield and Luna libraries in Phase 7 -- brings
+          # the SoftHSM2 path; a vendor client library (ProtectToolkit's
+          # netclient, or the nShield and Luna libraries) brings
           # its own buffers and threads into this process, and the request is
           # what the scheduler reserves. The limit is generous for the same
           # reason plus one more: a memory limit that a future backend
@@ -213,8 +208,8 @@ spec:
         # exactly what differs between a SoftHSM2 development cluster and a
         # vendor deployment.
         #
-        # Deliberately claims rather than an emptyDir placeholder, and the
-        # first draft got this wrong in an instructive way. A strategic-merge
+        # Claims rather than an emptyDir placeholder. The first draft got this
+        # wrong. A strategic-merge
         # patch merges by key; it does not replace. An overlay patching an
         # `emptyDir` volume to a `persistentVolumeClaim` therefore produced a
         # volume carrying *both* sources -- rejected by the API server, and
