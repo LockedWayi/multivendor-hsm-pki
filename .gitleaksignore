@@ -6,5 +6,5 @@
 # A temporary fake credential, planted to prove the
 # Terraform scanner catches a hardcoded secret, removed in the next commit,
 # permanent in history. The string is a hand-typed hex pattern, not a real
-# token; see commit 2f37c6f's own message.
-9127e58ee94329ccaaa0cb69c59cc352cf13eef6:deploy/terraform/environments/dev/variables.tf:github-pat:4
+# token; see commit 85f4ebb's own message.
+85f4ebb038681cc2d690669f00f0f1049ca200c0:deploy/terraform/environments/dev/variables.tf:github-pat:4

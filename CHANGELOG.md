@@ -68,7 +68,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Three refusals are asserted on every run**, because a verifier shown only
   valid input is indistinguishable from one that returns success
   unconditionally: a one-byte-appended binary must fail, the image key must
-  fail to verify a release artifact (CLAUDE.md §3.6's purpose separation,
+  fail to verify a release artifact (purpose separation,
   measured rather than labelled), and a PKCS#11 key must be refused in verify
   mode.
 - **A published image anyone can verify, without trusting this repository**
