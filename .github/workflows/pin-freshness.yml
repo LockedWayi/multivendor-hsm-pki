@@ -1,0 +1,50 @@
+# Pinned third-party references, checked against upstream on a schedule.
+#
+# Dependabot covers the pins it can see: Dockerfile FROM lines, `uses:`
+# values and go.mod. It cannot see ci/scanner-pins.sh, because a digest in
+# a shell variable is not an ecosystem it knows how to read. Those pins rot
+# silently: nothing breaks, they just stop receiving the fixes a tag would
+# have brought. ci/check-pin-freshness.sh is that half of the mechanism.
+#
+# Deliberately its own workflow rather than a job in ci.yml, and
+# deliberately not a required check. A gate that goes red because upstream
+# shipped a release would block every unrelated pull request, and it would
+# fail for reasons that have nothing to do with the change under review.
+# The verdict here is about the repository, not about a commit.
+#
+# What this cannot do yet, stated rather than implied: it reports, it does
+# not raise the upgrade. Opening a pull request from a workflow needs
+# "Allow GitHub Actions to create and approve pull requests", which is off
+# on this repository, and enabling it grants the approval half as well.
+# Until that is decided, a failed scheduled run is the notification.
+name: pin freshness
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC. After Dependabot's weekly window, so an upgrade
+    # week's work arrives together.
+    - cron: '0 6 * * 1'
+  # So the check can be run on demand without waiting a week, and so a
+  # change to this workflow can be exercised before it is merged.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pin-freshness
+  cancel-in-progress: true
+
+jobs:
+  pins:
+    name: pinned references against upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The checker runs in the digest-pinned builder image, the same one
+      # the shipped binary is compiled with, so this step needs no Go
+      # toolchain on the runner and no unpinned setup action.
+      - name: Pinned references against upstream
+        run: ci/check-pin-freshness.sh
