@@ -44,7 +44,10 @@ same commands the pipeline uses.
 ```sh
 # One-time: provision local signing keys and publish the key inventory.
 # Writes only public material to docs/keys/. No private key is written.
-deploy/docker/provision-signing-keys.sh
+# Both PINs are required and are not generated for you: the tokens outlive
+# the run, and every later signing step logs back in with them.
+HSM_PKI_SUPPLY_PIN_VALUE=... HSM_PKI_INVENTORY_PIN_VALUE=... \
+    deploy/docker/provision-signing-keys.sh
 
 # Fetch and verify cosign. Two tracks, and they are not interchangeable.
 # v2 signs and attests images with the PKCS#11 key (the layout admission
