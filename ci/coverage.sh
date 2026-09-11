@@ -27,7 +27,16 @@ FILTERED_PROFILE="$(mktemp)"
 trap 'rm -f "$RAW_PROFILE" "$FILTERED_PROFILE"' EXIT
 
 # atomic: -race requires it.
-go test ./... -covermode=atomic -coverprofile="$RAW_PROFILE" "$@"
+#
+# -count=1: CI restores Go's build cache between runs, and that cache
+# carries the test *result* cache with it. Go's content addressing makes
+# replaying a previous verdict sound for pure computation and unsound here:
+# these tests drive a real SoftHSM2 token, and token state is not an input
+# Go can hash. A cached pass means the token was never touched, which is the
+# one thing this job exists to prove. It defeats the result cache only; the
+# compilation cache, which is what makes this job slow (cgo, sqlite, race
+# instrumentation), is untouched.
+go test ./... -covermode=atomic -coverprofile="$RAW_PROFILE" -count=1 "$@"
 
 # The profile's first line is the "mode: set" header; every line after is
 # "file:startLine.startCol,endLine.endCol numStatements count".

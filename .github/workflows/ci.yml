@@ -109,11 +109,18 @@ jobs:
 
       # -p 1: the vendor backends share a persistent token store, and one
       # invocation that works on every backend is kept.
+      #
+      # -count=1: the restored build cache above carries Go's test result
+      # cache, so without it a warm run replays earlier verdicts instead of
+      # executing. These tests drive a real token, and token state is not an
+      # input Go can hash, so a cached pass means the token was never
+      # touched. Only the result cache is defeated; the compilation cache,
+      # which is the expensive part, still applies.
       - name: Full suite with the race detector
         run: |
           docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS hsm-pki-dev sh -c '
             git config --global --add safe.directory /repo
-            go test -race -p 1 ./...'
+            go test -race -p 1 -count=1 ./...'
 
       # COVERAGE_BADGE_CHECK recomputes docs/coverage.svg and fails when
       # the committed one disagrees. The badge is checked in like a
