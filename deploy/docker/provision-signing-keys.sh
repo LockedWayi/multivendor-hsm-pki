@@ -22,8 +22,13 @@
 # Every published artifact is public: three public keys, one JSON
 # document, one signature. No private key is written anywhere.
 #
-#   deploy/docker/provision-signing-keys.sh          provision (first run)
-#   deploy/docker/provision-signing-keys.sh --reset  destroy local key state
+# Both token PINs come from the environment and are required:
+#
+#   HSM_PKI_SUPPLY_PIN_VALUE=... HSM_PKI_INVENTORY_PIN_VALUE=... \
+#       deploy/docker/provision-signing-keys.sh          provision (first run)
+#
+#   HSM_PKI_SUPPLY_PIN_VALUE=... HSM_PKI_INVENTORY_PIN_VALUE=... \
+#       deploy/docker/provision-signing-keys.sh --reset  destroy and re-provision
 #
 # Re-running without --reset is refused: the labels are taken, and
 # regenerating a key under a published label would strand every signature
@@ -57,13 +62,49 @@ DEV_IMAGE="hsm-pki-dev:local"
 SUPPLY_TOKEN_LABEL="hsm-pki-local-supply-chain"
 INVENTORY_TOKEN_LABEL="hsm-pki-local-inventory"
 
-# Throwaway PINs for throwaway tokens, generated per invocation from
-# /dev/urandom, passed to the containers as environment variables and never
-# written to a file. The tool takes the name of the variable.
-SUPPLY_PIN="${HSM_PKI_SUPPLY_PIN_VALUE:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
-INVENTORY_PIN="${HSM_PKI_INVENTORY_PIN_VALUE:-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')}"
+# The caller supplies both PINs. They are passed to the containers as
+# environment variables and never written to a file; the tool takes the name
+# of the variable, not its value.
+#
+# Not defaulted, and specifically not defaulted to something random: these
+# tokens outlive the run. Every later signature -- ci/sign-image.sh,
+# ci/sign-artifact.sh, ci/countersign-release.sh, and re-signing the
+# inventory during a rotation -- logs back in with these PINs. A PIN this
+# script invented and nobody recorded leaves keys that exist, are published
+# in the inventory, and can never be used again. Key generation cannot be
+# undone by re-running it: the labels are taken.
+missing=()
+[ -n "${HSM_PKI_SUPPLY_PIN_VALUE:-}" ] || missing+=(HSM_PKI_SUPPLY_PIN_VALUE)
+[ -n "${HSM_PKI_INVENTORY_PIN_VALUE:-}" ] || missing+=(HSM_PKI_INVENTORY_PIN_VALUE)
+if [ ${#missing[@]} -ne 0 ]; then
+    cat >&2 <<'USAGE'
+provision-signing-keys: both token PINs must be supplied in the environment.
+Missing:
+USAGE
+    printf '  %s\n' "${missing[@]}" >&2
+    cat >&2 <<'USAGE'
 
-# Different tokens, different PINs.
+Set them to values you can produce again later, and keep them where you keep
+your own secrets -- not in this repository, and not in a file beside the
+tokens:
+
+  HSM_PKI_SUPPLY_PIN_VALUE=... HSM_PKI_INVENTORY_PIN_VALUE=... \
+      deploy/docker/provision-signing-keys.sh
+
+HSM_PKI_SUPPLY_PIN_VALUE guards image-signing-key-v1 and
+artifact-signing-key-v1, and is the PIN every later signing step needs as
+COSIGN_PKCS11_PIN. HSM_PKI_INVENTORY_PIN_VALUE guards
+inventory-signing-key-v1 on the offline token, and is what a rotation needs
+to sign the next inventory.
+USAGE
+    exit 1
+fi
+
+SUPPLY_PIN="$HSM_PKI_SUPPLY_PIN_VALUE"
+INVENTORY_PIN="$HSM_PKI_INVENTORY_PIN_VALUE"
+
+# Different tokens, different PINs. One PIN over both would make the offline
+# inventory token reachable by whatever holds the supply-chain token's.
 [ "$SUPPLY_PIN" != "$INVENTORY_PIN" ] || {
     echo "provision-signing-keys: the two tokens must not share a PIN." >&2
     exit 1
