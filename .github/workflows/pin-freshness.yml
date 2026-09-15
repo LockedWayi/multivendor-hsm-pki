@@ -1,4 +1,5 @@
-# Pinned third-party references, checked against upstream on a schedule.
+# Pinned third-party references, checked against upstream on every push
+# to main, weekly, and on demand.
 #
 # Dependabot covers the pins it can see: Dockerfile FROM lines, `uses:`
 # values and go.mod. It cannot see ci/scanner-pins.sh, because a digest in
@@ -12,14 +13,41 @@
 # fail for reasons that have nothing to do with the change under review.
 # The verdict here is about the repository, not about a commit.
 #
-# What this cannot do yet, stated rather than implied: it reports, it does
-# not raise the upgrade. Opening a pull request from a workflow needs
-# "Allow GitHub Actions to create and approve pull requests", which is off
-# on this repository, and enabling it grants the approval half as well.
-# Until that is decided, a failed scheduled run is the notification.
+# It reports; it does not raise the upgrade. Opening a pull request from a
+# workflow needs "Allow GitHub Actions to create and approve pull
+# requests", which is off on this repository and grants the approval half
+# along with the create half. That setting stays off by decision.
+#
+# So the report has to reach somebody without it, and the first two tries
+# did not:
+#
+#   1. The schedule did not fire. Active on main for three days, Monday's
+#      window passed, no run at all.
+#   2. The manual run that replaced it failed, addressed to the account
+#      that last edited the cron, and sent no email.
+#
+# Hence the push trigger below. A red run here is not a broken commit --
+# it is this repository holding a pinned reference that upstream has moved
+# past. Read the job's log, bump the pin in ci/scanner-pins.sh, and it
+# goes green. It blocks nothing: this is a separate workflow, so it cannot
+# appear in ci.yml's `needs:` graph and cannot hold up publish or release,
+# and it is not a required check.
 name: pin freshness
 
 on:
+  # Every push to main, which is the trigger that actually arrives. The
+  # schedule below is kept because it catches the weeks nobody pushes --
+  # exactly when a pin quietly ages -- but a mechanism that has never once
+  # fired is not something to rely on alone.
+  #
+  # The cost, so it is not discovered later: a handful of registry calls
+  # per push, five of which reach Docker Hub. Two are manifest requests,
+  # which count against the anonymous rate limit that GitHub runners share
+  # by IP; three are tag listings, which do not. If this ever starts
+  # failing with a 429 rather than a stale pin, that is the reason.
+  push:
+    branches: [main]
+
   schedule:
     # Mondays, after Dependabot's weekly window, so an upgrade week's work
     # arrives together.
@@ -33,10 +61,10 @@ on:
     # mitigation. Observed once rather than proven, so the next Monday is
     # the check.
     - cron: '23 6 * * 1'
-  # So the check can be run on demand without waiting a week, and so a
-  # change to this workflow can be exercised before it is merged. This is
-  # also the only reason the schedule's failure above was noticed rather
-  # than assumed away.
+  # So the check can be run on demand, and so a change to this workflow can
+  # be exercised before it is merged. It is also the only reason the
+  # schedule's failure was noticed rather than assumed away, which is an
+  # argument for keeping a manual path on anything that reports by absence.
   workflow_dispatch:
 
 permissions:
