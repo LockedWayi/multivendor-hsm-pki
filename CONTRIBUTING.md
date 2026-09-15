@@ -67,6 +67,12 @@ ci/signing-mechanism-test.sh <local-image-tag> <sbom.cdx.json>
 # Re-check everything the mechanism test signed, holding no key material.
 ci/verify-run-artifacts.sh <keys-dir> <binary> <bundle> <image>@sha256:<digest>
 
+# The image-signing key's lifecycle on a throwaway token set: roll to the
+# next version, retire the old one, and check at every state which key the
+# signers pick and which signatures the verifiers accept. The mechanism
+# job runs this after the test above, on the same image.
+ci/rotation-drill.sh <local-image-tag> <sbom.cdx.json>
+
 # Counter-sign a published digest with image-signing-key-v1 and re-attest
 # its SBOM and provenance with the same key. Maintainer-only.
 COSIGN_PKCS11_PIN=... ci/countersign-release.sh <image>@sha256:<digest>

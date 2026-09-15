@@ -13,7 +13,8 @@
 #   allowlist   every vulnerability exception in force suppressed
 #               something, unioned across all three scanners
 #   mechanism   on a pull request that can change what is signed, the
-#               PKCS#11 path end to end against a throwaway registry
+#               PKCS#11 path end to end against a throwaway registry,
+#               then the image-signing key's rotation drill
 #   publish     build, scan, prove the PKCS#11 signing path, push, sign
 #               keyless
 #   verifyrun   re-check this run's keyless signatures from a checkout
@@ -390,6 +391,16 @@ jobs:
       - name: Prove the PKCS#11 signing path end to end
         if: steps.needed.outputs.run == 'true'
         run: ci/signing-mechanism-test.sh
+
+      # The key lifecycle, run rather than described: provision, sign,
+      # roll to the next version, sign again, retire the old version by
+      # destroying it on the token, and at each state check which key
+      # the signers pick and which signatures the verifiers accept. It
+      # takes the image and SBOM the mechanism test just built, and dies
+      # if either is missing rather than building something else.
+      - name: Rotate the image-signing key through its lifecycle
+        if: steps.needed.outputs.run == 'true'
+        run: ci/rotation-drill.sh hsm-pki-server:mechanism .local/scan/sbom.cdx.json
 
   # --------------------------------------------------------------------
   # The first job that writes anything, and the only one holding a
