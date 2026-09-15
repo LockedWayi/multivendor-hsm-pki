@@ -26,6 +26,10 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 OUT="${HSM_PKI_SCAN_OUT:-${REPO_ROOT}/.local/scan}"
 ALLOWLIST="ci/vuln-allowlist.yaml"
+GOVULN_LOG="${OUT}/govulncheck-stage.log"
+# The last line ci/govulncheck-in-builder.sh prints when it has run the
+# whole scan. Its absence is what this script checks; keep the two in step.
+GOVULN_MARKER="govulncheck-in-builder: complete"
 mkdir -p "${OUT}/cache"
 
 GO_IMAGE="$(buildGoImage "${REPO_ROOT}/deploy/docker/Dockerfile")"
@@ -33,48 +37,27 @@ GO_IMAGE="$(buildGoImage "${REPO_ROOT}/deploy/docker/Dockerfile")"
 echo "==> govulncheck ${GOVULNCHECK_VERSION} on ${GO_IMAGE}"
 echo "    (the builder image the shipped binary is compiled with, so the"
 echo "     standard-library half of the answer is about the right toolchain)"
-# govulncheck writes JSON and ci/vuln-gate turns it into an exit status,
-# because govulncheck -format json exits 0 even on a called vulnerability.
-# safe.directory: the checkout is owned by the invoking user and the
-# container runs as root.
+# The stage itself lives in ci/govulncheck-in-builder.sh rather than in an
+# inline `sh -c "..."` here. The inline form was a multi-line double-quoted
+# bash string, and a bare `"` in one of its comments closed that string
+# early: sh received a script that stopped three lines after `go install`,
+# ran none of the scan, and exited 0. See that file's header.
 docker run --rm \
     -v "${REPO_ROOT}":/repo -w /repo \
     -e GOFLAGS=-mod=readonly \
-    "${GO_IMAGE}" sh -c "
-        set -e
-        git config --global --add safe.directory /repo
+    -e GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION}" \
+    -e ALLOWLIST="${ALLOWLIST}" \
+    "${GO_IMAGE}" sh /repo/ci/govulncheck-in-builder.sh 2>&1 | tee "${GOVULN_LOG}"
 
-        # Retry the steps that reach the network, and only those. A module
-        # proxy reset is not a finding. The scan itself is not retried.
-        retry() {
-            attempt=1
-            while true; do
-                if \"\$@\"; then return 0; fi
-                if [ \"\$attempt\" -ge 3 ]; then
-                    echo \"scan-deps: '\$*' failed after \$attempt attempts\" >&2
-                    return 1
-                fi
-                echo \"scan-deps: '\$*' failed, retrying (\$attempt/3)\" >&2
-                sleep \$((attempt * 5))
-                attempt=\$((attempt + 1))
-            done
-        }
-
-        retry go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}
-
-        # The module cache is filled first, where a proxy failure is
-        # retried; inside govulncheck's loader it reads as a broken
-        # dependency. Plain "go mod download", not "all": the "all" pattern
-        # writes the checksums of test dependencies of dependencies into
-        # go.sum and leaves the checkout dirty.
-        retry go mod download
-
-        # -format json, because text cannot be filtered against the
-        # allowlist. Test files are out of scope: the question is what the
-        # shipped binary reaches.
-        \"\$(go env GOPATH)\"/bin/govulncheck -format json ./... > /tmp/govulncheck.json
-        go run ./ci/vuln-gate -govulncheck /tmp/govulncheck.json -allowlist ${ALLOWLIST}
-    "
+# Exit status cannot tell a clean scan from a scan that never happened:
+# both are 0. So the pass condition is evidence of work in the log, not the
+# zero -- the stage prints the marker below as its last line, and anything
+# that ends it early fails here instead of reporting clean.
+if ! grep -qF "${GOVULN_MARKER}" "${GOVULN_LOG}"; then
+    echo "scan-deps: the govulncheck stage did not run to completion." >&2
+    echo "scan-deps: no '${GOVULN_MARKER}' in ${GOVULN_LOG}; treat this as a failed scan, not a clean one." >&2
+    exit 1
+fi
 
 echo
 echo "==> trivy fs: HIGH and CRITICAL in the module graph"
