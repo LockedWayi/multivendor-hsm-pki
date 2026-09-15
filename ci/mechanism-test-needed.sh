@@ -45,6 +45,10 @@ WATCHED=(
     'ci/extract-predicate.sh'       # reads a predicate back
     'ci/publish-image.sh'           # the order the whole thing happens in
     'ci/signing-mechanism-test.sh'  # the test itself
+    'ci/rotation-drill.sh'          # the rotation drill, run in the same job
+    'ci/token-cleanup/main.go'      # retires a key by destroying it on the token
+    'cmd/hsm-pki-keytool/provision.go'  # provisions the next key version
+    'cmd/hsm-pki-keytool/inventory.go'  # publishes what the signers and verifiers read
     'ci/mechanism-test-needed.sh'   # this list; a change to it is exercised
     'ci/verify-run-artifacts.sh'    # the public-key-only verifier
     'ci/verify-release.sh'
