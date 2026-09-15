@@ -8,8 +8,8 @@
 # Nothing here decides what a verifier trusts. The trust-anchor inputs are
 # supplied from outside the tree; see ci/fetch-trust-anchor.sh.
 
-# aquasec/trivy:0.67.0
-TRIVY_IMAGE="aquasec/trivy@sha256:94711c60051c6cab848a292e3a67f62623fcee361b2bb661f43b17184f4afdac"
+# aquasec/trivy:0.74.0
+TRIVY_IMAGE="aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
 
 # semgrep/semgrep:1.177.0
 SEMGREP_IMAGE="semgrep/semgrep@sha256:acaac22ffc7b7cc5926de0751b223bce0b2491c33d18422fa72f632c78d81198"
