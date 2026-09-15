@@ -56,11 +56,25 @@ activeSigningKey() {
     # signature over the inventory is not checked here: a signer is inside
     # the trust boundary that produced it, and the verifiers that are not
     # check it with openssl before they read it.
-    if ! lines="$(goRun ./ci/select-key -inventory "/repo/$inv_rel" -purpose "$purpose" -active-only 2>&1)"; then
+    #
+    # stderr is kept separate rather than folded in with 2>&1, and the
+    # output is then filtered to the lines that carry select-key's tab
+    # separator. Both are needed, and the first was learned the hard way:
+    # when the builder image is not already present, docker's pull
+    # progress lands in the capture, and counting it reported twelve
+    # active keys where there is one. It passed locally, where the image
+    # was warm, and failed on a cold runner.
+    local err
+    err="$(mktemp)"
+    if ! lines="$(goRun ./ci/select-key -inventory "/repo/$inv_rel" -purpose "$purpose" -active-only 2>"$err")"; then
         echo "active-signing-key: no key the inventory lists as active for purpose '$purpose':" >&2
-        printf '%s\n' "$lines" >&2
+        cat "$err" >&2
+        rm -f "$err"
         return 1
     fi
+    rm -f "$err"
+    # label<TAB>status<TAB>path. Anything without a tab is not a selection.
+    lines="$(printf '%s\n' "$lines" | grep -F "$(printf '\t')" || true)"
 
     count="$(printf '%s\n' "$lines" | grep -c . || true)"
     if [ "$count" != "1" ]; then
