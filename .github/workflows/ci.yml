@@ -10,6 +10,8 @@
 #   terraform   OpenTofu fmt, validate, trivy config and secrets
 #   trustchain  the key inventory against the anchor named by repository
 #               variables
+#   allowlist   every vulnerability exception in force suppressed
+#               something, unioned across all three scanners
 #   mechanism   on a pull request that can change what is signed, the
 #               PKCS#11 path end to end against a throwaway registry
 #   publish     build, scan, prove the PKCS#11 signing path, push, sign
@@ -20,7 +22,10 @@
 #               Release, on a v<x.y.z> tag
 #
 # Seven gates are required checks on main: suite, sast, gitleaks, deps,
-# image, terraform and trustchain. enforce_admins is on, so the owner is
+# image, terraform and trustchain. `allowlist` is an eighth gate that
+# `publish` refuses to run without -- it is downstream of two of the
+# seven, so it cannot be a required check that blocks a merge in the same
+# way, and it blocks publication instead. enforce_admins is on, so the owner is
 # not exempt. Force-pushes and deletions are refused. Pull-request review
 # is not required. verifyrun runs only after a publish, so it cannot gate
 # a merge. A failure there turns main red after the fact.
@@ -177,6 +182,19 @@ jobs:
       - name: Dependencies and reachable vulnerabilities
         run: ci/scan-deps.sh
 
+      # Which allowlist entries these two scanners actually suppressed
+      # something with. The `allowlist` job unions them with the image
+      # scan's, because no single scanner can decide that an entry is
+      # unused.
+      - name: Keep what the dependency scanners used the allowlist for
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: allowlist-hits-deps-${{ github.sha }}
+          path: |
+            .local/scan/hits-govulncheck.json
+            .local/scan/hits-trivy-fs.json
+          if-no-files-found: error
+
   image:
     name: image scan (trivy image + SBOM)
     runs-on: ubuntu-latest
@@ -218,6 +236,13 @@ jobs:
         with:
           name: sbom-${{ github.sha }}
           path: .local/scan/sbom.cdx.json
+          if-no-files-found: error
+
+      - name: Keep what the image scanner used the allowlist for
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: allowlist-hits-image-${{ github.sha }}
+          path: .local/scan/hits-trivy-image.json
           if-no-files-found: error
 
   terraform:
@@ -264,6 +289,37 @@ jobs:
             exit 1
           fi
           echo "refused, as it must"
+
+  # An allowlist entry that suppressed nothing is an allowance nobody
+  # reviews, and from outside it is indistinguishable from a clean scan --
+  # the failure ci/vuln-allowlist.yaml's own header describes and which,
+  # until this job, nothing enforced.
+  #
+  # Its own job because the answer needs the union of all three scanners
+  # and they do not run together. An entry may legitimately cover a
+  # finding only trivy sees, or only govulncheck sees; judged per scanner
+  # a correct entry would fail, so each scanner records what it used and
+  # the verdict is reached once, here.
+  allowlist:
+    name: allowlist entries that suppressed nothing
+    needs: [deps, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch what each scanner used the allowlist for
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: allowlist-hits-*-${{ github.sha }}
+          merge-multiple: true
+          path: .local/scan
+
+      - name: Every entry in force must have suppressed something
+        run: |
+          ls -1 .local/scan/hits-*.json
+          ci/check-allowlist-used.sh .local/scan/hits-*.json
 
   # The mechanism test on pull requests, when the change can alter what is
   # signed. It runs from ci/publish-image.sh on merge, and `publish` and
@@ -329,7 +385,7 @@ jobs:
   # Fulcio certificate for this run's identity.
   publish:
     name: publish signed image (GHCR)
-    needs: [suite, sast, gitleaks, deps, image, terraform, trustchain]
+    needs: [suite, sast, gitleaks, deps, image, terraform, trustchain, allowlist]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -357,6 +413,7 @@ jobs:
             image=${{ needs.image.result }}
             terraform=${{ needs.terraform.result }}
             trustchain=${{ needs.trustchain.result }}
+            allowlist=${{ needs.allowlist.result }}
         run: ci/assert-publishable.sh
 
       # v2 makes the PKCS#11 image signatures in the mechanism test, in the

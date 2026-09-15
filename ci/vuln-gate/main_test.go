@@ -194,3 +194,155 @@ func TestRepositoryAllowlistIsValid(t *testing.T) {
 		t.Fatalf("ci/vuln-allowlist.yaml does not satisfy its own validator: %v", err)
 	}
 }
+
+// --- what each scanner reports about the allowlist ------------------------
+
+// trivy's real --show-suppressed shape, captured from 0.74.0 against this
+// repository's service image, so a format change shows up here rather
+// than as an allowlist entry silently reading as unused.
+const trivySuppressed = `{
+  "SchemaVersion": 2,
+  "Trivy": {"Version": "0.74.0"},
+  "Results": [
+    {
+      "Target": "hsm-pki-server:ci (debian 12.15)",
+      "ExperimentalModifiedFindings": [
+        {
+          "Type": "vulnerability",
+          "Status": "ignored",
+          "Statement": "accepted while the fix is unreleased",
+          "Source": "/vuln-allowlist.yaml",
+          "Finding": {"VulnerabilityID": "CVE-2026-18374"}
+        },
+        {
+          "Type": "vulnerability",
+          "Status": "ignored",
+          "Statement": "from somewhere that is not this allowlist",
+          "Source": "/other.yaml",
+          "Finding": {"VulnerabilityID": "CVE-2000-11111"}
+        }
+      ]
+    }
+  ]
+}`
+
+func writeFile(t *testing.T, name, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing %s: %v", name, err)
+	}
+	return path
+}
+
+const oneUsedOneStale = `vulnerabilities:
+  - id: CVE-2026-18374
+    statement: accepted while the fix is unreleased
+    expired_at: 2026-11-01
+  - id: CVE-9999-00000
+    statement: matches nothing any more
+    expired_at: 2026-11-01
+`
+
+// A hits file records what one scanner used, and only ids the allowlist
+// actually carries: a suppression from another source is not this file's
+// business.
+func TestTrivyReportRecordsOnlyAllowlistedSuppressions(t *testing.T) {
+	hits := filepath.Join(t.TempDir(), "hits.json")
+	var out bytes.Buffer
+	err := run([]string{
+		"-allowlist", writeAllowlist(t, oneUsedOneStale),
+		"-trivy", writeFile(t, "trivy.json", trivySuppressed),
+		"-write-hits", hits, "-scanner", "trivy-image",
+	}, strings.NewReader(""), &out, testNow)
+	if err != nil {
+		t.Fatalf("reading a trivy report failed: %v\n%s", err, out.String())
+	}
+	body, rerr := os.ReadFile(hits)
+	if rerr != nil {
+		t.Fatalf("reading hits: %v", rerr)
+	}
+	got := string(body)
+	if !strings.Contains(got, `"scanner": "trivy-image"`) {
+		t.Fatalf("hits file does not name the scanner:\n%s", got)
+	}
+	if !strings.Contains(got, "CVE-2026-18374") {
+		t.Fatalf("hits file does not record the entry trivy used:\n%s", got)
+	}
+	if strings.Contains(got, "CVE-2000-11111") {
+		t.Fatalf("hits file records a suppression this allowlist did not make:\n%s", got)
+	}
+}
+
+// The union, not any one scanner: an entry may cover a finding only one of
+// them can see, so a per-scanner check would fail on a correct entry.
+func TestEntryUsedByOneScannerIsNotUnused(t *testing.T) {
+	var out bytes.Buffer
+	err := run([]string{
+		"-allowlist", writeAllowlist(t, oneUsedOneStale),
+		"-require-used", writeFile(t, "a.json", `{"scanner":"govulncheck","matched":[]}`),
+		"-require-used", writeFile(t, "b.json", `{"scanner":"trivy-image","matched":["CVE-2026-18374"]}`),
+	}, strings.NewReader(""), &out, testNow)
+	if err == nil {
+		t.Fatal("the stale entry did not fail the check")
+	}
+	if !strings.Contains(out.String(), "UNUSED  CVE-9999-00000") {
+		t.Fatalf("output does not name the unused entry:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "UNUSED  CVE-2026-18374") {
+		t.Fatalf("an entry used by one scanner was reported unused:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "in use  CVE-2026-18374 (matched by trivy-image)") {
+		t.Fatalf("output does not say which scanner used the entry:\n%s", out.String())
+	}
+}
+
+func TestEveryEntryUsedPasses(t *testing.T) {
+	var out bytes.Buffer
+	err := run([]string{
+		"-allowlist", writeAllowlist(t, oneUsedOneStale),
+		"-require-used", writeFile(t, "a.json", `{"scanner":"govulncheck","matched":["CVE-9999-00000"]}`),
+		"-require-used", writeFile(t, "b.json", `{"scanner":"trivy-fs","matched":["CVE-2026-18374"]}`),
+	}, strings.NewReader(""), &out, testNow)
+	if err != nil {
+		t.Fatalf("every entry was used and the check still failed: %v\n%s", err, out.String())
+	}
+}
+
+// An expired entry has already stopped suppressing, so requiring it to
+// have suppressed something would report the same fact twice and as the
+// wrong kind of problem.
+func TestExpiredEntryIsNotRequiredToBeUsed(t *testing.T) {
+	const expired = `vulnerabilities:
+  - id: CVE-2026-18374
+    statement: left in place past its expiry
+    expired_at: 2026-08-01
+`
+	var out bytes.Buffer
+	err := run([]string{
+		"-allowlist", writeAllowlist(t, expired),
+		"-require-used", writeFile(t, "a.json", `{"scanner":"govulncheck","matched":[]}`),
+	}, strings.NewReader(""), &out, testNow)
+	if err != nil {
+		t.Fatalf("an expired entry was reported as unused: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "EXPIRED CVE-2026-18374") {
+		t.Fatalf("the expiry itself went unreported:\n%s", out.String())
+	}
+}
+
+// A hits file with no scanner name is almost always the wrong file, and
+// its contents cannot be reported usefully either way.
+func TestUnnamedHitsFileIsRefused(t *testing.T) {
+	var out bytes.Buffer
+	err := run([]string{
+		"-allowlist", writeAllowlist(t, "vulnerabilities: []\n"),
+		"-require-used", writeFile(t, "a.json", `{"matched":[]}`),
+	}, strings.NewReader(""), &out, testNow)
+	if err == nil {
+		t.Fatal("a hits file naming no scanner was accepted")
+	}
+	if !strings.Contains(err.Error(), "names no scanner") {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}

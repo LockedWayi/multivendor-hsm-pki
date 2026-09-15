@@ -35,6 +35,37 @@ REGISTRY_IMAGE="registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace52
 # the module proxy's checksum database makes a released version immutable.
 GOVULNCHECK_VERSION="v1.8.0"
 
+# requireSuppressionReporting refuses a trivy invocation that reads the
+# shared allowlist without also reporting what it suppressed.
+#
+#   requireSuppressionReporting "${args[@]}"
+#
+# Why this is a guard and not a comment. ci/vuln-gate learns which
+# allowlist entries trivy used by reading --show-suppressed output, and
+# that is how an entry which has stopped matching anything is caught. But
+# a trivy report from a run that suppressed nothing is indistinguishable
+# from one that was never asked -- both simply omit the field, and the
+# report's metadata records no flags. Measured on 0.74.0, not assumed.
+#
+# So the mistake cannot be detected downstream. It can only be prevented
+# here, where somebody edits the command.
+requireSuppressionReporting() {
+    local has_ignorefile=0 has_show=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            --ignorefile|--ignorefile=*) has_ignorefile=1 ;;
+            --show-suppressed) has_show=1 ;;
+        esac
+    done
+    if [ "$has_ignorefile" = "1" ] && [ "$has_show" = "0" ]; then
+        echo "scanner-pins: this trivy run reads the allowlist with --ignorefile but not --show-suppressed." >&2
+        echo "scanner-pins: without it the report cannot say which entries were used, and every entry would" >&2
+        echo "scanner-pins: read as unused. Add --show-suppressed, or stop passing --ignorefile." >&2
+        return 1
+    fi
+    return 0
+}
+
 # buildGoImage prints the builder image the shipped binary is compiled
 # with, read from the service Dockerfile. govulncheck and the Go verifiers
 # run in that image so they see the standard library the binary ships with.
