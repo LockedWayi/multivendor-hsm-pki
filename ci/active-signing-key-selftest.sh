@@ -78,8 +78,16 @@ resolves "image-signing-key-v1" "C1 the published inventory names one active ima
     activeSigningKey image "$REPO_ROOT/docs/keys"
 resolves "artifact-signing-key-v1" "C2 and one active artifact key" \
     activeSigningKey artifact "$REPO_ROOT/docs/keys"
+# Derived from the label the inventory actually lists rather than written
+# out, for two reasons. It stays plausible as the inventory moves, and a
+# literal supply-chain key label in a shell script is exactly what
+# internal/keyaudit refuses -- correctly: a file that instructs a machine
+# to sign with a key the published inventory does not list is a defect,
+# and that rule is directional so it carries no exemption list. A fixture
+# should not be the reason to weaken it.
+NOT_LISTED="$(activeSigningKey image "$REPO_ROOT/docs/keys")-is-not-this-key"
 refuses "which the inventory does not list as the" "C3 an override the inventory does not list" \
-    env HSM_PKI_IMAGE_KEY_LABEL=image-signing-key-v9 \
+    env HSM_PKI_IMAGE_KEY_LABEL="$NOT_LISTED" \
         bash -c '. "$0/ci/scanner-pins.sh"; . "$0/ci/active-signing-key.sh"; activeSigningKey image "$0/docs/keys"' "$REPO_ROOT"
 
 # D: two active keys for one purpose. Derived with a genuinely different
