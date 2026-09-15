@@ -19,9 +19,9 @@
 # The scripts inside workflow `run:` blocks are not covered: they are YAML
 # strings, not files. Keep them to one call of a script under ci/.
 #
-# Pinned by digest to the version installed in the development
-# environment (ci/scanner-pins.sh), so passing locally and passing here
-# are the same claim.
+# Pinned by digest in ci/scanner-pins.sh and run from that image here
+# and in the pipeline, so passing locally and passing there are the same
+# claim, whatever shellcheck the host happens to have installed.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

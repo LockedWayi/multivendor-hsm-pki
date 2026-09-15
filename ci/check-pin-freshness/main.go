@@ -100,6 +100,12 @@ var (
 	assignRE = regexp.MustCompile(`^([A-Z][A-Z0-9_]*)="([^"]*)"$`)
 	digestRE = regexp.MustCompile(`^(.+)@(sha256:[0-9a-f]{64})$`)
 	semverRE = regexp.MustCompile(`^(v?)(\d+)\.(\d+)\.(\d+)$`)
+	// tagRE is the OCI tag grammar. A first word such as
+	// `koalaman/shellcheck:v0.9.0,` -- a comment that went on to say
+	// something after the tag -- used to reach the registry as the tag
+	// `v0.9.0,` and come back as a 404, which read as an upstream problem
+	// rather than a comma.
+	tagRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 )
 
 // ParsePins reads the pins file and returns one Pin per pinned reference.
@@ -168,6 +174,9 @@ func pinFrom(name, value string, block []string) (Pin, error) {
 		}
 		if named != image {
 			return Pin{}, fmt.Errorf("%s pins %q but its comment names %q; the comment is what this check resolves upstream, so a comment that names a different image checks the wrong thing", name, image, named)
+		}
+		if !tagRE.MatchString(tag) {
+			return Pin{}, fmt.Errorf("%s's comment names the tag %q, which is not a valid image tag; the first line of the comment is read as `# %s:<tag>` and nothing may follow the tag on that line", name, tag, image)
 		}
 		registry, repo := splitImage(image)
 		return Pin{Variable: name, Ref: ref, Registry: registry, Repo: repo, Tag: tag, Digest: digest}, nil

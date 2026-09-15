@@ -30,9 +30,12 @@ TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:22cb52f6c5bf5c72a48a8f56d993d8df3e9
 ALPINE_IMAGE="alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
 TOFU_CLEANUP_IMAGE="$ALPINE_IMAGE"
 
-# koalaman/shellcheck:v0.9.0, the version installed in the development
-# environment, so a script that passes there passes in the pipeline.
-SHELLCHECK_IMAGE="koalaman/shellcheck@sha256:f35e8987b02760d4e76fc99a68ad5c42cc10bb32f3dd2143a3cf92f1e5446a45"
+# koalaman/shellcheck:v0.11.0
+# ci/lint-shell.sh runs this image locally and in the pipeline, so the two
+# verdicts are one claim whatever shellcheck the host has installed. The
+# first line of this comment is read by ci/check-pin-freshness: image and
+# tag, nothing after them.
+SHELLCHECK_IMAGE="koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d"
 
 # registry:2. The throwaway registry ci/signing-mechanism-test.sh pushes
 # into. It lives for one run and is removed with it.
