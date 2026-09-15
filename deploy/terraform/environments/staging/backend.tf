@@ -1,15 +1,13 @@
 # Remote state: self-hosted MinIO (S3-compatible) on the same Hostinger
 # VPS this platform runs on. Decided 2026-08-26 by the maintainer -- no
 # new commercial account, consistent with this project's existing
-# provider decisions (see "Provider and blast-radius control" in
-#). Locking uses OpenTofu's native
+# provider decisions. Locking uses OpenTofu's native
 # S3 conditional-write lock (`use_lockfile`, OpenTofu >= 1.10.0, see
 # versions.tf), not DynamoDB -- MinIO supports the conditional-PUT
 # semantics this depends on. Verified, not assumed: two concurrent
 # `tofu apply` runs against a local MinIO container -- the first
 # succeeded, the second failed with HTTP 412 PreconditionFailed on the
-# lock object instead of racing it (,
-# 3.4).
+# lock object instead of racing it.
 #
 # `encrypt = false` is deliberate. Self-hosted MinIO has no KMS backend
 # configured here, so requesting S3 server-side encryption either errors
