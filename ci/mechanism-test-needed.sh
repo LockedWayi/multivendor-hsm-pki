@@ -35,6 +35,10 @@ WATCHED=(
     'ci/scanner-pins.sh'            # the scanner and tool digests
     'ci/scan-image.sh'              # produces the SBOM that gets attested
     'ci/cosign.sh'                  # every signature goes through it
+    'ci/sign-image.sh'              # makes the image signature
+    'ci/sign-artifact.sh'           # makes the release binary signature
+    'ci/active-signing-key.sh'      # decides which key version signs
+    'ci/select-key/main.go'         # the selection the line above calls
     'ci/cosign.Dockerfile'          # the cosign runtime
     'ci/attest-image.sh'            # writes the attestations
     'ci/generate-provenance.sh'     # the provenance predicate

@@ -77,6 +77,8 @@ func run(args []string, in io.Reader, out io.Writer, now time.Time) error {
 	scanner := fs.String("scanner", "", "name recorded in the -write-hits file, for the log line the union check prints")
 	var requireUsed stringList
 	fs.Var(&requireUsed, "require-used", "hits file to read (repeatable); every in-force entry matched by none of them fails the gate")
+	var expectScanner stringList
+	fs.Var(&expectScanner, "expect-scanner", "scanner that must be among the hits files (repeatable); a union missing one of them is not a union")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -99,7 +101,7 @@ func run(args []string, in io.Reader, out io.Writer, now time.Time) error {
 	// the scanners reported about the allowlist and decides whether any
 	// entry is carrying nothing.
 	if len(requireUsed) > 0 {
-		return requireEveryEntryUsed(out, allowlist, now, requireUsed)
+		return requireEveryEntryUsed(out, allowlist, now, requireUsed, expectScanner)
 	}
 
 	// trivy consumes the allowlist itself, through --ignorefile, so the
@@ -165,8 +167,9 @@ func writeHitsFile(path, scanner string, a *allowlist) error {
 //
 // An expired entry is not required to be used. It has already stopped
 // suppressing, and the EXPIRED line above is its report.
-func requireEveryEntryUsed(out io.Writer, a *allowlist, now time.Time, paths []string) error {
+func requireEveryEntryUsed(out io.Writer, a *allowlist, now time.Time, paths, expect []string) error {
 	used := map[string]string{} // entry id -> the scanner that matched it
+	seen := map[string]bool{}   // scanner name -> it reported
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -181,12 +184,33 @@ func requireEveryEntryUsed(out io.Writer, a *allowlist, now time.Time, paths []s
 			// usefully, and an unnamed one usually means the wrong file.
 			return fmt.Errorf("hits file %s names no scanner", path)
 		}
+		seen[h.Scanner] = true
 		fmt.Fprintf(out, "hits from %s (%s): %d entr%s matched\n", h.Scanner, path, len(h.Matched), plural(len(h.Matched)))
 		for _, id := range h.Matched {
 			if _, seen := used[id]; !seen {
 				used[id] = h.Scanner
 			}
 		}
+	}
+
+	// A union missing a scanner is not a union. Judged over two of three,
+	// an entry only the absent one uses reads as unused -- and with an
+	// empty allowlist it reads as a clean pass, which is the same defect
+	// in the other direction: a scanner whose report never arrived is
+	// invisible. So the callers name who must have reported.
+	var missing []string
+	for _, want := range expect {
+		if !seen[want] {
+			missing = append(missing, want)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		for _, m := range missing {
+			fmt.Fprintf(out, "  MISSING %s: no hits file from this scanner\n", m)
+		}
+		return fmt.Errorf("%d expected scanner report(s) absent; the verdict would be reached over less than the whole pipeline, and with an empty allowlist that reads as a clean pass",
+			len(missing))
 	}
 
 	var unused []string

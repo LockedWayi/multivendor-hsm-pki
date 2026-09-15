@@ -15,14 +15,17 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-KEY_LABEL="${HSM_PKI_IMAGE_KEY_LABEL:-image-signing-key-v1}"
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
+# shellcheck source=ci/active-signing-key.sh
+. "$REPO_ROOT/ci/active-signing-key.sh"
 TOKEN_LABEL="${HSM_PKI_SUPPLY_TOKEN:-hsm-pki-local-supply-chain}"
 # The published public key, named relative to the repository because the
 # signing container mounts the repository at /repo. Overridable for the
 # mechanism test, which signs with keys it provisioned for the run.
 KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
 case "$KEYS_DIR" in
-    "$REPO_ROOT"/*) PUBLIC_KEY="${KEYS_DIR#"$REPO_ROOT"/}/$KEY_LABEL.pub" ;;
+    "$REPO_ROOT"/*) KEYS_REL="${KEYS_DIR#"$REPO_ROOT"/}" ;;
     *)
         echo "sign-image: HSM_PKI_KEYS_DIR must be inside $REPO_ROOT --" >&2
         echo "the signing container mounts only the repository, so a path" >&2
@@ -71,6 +74,15 @@ esac
 # and Kyverno v1.19's verifier looks for sha256-<digest>.sig, which v2
 # writes.
 export HSM_PKI_COSIGN_VERSION=v2
+
+# Resolved after the reference has been validated and turned into a
+# digest: the lookup starts a container, and a run that is going to be
+# refused should be refused for the thing it is wrong about.
+#
+# Which version signs is the inventory's statement, not this script's
+# default. See ci/active-signing-key.sh.
+KEY_LABEL="$(activeSigningKey image "$KEYS_DIR")"
+PUBLIC_KEY="$KEYS_REL/$KEY_LABEL.pub"
 
 log "signing with $KEY_LABEL on token $TOKEN_LABEL (cosign ${HSM_PKI_COSIGN_VERSION})"
 # v2 says "no transparency log" with --tlog-upload=false. -y skips a
