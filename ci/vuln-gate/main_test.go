@@ -346,3 +346,36 @@ func TestUnnamedHitsFileIsRefused(t *testing.T) {
 		t.Fatalf("refused for the wrong reason: %v", err)
 	}
 }
+
+// A union computed over fewer scanners than the pipeline has is not a
+// union. With an empty allowlist it is worse than a wrong answer: it is a
+// clean pass over a scanner whose report never arrived.
+func TestMissingScannerReportIsRefused(t *testing.T) {
+	var out bytes.Buffer
+	err := run([]string{
+		"-allowlist", writeAllowlist(t, "vulnerabilities: []\n"),
+		"-require-used", writeFile(t, "a.json", `{"scanner":"govulncheck","matched":[]}`),
+		"-expect-scanner", "govulncheck",
+		"-expect-scanner", "trivy-image",
+	}, strings.NewReader(""), &out, testNow)
+	if err == nil {
+		t.Fatal("a union missing a scanner passed")
+	}
+	if !strings.Contains(out.String(), "MISSING trivy-image") {
+		t.Fatalf("output does not name the absent scanner:\n%s", out.String())
+	}
+}
+
+func TestEveryExpectedScannerPresentPasses(t *testing.T) {
+	var out bytes.Buffer
+	err := run([]string{
+		"-allowlist", writeAllowlist(t, "vulnerabilities: []\n"),
+		"-require-used", writeFile(t, "a.json", `{"scanner":"govulncheck","matched":[]}`),
+		"-require-used", writeFile(t, "b.json", `{"scanner":"trivy-image","matched":[]}`),
+		"-expect-scanner", "govulncheck",
+		"-expect-scanner", "trivy-image",
+	}, strings.NewReader(""), &out, testNow)
+	if err != nil {
+		t.Fatalf("every expected scanner reported and the check still failed: %v\n%s", err, out.String())
+	}
+}

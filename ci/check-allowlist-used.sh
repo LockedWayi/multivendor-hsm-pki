@@ -46,5 +46,19 @@ for f in "$@"; do
     args+=(-require-used "/repo/${abs#"$REPO_ROOT/"}")
 done
 
+# Who must have reported. A union computed over two of the three scanners
+# is not a union: an entry only the absent one uses reads as unused, and
+# with an empty allowlist it reads as a clean pass instead -- the same
+# defect in the other direction, where a scanner whose report never
+# arrived is invisible. Naming them here means a missing artifact, a
+# renamed hits file or a scanner that stopped writing one is a red run
+# rather than a quieter verdict.
+#
+# Add a name when a scanner starts consuming ci/vuln-allowlist.yaml.
+EXPECTED=(govulncheck trivy-fs trivy-image)
+for scanner in "${EXPECTED[@]}"; do
+    args+=(-expect-scanner "$scanner")
+done
+
 echo "==> allowlist entries against what the scanners actually suppressed"
 goRun ./ci/vuln-gate -allowlist ci/vuln-allowlist.yaml "${args[@]}"
