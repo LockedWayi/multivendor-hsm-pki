@@ -2,7 +2,9 @@
 #
 # Fetch, verify and run the PKCS#11-capable cosign.
 #
-#   ci/cosign.sh fetch            download and verify; idempotent
+#   ci/cosign.sh fetch            download and verify; a second call with
+#                                 the pinned binary already installed does
+#                                 nothing
 #   ci/cosign.sh <cosign args>    run it, in a container
 #
 # A signing tool is a supply-chain dependency of the thing it signs. A
@@ -125,6 +127,18 @@ match what arrived."
 }
 
 fetch() {
+    # Already installed and byte-identical to the pin: nothing to fetch.
+    # The digest is the whole guarantee -- every check below exists to
+    # establish that these bytes are the ones the pin names, and run()
+    # repeats the comparison before every use. Without this the release
+    # verifier, which calls fetch unconditionally, downloaded the asset,
+    # the checksums, the bundle and the Rekor entry on every invocation;
+    # the rotation drill made that five downloads per run.
+    if [ -x "$COSIGN_BIN" ] && [ "$(sha256sum "$COSIGN_BIN" | cut -d' ' -f1)" = "$COSIGN_SHA256" ]; then
+        log "already installed: $COSIGN_BIN matches the pinned digest"
+        return 0
+    fi
+
     mkdir -p "$BIN_DIR"
     local work
     work="$(mktemp -d)"
