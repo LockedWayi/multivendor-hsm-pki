@@ -21,11 +21,22 @@ name: pin freshness
 
 on:
   schedule:
-    # Mondays, 06:00 UTC. After Dependabot's weekly window, so an upgrade
-    # week's work arrives together.
-    - cron: '0 6 * * 1'
+    # Mondays, after Dependabot's weekly window, so an upgrade week's work
+    # arrives together.
+    #
+    # 06:23 and not 06:00. The first schedule this workflow carried was
+    # `0 6 * * 1`, and it did not fire: the workflow was on main from
+    # Friday, GitHub listed it active, and Monday 06:00 UTC passed with no
+    # run at all. Scheduled workflows are best-effort and are delayed or
+    # dropped under load, and the start of an hour is when every cron in
+    # the world queues at once. Moving off the boundary is the documented
+    # mitigation. Observed once rather than proven, so the next Monday is
+    # the check.
+    - cron: '23 6 * * 1'
   # So the check can be run on demand without waiting a week, and so a
-  # change to this workflow can be exercised before it is merged.
+  # change to this workflow can be exercised before it is merged. This is
+  # also the only reason the schedule's failure above was noticed rather
+  # than assumed away.
   workflow_dispatch:
 
 permissions:
