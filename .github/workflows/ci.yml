@@ -10,6 +10,8 @@
 #   terraform   OpenTofu fmt, validate, trivy config and secrets
 #   trustchain  the key inventory against the anchor named by repository
 #               variables
+#   mechanism   on a pull request that can change what is signed, the
+#               PKCS#11 path end to end against a throwaway registry
 #   publish     build, scan, prove the PKCS#11 signing path, push, sign
 #               keyless
 #   verifyrun   re-check this run's keyless signatures from a checkout
@@ -262,6 +264,53 @@ jobs:
             exit 1
           fi
           echo "refused, as it must"
+
+  # The mechanism test on pull requests, when the change can alter what is
+  # signed. It runs from ci/publish-image.sh on merge, and `publish` and
+  # `verifyrun` are skipped on pull requests -- so without this, a change
+  # to what the SBOM contains or how it is encoded is first exercised
+  # after it lands. Bumping trivy moved the CycloneDX output from
+  # specVersion 1.6 to 1.7 and nothing on the pull request read it back.
+  #
+  # Deliberately not a gate on every pull request: it builds an image,
+  # scans it, provisions a SoftHSM2 token set and runs a throwaway
+  # registry, which is minutes of work that a documentation change has no
+  # reason to pay for. ci/mechanism-test-needed.sh holds the paths that
+  # decide, and it prints what it matched or why it matched nothing --
+  # a skip has to be readable as a skip, not as a pass.
+  mechanism:
+    name: PKCS#11 signing path (when the signed artifacts can change)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The base commit has to be present to diff against it.
+          fetch-depth: 0
+
+      - name: Does this change touch what gets signed?
+        id: needed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ci/mechanism-test-needed.sh "$BASE_SHA" | tee /tmp/needed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo '### PKCS#11 mechanism test'
+            echo
+            echo '```'
+            cat /tmp/needed.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prove the PKCS#11 signing path end to end
+        if: steps.needed.outputs.run == 'true'
+        run: ci/signing-mechanism-test.sh
 
   # --------------------------------------------------------------------
   # The first job that writes anything, and the only one holding a
