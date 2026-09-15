@@ -31,12 +31,16 @@
 #   HSM_PKI_TRUST_ANCHOR_REPO, _COMMIT, _SHA256  required by ci/verify-release.sh
 #   HSM_PKI_SIGNING_STATE      the token store, default .local/signing
 #   HSM_PKI_DOCKER_CONFIG      registry credentials, default ~/.docker
-#   HSM_PKI_IMAGE_KEY_LABEL    default image-signing-key-v1
+#   HSM_PKI_IMAGE_KEY_LABEL    checked against the inventory, not obeyed
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=ci/keyless-identity.sh
 . "$REPO_ROOT/ci/keyless-identity.sh"
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
+# shellcheck source=ci/active-signing-key.sh
+. "$REPO_ROOT/ci/active-signing-key.sh"
 
 die() { echo "countersign-release: $*" >&2; exit 1; }
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
@@ -68,7 +72,10 @@ KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
     "refusing to counter-sign with keys from $KEYS_DIR.
 The durable signature is made by the key the published inventory lists,
 which is the one in docs/keys."
-KEY_LABEL="${HSM_PKI_IMAGE_KEY_LABEL:-image-signing-key-v1}"
+# The durable signature is made by whichever version the published
+# inventory currently lists as active. See ci/active-signing-key.sh; a
+# rotation is meant to change this answer without changing this file.
+KEY_LABEL="$(activeSigningKey image "$KEYS_DIR")"
 PUBLIC_KEY="docs/keys/$KEY_LABEL.pub"
 [ -f "$REPO_ROOT/$PUBLIC_KEY" ] || die "no public key at $PUBLIC_KEY"
 export HSM_PKI_SIGNING_STATE="$STATE" HSM_PKI_KEYS_DIR="$KEYS_DIR"

@@ -15,7 +15,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-KEY_LABEL="${HSM_PKI_IMAGE_KEY_LABEL:-image-signing-key-v1}"
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
+# shellcheck source=ci/active-signing-key.sh
+. "$REPO_ROOT/ci/active-signing-key.sh"
 TOKEN_LABEL="${HSM_PKI_SUPPLY_TOKEN:-hsm-pki-local-supply-chain}"
 KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
 ALLOW_HTTP="${HSM_PKI_REGISTRY_ALLOW_HTTP:-false}"
@@ -24,7 +27,7 @@ die() { echo "attest-image: $*" >&2; exit 1; }
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 case "$KEYS_DIR" in
-    "$REPO_ROOT"/*) PUBLIC_KEY="${KEYS_DIR#"$REPO_ROOT"/}/$KEY_LABEL.pub" ;;
+    "$REPO_ROOT"/*) KEYS_REL="${KEYS_DIR#"$REPO_ROOT"/}" ;;
     *) die "HSM_PKI_KEYS_DIR must be inside $REPO_ROOT: the signing container mounts only the repository" ;;
 esac
 
@@ -54,6 +57,13 @@ PROV_REL="$(rel "$PROVENANCE")"
 [ -f "$PROVENANCE" ] || die "no provenance predicate at $PROVENANCE"
 
 export HSM_PKI_COSIGN_VERSION=v2
+
+# Resolved after the arguments are validated: the lookup starts a
+# container, and an attestation is a signature, so it follows the same
+# rule as one -- the inventory says which version signs. See
+# ci/active-signing-key.sh.
+KEY_LABEL="$(activeSigningKey image "$KEYS_DIR")"
+PUBLIC_KEY="$KEYS_REL/$KEY_LABEL.pub"
 
 attest() {   # attest <type> <predicate rel path>
     log "attesting $1 with $KEY_LABEL on token $TOKEN_LABEL"

@@ -23,13 +23,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=ci/scanner-pins.sh
 . "$REPO_ROOT/ci/scanner-pins.sh"
-KEY_LABEL="artifact-signing-key-v1"
+# shellcheck source=ci/active-signing-key.sh
+. "$REPO_ROOT/ci/active-signing-key.sh"
 TOKEN_LABEL="${HSM_PKI_SUPPLY_TOKEN:-hsm-pki-local-supply-chain}"
 # The published public key, named relative to the repository because the
 # signing container mounts it at /repo. Overridable for the mechanism test.
 KEYS_DIR="${HSM_PKI_KEYS_DIR:-$REPO_ROOT/docs/keys}"
 case "$KEYS_DIR" in
-    "$REPO_ROOT"/*) PUBLIC_KEY="${KEYS_DIR#"$REPO_ROOT"/}/$KEY_LABEL.pub" ;;
+    "$REPO_ROOT"/*) KEYS_REL="${KEYS_DIR#"$REPO_ROOT"/}" ;;
     *)
         echo "sign-artifact: HSM_PKI_KEYS_DIR must be inside $REPO_ROOT --" >&2
         echo "the signing container mounts only the repository, so a path" >&2
@@ -91,6 +92,16 @@ that flag is ignored and cosign uploads to the public Rekor instance
 instead.
 
 Unset HSM_PKI_COSIGN_VERSION, or set it to v3."
+
+# Resolved here, not at the top: every argument and path check above is
+# free, and this one starts a container. A run that is going to be refused
+# should be refused for the thing it is actually wrong about, rather than
+# for a key lookup it never reached the point of needing.
+#
+# Which version signs is the inventory's statement, not this script's
+# constant. See ci/active-signing-key.sh.
+KEY_LABEL="$(activeSigningKey artifact "$KEYS_DIR")"
+PUBLIC_KEY="$KEYS_REL/$KEY_LABEL.pub"
 
 log "signing $(rel "$ARTIFACT") with $KEY_LABEL on token $TOKEN_LABEL"
 "$REPO_ROOT/ci/cosign.sh" sign-blob \

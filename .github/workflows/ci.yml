@@ -108,6 +108,18 @@ jobs:
       - name: Publish-guard selftest
         run: ci/assert-publishable-selftest.sh
 
+      # Both of these existed and neither was run by anything. A selftest
+      # nothing invokes is the same defect as a gate nothing invokes: it
+      # passes locally, it is green in review, and the guards it covers
+      # are unwatched. ci/cosign-selftest.sh drives nineteen refusals in
+      # the signing path; ci/active-signing-key-selftest.sh drives the
+      # ones that decide which key version signs.
+      - name: Signing-guard selftest
+        run: ci/cosign-selftest.sh
+
+      - name: Signing-key selection selftest
+        run: ci/active-signing-key-selftest.sh
+
       - name: Every third-party image is pinned by digest
         run: ci/check-image-pins.sh
 

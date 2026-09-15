@@ -133,14 +133,40 @@ expect refuse "E1 an empty object" \
 expect refuse "E2 an entry recording a different digest" \
     assert_rekor_records "$(rekor_fixture e2 "{\"abc\":{\"body\":\"$(printf '{"spec":{"data":{"hash":{"value":"deadbeef"}},"signature":{"publicKey":{"content":"eA=="}}}}' | base64 -w0)\"}}")" "$DIGEST"
 
+# expect_because is expect plus the reason. A guard that refuses for
+# something other than the thing under test passes `expect` and proves
+# nothing -- and that is not hypothetical: resolving the signing key from
+# the inventory was briefly done before these path checks, which would
+# have made both cases below refuse at the key lookup while still reading
+# green.
+expect_because() {
+    local want="$1" name="$2"; shift 2
+    local out status
+    out="$("$@" 2>&1)"; status=$?
+    if [ "$status" -eq 0 ]; then
+        printf '  FAIL  %-58s (wanted refuse, got accept)\n' "$name"
+        fail=$((fail+1))
+        return
+    fi
+    if ! printf '%s' "$out" | grep -qF "$want"; then
+        printf '  FAIL  %-58s (refused, but not for the stated reason)\n' "$name"
+        printf '        wanted: %s\n' "$want"
+        printf '        %s\n' "${out//$'\n'/$'\n'        }"
+        fail=$((fail+1))
+        return
+    fi
+    printf '  ok    %-58s (refuse, for the stated reason)\n' "$name"
+    pass=$((pass+1))
+}
+
 echo
 echo "F. sign-artifact refuses a path the container cannot reach"
 # Signing /etc/hostname once hashed and signed the container's own
 # /etc/hostname. The check runs before signing, so a throwaway PIN reaches
 # it and no token is opened.
-expect refuse "F1 an artifact outside the repository" \
+expect_because "is outside the repository" "F1 an artifact outside the repository" \
     env COSIGN_PKCS11_PIN=unused "$REPO_ROOT/ci/sign-artifact.sh" /etc/hostname
-expect refuse "F2 a bundle written outside the repository" \
+expect_because "is outside the repository" "F2 a bundle written outside the repository" \
     env COSIGN_PKCS11_PIN=unused "$REPO_ROOT/ci/sign-artifact.sh" \
         "$REPO_ROOT/internal/artifactsig/testdata/sample-artifact.txt" /tmp/escapes.bundle
 [ -e /tmp/escapes.bundle ] && { echo "  FAIL  F2 wrote a bundle anyway"; fail=$((fail+1)); } \
