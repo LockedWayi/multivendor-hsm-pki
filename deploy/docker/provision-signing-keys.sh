@@ -61,10 +61,14 @@ DEV_IMAGE="hsm-pki-dev:local"
 
 SUPPLY_TOKEN_LABEL="hsm-pki-local-supply-chain"
 INVENTORY_TOKEN_LABEL="hsm-pki-local-inventory"
+# Exported so the token-initialising container can read them by name.
+export SUPPLY_TOKEN_LABEL INVENTORY_TOKEN_LABEL
 
-# The caller supplies both PINs. They are passed to the containers as
-# environment variables and never written to a file; the tool takes the name
-# of the variable, not its value.
+# The caller supplies both PINs. They reach the containers as environment
+# variables passed by name (-e VAR, not -e VAR=value), so they are never on
+# the docker command line, where ps on the host would show them for the
+# life of each container. They are never written to a file, and the
+# keytool takes the name of the variable, not its value.
 #
 # Not defaulted, and specifically not defaulted to something random: these
 # tokens outlive the run. Every later signature -- ci/sign-image.sh,
@@ -102,6 +106,8 @@ fi
 
 SUPPLY_PIN="$HSM_PKI_SUPPLY_PIN_VALUE"
 INVENTORY_PIN="$HSM_PKI_INVENTORY_PIN_VALUE"
+# Exported under the names the containers read them by, and only by name.
+export HSM_PKI_SUPPLY_PIN="$SUPPLY_PIN" HSM_PKI_INVENTORY_PIN="$INVENTORY_PIN"
 
 # Different tokens, different PINs. One PIN over both would make the offline
 # inventory token reachable by whatever holds the supply-chain token's.
@@ -163,8 +169,7 @@ keytool() {
         -v "$STATE/pkcs11":/pkcs11:ro \
         -v "$STATE/etc":/conf:ro \
         -e SOFTHSM2_CONF=/conf/softhsm2.conf \
-        -e HSM_PKI_SUPPLY_PIN="$SUPPLY_PIN" \
-        -e HSM_PKI_INVENTORY_PIN="$INVENTORY_PIN" \
+        -e HSM_PKI_SUPPLY_PIN -e HSM_PKI_INVENTORY_PIN \
         "$DEV_IMAGE" sh -c "
             git config --global --add safe.directory /repo
             go run ./cmd/hsm-pki-keytool $*
@@ -172,18 +177,24 @@ keytool() {
 }
 
 log "1/6  initializing two tokens"
-# Two tokens, not two labels on one token.
+# Two tokens, not two labels on one token. The script is single-quoted so
+# the PINs expand inside the container, from its environment, and not on
+# the host's docker command line. softhsm2-util takes a PIN only as a flag,
+# so inside the container it is on that process's own command line, in a
+# pid namespace nothing else shares, for the second it takes.
 docker run --rm \
     -v "$STATE/tokens":/var/lib/softhsm/tokens \
     -v "$STATE/etc":/conf:ro \
     -e SOFTHSM2_CONF=/conf/softhsm2.conf \
-    "$DEV_IMAGE" sh -c "
-        softhsm2-util --init-token --free --label '$SUPPLY_TOKEN_LABEL' \
-            --so-pin '$SUPPLY_PIN' --pin '$SUPPLY_PIN' >/dev/null
-        softhsm2-util --init-token --free --label '$INVENTORY_TOKEN_LABEL' \
-            --so-pin '$INVENTORY_PIN' --pin '$INVENTORY_PIN' >/dev/null
-        softhsm2-util --show-slots | grep -E 'Label:|Serial'
-    "
+    -e HSM_PKI_SUPPLY_PIN -e HSM_PKI_INVENTORY_PIN \
+    -e SUPPLY_TOKEN_LABEL -e INVENTORY_TOKEN_LABEL \
+    "$DEV_IMAGE" sh -c '
+        softhsm2-util --init-token --free --label "$SUPPLY_TOKEN_LABEL" \
+            --so-pin "$HSM_PKI_SUPPLY_PIN" --pin "$HSM_PKI_SUPPLY_PIN" >/dev/null
+        softhsm2-util --init-token --free --label "$INVENTORY_TOKEN_LABEL" \
+            --so-pin "$HSM_PKI_INVENTORY_PIN" --pin "$HSM_PKI_INVENTORY_PIN" >/dev/null
+        softhsm2-util --show-slots | grep -E "Label:|Serial"
+    '
 
 log "2/6  provisioning $IMAGE_KEY_LABEL"
 keytool provision-signing-key \
