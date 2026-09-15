@@ -173,5 +173,21 @@ expect_because "is outside the repository" "F2 a bundle written outside the repo
                            || { echo "  ok    F2 wrote nothing"; pass=$((pass+1)); }
 
 echo
+echo "G. fetch with the pinned binary already installed downloads nothing"
+# The release URL points at a port nothing listens on, so any attempt to
+# download is a refusal. An installed binary whose digest is the pin must
+# make fetch return before it gets there.
+INSTALLED="$WORK/pinned/cosign"; mkdir -p "$WORK/pinned"
+printf 'the pinned binary\n' > "$INSTALLED"; chmod +x "$INSTALLED"
+BIN_DIR="$WORK/pinned"; COSIGN_BIN="$INSTALLED"
+COSIGN_SHA256="$(sha256sum "$INSTALLED" | cut -d' ' -f1)"
+RELEASE_URL="http://127.0.0.1:9"
+expect accept "G1 installed and matching the pin: no download attempted" fetch
+# Same binary, one byte changed: the pin no longer matches, and now the
+# download is attempted and refused by the dead URL.
+printf 'x' >> "$INSTALLED"
+expect refuse "G2 installed but not matching the pin: fetch tries, and fails here" fetch
+
+echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
