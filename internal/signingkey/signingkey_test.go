@@ -553,3 +553,74 @@ func TestProvision_DistinctKeysGetDistinctCKAIDs(t *testing.T) {
 		}
 	})
 }
+
+// countLabelled is how many objects of any class carry label.
+func countLabelled(t *testing.T, b *hsmtest.Backend, s *pk11.Session, label string) int {
+	t.Helper()
+	handles, err := b.Adapter.FindObjects(context.Background(), s, []pk11.Attribute{
+		{Type: pk11.AttrLabel, Value: []byte(label)},
+	})
+	if err != nil {
+		t.Fatalf("FindObjects(%q): %v", label, err)
+	}
+	return len(handles)
+}
+
+func TestDestroy_RemovesBothHalvesAndThenFindsNothing(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+		label := b.Label("image-signing-key-v1")
+		if _, err := signingkey.Provision(ctx, b.Adapter, s, signingkey.Params{Label: label}); err != nil {
+			t.Fatalf("Provision: %v", err)
+		}
+
+		got, err := signingkey.Destroy(ctx, b.Adapter, s, label)
+		if err != nil {
+			t.Fatalf("Destroy: %v", err)
+		}
+		if !got.Private || !got.Public {
+			t.Fatalf("Destroy = %+v, want both halves destroyed", got)
+		}
+		for _, class := range []pk11.ObjectClass{pk11.ClassPrivateKey, pk11.ClassPublicKey} {
+			free, err := pk11.LabelIsFree(ctx, b.Adapter, s, class, label)
+			if err != nil {
+				t.Fatalf("LabelIsFree(class %d): %v", class, err)
+			}
+			if !free {
+				t.Errorf("class %d still holds an object under %q", class, label)
+			}
+		}
+		// Retiring a key that is not there is a wrong label, not a no-op.
+		if _, err := signingkey.Destroy(ctx, b.Adapter, s, label); !errors.Is(err, pk11.ErrKeyNotFound) {
+			t.Fatalf("second Destroy = %v, want ErrKeyNotFound", err)
+		}
+	})
+}
+
+// TestDestroy_RefusesAnAmbiguousLabelAndDestroysNothing: two key pairs
+// under one label, put there through the adapter because Provision
+// refuses a taken label. Which one the operator meant is nobody's guess.
+func TestDestroy_RefusesAnAmbiguousLabelAndDestroysNothing(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+		label := b.Label("image-signing-key-v1")
+		for i := 0; i < 2; i++ {
+			if _, err := b.Adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
+				Curve: pk11.P256, Label: label, Sign: true, Verify: true,
+			}); err != nil {
+				t.Fatalf("GenerateKeyPair #%d: %v", i+1, err)
+			}
+		}
+		before := countLabelled(t, b, s, label)
+
+		_, err := signingkey.Destroy(ctx, b.Adapter, s, label)
+		if !errors.Is(err, pk11.ErrAmbiguousLabel) {
+			t.Fatalf("Destroy over two pairs under one label = %v, want ErrAmbiguousLabel", err)
+		}
+		if after := countLabelled(t, b, s, label); after != before {
+			t.Fatalf("Destroy removed %d objects despite refusing", before-after)
+		}
+	})
+}

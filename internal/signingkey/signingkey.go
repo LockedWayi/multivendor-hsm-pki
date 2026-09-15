@@ -237,6 +237,53 @@ func destroyKeyPair(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Ses
 	return nil
 }
 
+// Destroyed reports which halves of a key pair Destroy removed.
+type Destroyed struct {
+	Public, Private bool
+}
+
+// Destroy removes both halves of the key pair carrying label and reports
+// which halves it found. This is retirement's irreversible step; the
+// decision that the key may go is the caller's, taken from the inventory
+// before this is reached.
+//
+// A label matching more than one object of a class is refused through
+// FindKeyByLabel, and nothing is destroyed: which of two objects the
+// operator meant is not this function's to guess. A label matching
+// nothing is refused too, because retiring a key that is not there is a
+// wrong label, not a no-op.
+//
+// The private half goes first. A failure between the two then leaves a
+// key that cannot sign beside a public object that confers nothing,
+// rather than the other way round.
+func Destroy(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string) (Destroyed, error) {
+	var done Destroyed
+	privHandle, privErr := pk11.FindKeyByLabel(ctx, adapter, s, pk11.ClassPrivateKey, label)
+	if privErr != nil && !errors.Is(privErr, pk11.ErrKeyNotFound) {
+		return done, fmt.Errorf("signingkey: locating the private half of %q: %w", label, privErr)
+	}
+	pubHandle, pubErr := pk11.FindKeyByLabel(ctx, adapter, s, pk11.ClassPublicKey, label)
+	if pubErr != nil && !errors.Is(pubErr, pk11.ErrKeyNotFound) {
+		return done, fmt.Errorf("signingkey: locating the public half of %q: %w", label, pubErr)
+	}
+	if privErr != nil && pubErr != nil {
+		return done, fmt.Errorf("signingkey: nothing under label %q to destroy: %w", label, privErr)
+	}
+	if privErr == nil {
+		if err := adapter.DestroyObject(ctx, s, privHandle); err != nil {
+			return done, fmt.Errorf("signingkey: destroying the private half of %q: %w", label, err)
+		}
+		done.Private = true
+	}
+	if pubErr == nil {
+		if err := adapter.DestroyObject(ctx, s, pubHandle); err != nil {
+			return done, fmt.Errorf("signingkey: destroying the public half of %q (the private half is already gone, so the key cannot sign): %w", label, err)
+		}
+		done.Public = true
+	}
+	return done, nil
+}
+
 // Load reads an existing signing key's public half and protection
 // attributes off the token, without checking them. Verify checks them.
 func Load(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string, curve pk11.ECCurve) (Key, error) {
