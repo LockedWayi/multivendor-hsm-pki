@@ -110,6 +110,13 @@ func TestParsePinsFailsClosed(t *testing.T) {
 			src:  "# just some prose\nGOVULNCHECK_VERSION=\"v1.7.0\"\n",
 			want: "not a module path",
 		},
+		{
+			// Measured: a comment that went on after the tag sent
+			// `v0.9.0,` to the registry and read the 404 as upstream's.
+			name: "comment carries prose after the tag on the same line",
+			src:  "# koalaman/shellcheck:v0.9.0, the version installed locally\nSHELLCHECK_IMAGE=\"koalaman/shellcheck@sha256:" + sixtyFour + "\"\n",
+			want: "not a valid image tag",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParsePins(tc.src)
