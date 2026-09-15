@@ -358,16 +358,27 @@ jobs:
           # The base commit has to be present to diff against it.
           fetch-depth: 0
 
+      # No pipe on the line that decides. This step used to read
+      # `if ci/mechanism-test-needed.sh ... | tee file; then`, and the
+      # status of a pipeline is the status of its last command, which
+      # was tee. The default shell for a run block is `bash -e`, with no
+      # pipefail, so the branch was always the true one and the filter
+      # never skipped anything: every pull request paid for the test,
+      # and the skip this job documents had never once happened. Found
+      # on the first pull request that touched no watched path.
       - name: Does this change touch what gets signed?
         id: needed
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if ci/mechanism-test-needed.sh "$BASE_SHA" | tee /tmp/needed.txt; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
+          if ci/mechanism-test-needed.sh "$BASE_SHA" > /tmp/needed.txt; then
+            run=true
           else
-            echo "run=false" >> "$GITHUB_OUTPUT"
+            run=false
           fi
+          cat /tmp/needed.txt
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "decision: run=$run"
           {
             echo '### PKCS#11 mechanism test'
             echo
