@@ -25,6 +25,13 @@ ALLOWLIST="$REPO_ROOT/ci/vuln-allowlist.yaml"
 
 mkdir -p "$OUT" "$OUT/cache"
 
+# ci/vuln-gate runs in the builder container, which mounts the repository
+# and nothing else, so it can only read a report written inside the tree.
+case "$OUT" in
+    "$REPO_ROOT"/*) OUT_REL="${OUT#"$REPO_ROOT/"}" ;;
+    *) echo "scan-image: HSM_PKI_SCAN_OUT must be inside $REPO_ROOT; got $OUT" >&2; exit 1 ;;
+esac
+
 trivy() {
     docker run --rm \
         -v /var/run/docker.sock:/var/run/docker.sock \
@@ -47,6 +54,26 @@ echo
 echo "==> writing the SBOM"
 # CycloneDX, because it is what cosign attests and verifies natively.
 trivy image --quiet --format cyclonedx --output /out/sbom.cdx.json "$IMAGE"
+
+echo
+echo "==> recording which allowlist entries trivy image used"
+# A second invocation rather than one JSON run: the gate above keeps its
+# exit status and its table exactly as they were, and this pass only
+# collects. The database is already in $OUT/cache.
+#
+# --exit-code is deliberately absent. A finding is the gate's verdict, not
+# this pass's; deciding it twice would let two places disagree about one
+# scan.
+TRIVY_IMAGE_REPORT_ARGS=(
+    image --quiet --scanners vuln --severity HIGH,CRITICAL
+    --ignorefile /vuln-allowlist.yaml --show-suppressed
+    --format json --output /out/trivy-image.json "$IMAGE"
+)
+requireSuppressionReporting "${TRIVY_IMAGE_REPORT_ARGS[@]}"
+trivy "${TRIVY_IMAGE_REPORT_ARGS[@]}"
+goRun ./ci/vuln-gate -allowlist "ci/vuln-allowlist.yaml" \
+    -trivy "/repo/$OUT_REL/trivy-image.json" \
+    -write-hits "/repo/$OUT_REL/hits-trivy-image.json" -scanner trivy-image
 
 components=$(python3 -c "
 import json

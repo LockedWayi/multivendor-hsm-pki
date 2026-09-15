@@ -22,7 +22,7 @@
 set -euo pipefail
 
 # The gates that must have passed. ci.yml passes exactly these.
-REQUIRED_GATES="suite sast gitleaks deps image terraform trustchain"
+REQUIRED_GATES="suite sast gitleaks deps image terraform trustchain allowlist"
 
 die() { echo "assert-publishable: $*" >&2; exit 1; }
 

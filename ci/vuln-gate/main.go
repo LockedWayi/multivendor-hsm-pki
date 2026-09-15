@@ -40,6 +40,26 @@ func main() {
 	}
 }
 
+// stringList collects a flag given more than once. The union check needs
+// one file per scanner and there is no fixed number of scanners.
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
+// hitsFile is what one scanner's run reports about the allowlist: which
+// entries it actually suppressed something with. Written per scanner,
+// read back together, because no single scanner can decide that an entry
+// is unused -- trivy consumes the allowlist natively and this program
+// never sees what it suppressed unless it is handed the report.
+type hitsFile struct {
+	Scanner string   `json:"scanner"`
+	Matched []string `json:"matched"`
+}
+
 // expiryLayout is the date form trivy's ignorefile uses.
 const expiryLayout = "2006-01-02"
 
@@ -51,6 +71,12 @@ func run(args []string, in io.Reader, out io.Writer, now time.Time) error {
 	allowlistPath := fs.String("allowlist", "ci/vuln-allowlist.yaml", "path to the shared vulnerability allowlist")
 	govulnPath := fs.String("govulncheck", "", "govulncheck -format json output to judge (\"-\" for stdin); omit to validate the allowlist only")
 	maxHorizonDays := fs.Int("max-horizon-days", 180, "furthest future date an allowlist entry may expire on")
+	var trivyPaths stringList
+	fs.Var(&trivyPaths, "trivy", "trivy JSON report to read suppressions from (repeatable); needs --show-suppressed")
+	writeHits := fs.String("write-hits", "", "write the allowlist entries this run suppressed something with, as JSON")
+	scanner := fs.String("scanner", "", "name recorded in the -write-hits file, for the log line the union check prints")
+	var requireUsed stringList
+	fs.Var(&requireUsed, "require-used", "hits file to read (repeatable); every in-force entry matched by none of them fails the gate")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -69,20 +95,121 @@ func run(args []string, in io.Reader, out io.Writer, now time.Time) error {
 		}
 	}
 
-	if *govulnPath == "" {
-		return nil
+	// The union check is its own run: it judges no findings, it reads what
+	// the scanners reported about the allowlist and decides whether any
+	// entry is carrying nothing.
+	if len(requireUsed) > 0 {
+		return requireEveryEntryUsed(out, allowlist, now, requireUsed)
 	}
 
-	src := in
-	if *govulnPath != "-" {
-		f, err := os.Open(*govulnPath)
+	// trivy consumes the allowlist itself, through --ignorefile, so the
+	// only way this program learns what trivy suppressed is to be handed
+	// the report. --show-suppressed is what puts it there.
+	for _, path := range trivyPaths {
+		n, err := recordTrivySuppressions(path, allowlist, now)
 		if err != nil {
-			return fmt.Errorf("reading govulncheck output: %w", err)
+			return err
 		}
-		defer f.Close()
-		src = f
+		fmt.Fprintf(out, "trivy %s: %d suppression(s) attributed to the allowlist\n", path, n)
 	}
-	return judgeGovulncheck(src, out, allowlist, now)
+
+	var judgeErr error
+	if *govulnPath != "" {
+		src := in
+		if *govulnPath != "-" {
+			f, err := os.Open(*govulnPath)
+			if err != nil {
+				return fmt.Errorf("reading govulncheck output: %w", err)
+			}
+			defer f.Close()
+			src = f
+		}
+		judgeErr = judgeGovulncheck(src, out, allowlist, now)
+	}
+
+	// Written even when the judging failed: the hits are a record of this
+	// run, and discarding them because something else went wrong would
+	// make the union check silently incomplete rather than red.
+	if *writeHits != "" {
+		if err := writeHitsFile(*writeHits, *scanner, allowlist); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "allowlist hits written to %s\n", *writeHits)
+	}
+	return judgeErr
+}
+
+// writeHitsFile records which entries suppressed something in this run.
+func writeHitsFile(path, scanner string, a *allowlist) error {
+	if scanner == "" {
+		scanner = "unnamed"
+	}
+	data, err := json.MarshalIndent(hitsFile{Scanner: scanner, Matched: a.matched()}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding hits: %w", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("writing hits to %s: %w", path, err)
+	}
+	return nil
+}
+
+// requireEveryEntryUsed fails when an in-force entry suppressed nothing in
+// any of the scanner runs it was handed.
+//
+// Why the union and not one scanner: an entry may legitimately cover a
+// finding only trivy sees, or only govulncheck sees. Judged per scanner,
+// a correct entry would fail. Judged over all of them, an entry that
+// matched nothing anywhere is what it looks like -- an exception nobody
+// needs and nobody is reviewing.
+//
+// An expired entry is not required to be used. It has already stopped
+// suppressing, and the EXPIRED line above is its report.
+func requireEveryEntryUsed(out io.Writer, a *allowlist, now time.Time, paths []string) error {
+	used := map[string]string{} // entry id -> the scanner that matched it
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("reading hits file: %w", err)
+		}
+		var h hitsFile
+		if err := json.Unmarshal(data, &h); err != nil {
+			return fmt.Errorf("parsing hits file %s: %w", path, err)
+		}
+		if h.Scanner == "" {
+			// A hits file with no scanner name cannot be reported
+			// usefully, and an unnamed one usually means the wrong file.
+			return fmt.Errorf("hits file %s names no scanner", path)
+		}
+		fmt.Fprintf(out, "hits from %s (%s): %d entr%s matched\n", h.Scanner, path, len(h.Matched), plural(len(h.Matched)))
+		for _, id := range h.Matched {
+			if _, seen := used[id]; !seen {
+				used[id] = h.Scanner
+			}
+		}
+	}
+
+	var unused []string
+	for _, e := range a.entries {
+		if e.expired(now) {
+			continue
+		}
+		if who, ok := used[e.ID]; ok {
+			fmt.Fprintf(out, "  in use  %s (matched by %s)\n", e.ID, who)
+			continue
+		}
+		unused = append(unused, e.ID)
+	}
+	sort.Strings(unused)
+	if len(unused) == 0 {
+		fmt.Fprintf(out, "allowlist: every entry in force suppressed something\n")
+		return nil
+	}
+	for _, id := range unused {
+		fmt.Fprintf(out, "  UNUSED  %s: suppressed nothing in any scanner this run\n", id)
+	}
+	return fmt.Errorf("%d allowlist entr%s matched nothing; an exception that has stopped matching is an allowance nobody reviews, and it reads exactly like a clean scan. Remove it, or say in its statement why it must stay",
+		len(unused), plural(len(unused)))
 }
 
 // --- the allowlist -------------------------------------------------------
@@ -106,6 +233,11 @@ type allowlistFile struct {
 type allowlist struct {
 	entries []allowEntry
 	byID    map[string]allowEntry
+	// hits records which entries actually suppressed something in this
+	// run. An entry that suppresses nothing is an allowance nobody
+	// reviews and reads exactly like a clean scan, so it has to be
+	// observed rather than assumed.
+	hits map[string]bool
 }
 
 func (a *allowlist) activeCount(now time.Time) int {
@@ -124,10 +256,21 @@ func (a *allowlist) activeCount(now time.Time) int {
 func (a *allowlist) covers(now time.Time, ids ...string) (allowEntry, bool) {
 	for _, id := range ids {
 		if e, ok := a.byID[id]; ok && !e.expired(now) {
+			a.hits[e.ID] = true
 			return e, true
 		}
 	}
 	return allowEntry{}, false
+}
+
+// matched lists, sorted, the entries that suppressed something.
+func (a *allowlist) matched() []string {
+	out := make([]string, 0, len(a.hits))
+	for id := range a.hits {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // loadAllowlist reads and validates the file. Every defect makes the gate
@@ -137,7 +280,7 @@ func (a *allowlist) covers(now time.Time, ids ...string) (allowEntry, bool) {
 func loadAllowlist(path string, now time.Time, maxHorizonDays int) (*allowlist, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return &allowlist{byID: map[string]allowEntry{}}, nil
+		return &allowlist{byID: map[string]allowEntry{}, hits: map[string]bool{}}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading allowlist: %w", err)
@@ -151,7 +294,10 @@ func loadAllowlist(path string, now time.Time, maxHorizonDays int) (*allowlist, 
 	}
 
 	horizon := now.AddDate(0, 0, maxHorizonDays)
-	a := &allowlist{byID: make(map[string]allowEntry, len(parsed.Vulnerabilities))}
+	a := &allowlist{
+		byID: make(map[string]allowEntry, len(parsed.Vulnerabilities)),
+		hits: make(map[string]bool, len(parsed.Vulnerabilities)),
+	}
 	var problems []string
 	for i, e := range parsed.Vulnerabilities {
 		where := fmt.Sprintf("entry %d", i+1)
@@ -193,6 +339,71 @@ func loadAllowlist(path string, now time.Time, maxHorizonDays int) (*allowlist, 
 		return nil, fmt.Errorf("allowlist %s is not usable:\n  - %s", path, strings.Join(problems, "\n  - "))
 	}
 	return a, nil
+}
+
+// --- trivy ---------------------------------------------------------------
+
+// trivyReport is the part of `trivy --format json --show-suppressed` this
+// program reads. Everything else in the report is the gate's business and
+// trivy's own --exit-code already decided it.
+//
+// ExperimentalModifiedFindings is trivy's name for what the ignorefile
+// removed, and it is experimental in 0.74.0.
+//
+// A limit this program cannot work around, measured rather than assumed:
+// a report from a run that suppressed nothing and a report from a run
+// that was never asked for suppressions are **byte-identical in this
+// respect**. Both omit the field entirely, and nothing in the report's
+// metadata records which flags ran -- `Trivy: {"Version": "0.74.0"}` is
+// all there is. So vuln-gate cannot verify that --show-suppressed was
+// passed, and a caller that forgets it produces an empty hits file,
+// which marks every entry unused: red, but for the wrong reason.
+//
+// The guarantee therefore lives where it can be enforced, at the point
+// the command is built. requireSuppressionReporting in ci/scanner-pins.sh
+// refuses to run trivy with --ignorefile unless --show-suppressed is
+// there too.
+type trivyReport struct {
+	Results []struct {
+		Target   string `json:"Target"`
+		Modified []struct {
+			Type      string `json:"Type"`
+			Status    string `json:"Status"`
+			Statement string `json:"Statement"`
+			Source    string `json:"Source"`
+			Finding   struct {
+				VulnerabilityID string `json:"VulnerabilityID"`
+			} `json:"Finding"`
+		} `json:"ExperimentalModifiedFindings"`
+	} `json:"Results"`
+}
+
+// recordTrivySuppressions marks the allowlist entries trivy used, and
+// returns how many suppressions it attributed to them.
+//
+// An id trivy suppressed that is not in the allowlist is not counted: it
+// came from somewhere else, and this program only speaks for one file.
+func recordTrivySuppressions(path string, a *allowlist, now time.Time) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("reading trivy report: %w", err)
+	}
+	var r trivyReport
+	if err := json.Unmarshal(data, &r); err != nil {
+		return 0, fmt.Errorf("parsing trivy report %s: %w", path, err)
+	}
+	n := 0
+	for _, res := range r.Results {
+		for _, m := range res.Modified {
+			if m.Status != "ignored" {
+				continue
+			}
+			if _, ok := a.covers(now, m.Finding.VulnerabilityID); ok {
+				n++
+			}
+		}
+	}
+	return n, nil
 }
 
 // --- govulncheck ---------------------------------------------------------

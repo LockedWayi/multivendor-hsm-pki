@@ -30,7 +30,21 @@ GOVULN_LOG="${OUT}/govulncheck-stage.log"
 # The last line ci/govulncheck-in-builder.sh prints when it has run the
 # whole scan. Its absence is what this script checks; keep the two in step.
 GOVULN_MARKER="govulncheck-in-builder: complete"
+# One hits file per scanner. ci/vuln-gate judges the union of them, because
+# an entry may legitimately cover a finding only one scanner can see.
+HITS_GOVULN="hits-govulncheck.json"
+HITS_TRIVY_FS="hits-trivy-fs.json"
 mkdir -p "${OUT}/cache"
+
+# ci/vuln-gate runs in the builder container, which mounts the repository
+# and nothing else, so it can only read a report written inside the tree.
+# Said out loud rather than left as a path that would quietly resolve
+# wrong: HSM_PKI_SCAN_OUT pointing outside the repository is a
+# configuration this script cannot serve.
+case "${OUT}" in
+    "${REPO_ROOT}"/*) OUT_REL="${OUT#"${REPO_ROOT}/"}" ;;
+    *) echo "scan-deps: HSM_PKI_SCAN_OUT must be inside ${REPO_ROOT}; got ${OUT}" >&2; exit 1 ;;
+esac
 
 GO_IMAGE="$(buildGoImage "${REPO_ROOT}/deploy/docker/Dockerfile")"
 
@@ -45,8 +59,10 @@ echo "     standard-library half of the answer is about the right toolchain)"
 docker run --rm \
     -v "${REPO_ROOT}":/repo -w /repo \
     -e GOFLAGS=-mod=readonly \
+    -v "${OUT}":/out \
     -e GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION}" \
     -e ALLOWLIST="${ALLOWLIST}" \
+    -e HITS_OUT="/out/${HITS_GOVULN}" \
     "${GO_IMAGE}" sh /repo/ci/govulncheck-in-builder.sh 2>&1 | tee "${GOVULN_LOG}"
 
 # Exit status cannot tell a clean scan from a scan that never happened:
@@ -63,12 +79,40 @@ echo
 echo "==> trivy fs: HIGH and CRITICAL in the module graph"
 # .local/ holds trivy's own database; scanning it means scanning the
 # scanner.
+TRIVY_FS_ARGS=(
+    fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1
+    --ignorefile "/repo/${ALLOWLIST}" --skip-dirs .local
+    --quiet --skip-version-check --no-progress /repo
+)
 docker run --rm \
     -v "${REPO_ROOT}":/repo -v "${OUT}":/out -w /repo \
-    "${TRIVY_IMAGE}" --cache-dir /out/cache \
-    fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
-    --ignorefile "/repo/${ALLOWLIST}" --skip-dirs .local \
-    --quiet --skip-version-check --no-progress /repo
+    "${TRIVY_IMAGE}" --cache-dir /out/cache "${TRIVY_FS_ARGS[@]}"
+
+echo
+echo "==> recording which allowlist entries trivy fs used"
+# A second invocation rather than one JSON run, deliberately: the gate
+# above keeps its exit status and its human-readable table exactly as they
+# were, and this pass only collects. The database is already in
+# ${OUT}/cache, so it re-reads rather than re-fetches.
+#
+# The gate's arguments are reused with --exit-code dropped: a finding is
+# the gate's verdict, not this pass's, and re-deciding it here would mean
+# two places could disagree about the same scan.
+TRIVY_FS_REPORT_ARGS=()
+for arg in "${TRIVY_FS_ARGS[@]}"; do
+    [ "$arg" = "--exit-code" ] && continue
+    [ "$arg" = "1" ] && continue
+    TRIVY_FS_REPORT_ARGS+=("$arg")
+done
+TRIVY_FS_REPORT_ARGS+=(--show-suppressed --format json --output "/out/trivy-fs.json")
+requireSuppressionReporting "${TRIVY_FS_REPORT_ARGS[@]}"
+docker run --rm \
+    -v "${REPO_ROOT}":/repo -v "${OUT}":/out -w /repo \
+    "${TRIVY_IMAGE}" --cache-dir /out/cache "${TRIVY_FS_REPORT_ARGS[@]}"
+goRun ./ci/vuln-gate -allowlist "${ALLOWLIST}" \
+    -trivy "/repo/${OUT_REL}/trivy-fs.json" \
+    -write-hits "/repo/${OUT_REL}/${HITS_TRIVY_FS}" -scanner trivy-fs
 
 echo
 echo "==> clean: no blocking dependency vulnerabilities"
+echo "    allowlist hits: ${OUT}/${HITS_GOVULN}, ${OUT}/${HITS_TRIVY_FS}"

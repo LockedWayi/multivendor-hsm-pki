@@ -8,6 +8,7 @@
 #
 #   GOVULNCHECK_VERSION  the module version to install, from ci/scanner-pins.sh
 #   ALLOWLIST            repo-relative path to the shared vulnerability allowlist
+#   HITS_OUT             where to record the allowlist entries this scan used
 #
 # Why a file and not the inline `sh -c "..."` this was until 2026-09-15:
 # the inline form was a multi-line double-quoted bash string, so a bare `"`
@@ -23,6 +24,7 @@ set -e
 
 : "${GOVULNCHECK_VERSION:?govulncheck-in-builder: GOVULNCHECK_VERSION is not set}"
 : "${ALLOWLIST:?govulncheck-in-builder: ALLOWLIST is not set}"
+: "${HITS_OUT:?govulncheck-in-builder: HITS_OUT is not set}"
 
 # The checkout is owned by the invoking user and this container runs as root.
 git config --global --add safe.directory /repo
@@ -57,7 +59,12 @@ retry go mod download
 # govulncheck -format json exits 0 even on a called vulnerability, so
 # ci/vuln-gate is what turns its findings into an exit status.
 "$(go env GOPATH)"/bin/govulncheck -format json ./... > /tmp/govulncheck.json
-go run ./ci/vuln-gate -govulncheck /tmp/govulncheck.json -allowlist "${ALLOWLIST}"
+# -write-hits records which allowlist entries this scan actually used.
+# No single scanner can decide that an entry is unused -- trivy suppresses
+# findings govulncheck never sees, and the other way round -- so each one
+# reports what it used and the union is judged once, elsewhere.
+go run ./ci/vuln-gate -govulncheck /tmp/govulncheck.json -allowlist "${ALLOWLIST}" \
+    -write-hits "${HITS_OUT}" -scanner govulncheck
 
 # Deliberately the last line, and ci/scan-deps.sh fails the run without it.
 # A stage that stops early exits 0 and prints nothing alarming, which is
