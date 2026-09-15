@@ -33,6 +33,18 @@ terraform.tfstate.*
 *.test
 *.out
 coverage.txt
+# `go build ./ci/<name>` and `go build ./cmd/<name>` drop a binary named
+# after the package in whatever directory they were run from, usually the
+# repository root. It has no extension, so no pattern above catches it, and
+# one was committed by accident before these lines existed.
+/check-pin-freshness
+/generate-image-policy
+/select-key
+/token-cleanup
+/verify-artifact
+/vuln-gate
+/hsm-pki-keytool
+/hsm-pki-server
 
 # OS / editor
 .DS_Store
