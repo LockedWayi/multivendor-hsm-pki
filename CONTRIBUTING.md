@@ -23,6 +23,7 @@ built to ordinary contribution standards.
    ci/scan-image.sh hsm-pki-server:local              # trivy image + SBOM
    ci/terraform-scan.sh                               # tofu fmt/validate + trivy
    ci/check-image-pins.sh                             # every image pinned by digest
+   ci/lint-shell.sh                                   # shellcheck, warning and above
    ci/assert-publishable-selftest.sh                  # the publish guard, both ways
    ci/verify-release.sh --inventory-only              # anchor + key inventory
    tools/check-public-links.sh                        # every relative link resolves

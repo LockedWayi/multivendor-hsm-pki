@@ -131,6 +131,7 @@ fetch() {
     # EXIT, not RETURN: a RETURN trap does not fire when die exits the
     # script. Double quotes, so the path is expanded now; work is
     # function-local and the trap runs after it is out of scope.
+    # shellcheck disable=SC2064
     trap "rm -rf '$work'" EXIT
 
     log "downloading $COSIGN_ASSET $COSIGN_VERSION"

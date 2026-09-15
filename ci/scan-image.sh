@@ -65,7 +65,7 @@ echo "==> recording which allowlist entries trivy image used"
 # this pass's; deciding it twice would let two places disagree about one
 # scan.
 TRIVY_IMAGE_REPORT_ARGS=(
-    image --quiet --scanners vuln --severity HIGH,CRITICAL
+    image --quiet --scanners vuln --severity "HIGH,CRITICAL"
     --ignorefile /vuln-allowlist.yaml --show-suppressed
     --format json --output /out/trivy-image.json "$IMAGE"
 )

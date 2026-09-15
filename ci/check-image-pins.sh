@@ -46,7 +46,7 @@ echo "==> upstream images referenced from scripts and workflows"
 # A list of the upstream names this repository uses. A name here without
 # @sha256: on the same line is a finding. A new upstream image is added
 # here too.
-UPSTREAM='alpine|golang|debian|registry|ubuntu|aquasec/trivy|semgrep/semgrep|zricethezav/gitleaks|ghcr\.io/opentofu/opentofu|gcr\.io/distroless'
+UPSTREAM='alpine|golang|debian|registry|ubuntu|aquasec/trivy|semgrep/semgrep|zricethezav/gitleaks|ghcr\.io/opentofu/opentofu|gcr\.io/distroless|koalaman/shellcheck'
 while IFS= read -r hit; do
     case "$hit" in
         *"@sha256:"*) continue ;;

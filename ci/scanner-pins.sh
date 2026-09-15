@@ -1,3 +1,6 @@
+# shellcheck shell=bash
+# Sourced: every name defined here is read by the script that sources it.
+# shellcheck disable=SC2034
 # Pinned third-party references, in one place. Sourced, never executed:
 #
 #   . "$(dirname "$0")/scanner-pins.sh"
@@ -26,6 +29,10 @@ TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:22cb52f6c5bf5c72a48a8f56d993d8df3e9
 # signature bundle, delete token state a root container created.
 ALPINE_IMAGE="alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
 TOFU_CLEANUP_IMAGE="$ALPINE_IMAGE"
+
+# koalaman/shellcheck:v0.9.0, the version installed in the development
+# environment, so a script that passes there passes in the pipeline.
+SHELLCHECK_IMAGE="koalaman/shellcheck@sha256:f35e8987b02760d4e76fc99a68ad5c42cc10bb32f3dd2143a3cf92f1e5446a45"
 
 # registry:2. The throwaway registry ci/signing-mechanism-test.sh pushes
 # into. It lives for one run and is removed with it.

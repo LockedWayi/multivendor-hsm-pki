@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 #
 # The govulncheck half of the dependency gate, run inside the digest-pinned
 # builder image with the repository mounted at /repo. ci/scan-deps.sh
