@@ -474,10 +474,14 @@ their rotation is the shape the CA-hierarchy gaps should take.
 new versioned label. It never overwrites one, and it refuses a token that
 already holds a CA-hierarchy key. `hsm-pki-keytool generate-inventory -in
 <current>` republishes the signed list with the previous version marked
-`verify-only`. Retirement is the step that still has no command. The
-inventory refuses to call a key retired while its private half is on the
-token, so destroying it is a manual `C_DestroyObject`. A rotation drill in
-CI is planned, not built.
+`verify-only`. Retirement is `ci/token-cleanup -prefix <label> -confirm`
+against the supply-chain token, after a dry run has shown the prefix
+matches exactly the two halves of that key. The inventory refuses to call
+a key retired while its private half is still on the token, so the
+destruction has to come first. `ci/rotation-drill.sh` runs the whole
+sequence in CI on a throwaway token set, and proves at the end that the
+retired label can no longer sign, either through the resolver or straight
+through cosign.
 
 ## 8. Cross-references
 
@@ -491,4 +495,5 @@ CI is planned, not built.
 - The ceremony as built: `internal/ca/ceremony.go` and
   `cmd/hsm-pki-keytool/main.go`
 - Signing-key (not CA-hierarchy) rotation:
-  [`architecture.md`](architecture.md), "The key inventory"
+  [`architecture.md`](architecture.md), "The key inventory", and the
+  drill that runs it, `ci/rotation-drill.sh`

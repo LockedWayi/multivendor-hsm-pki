@@ -429,8 +429,12 @@ Rejected: provisioning signing keys under bare labels
 the first rotation, when every consumer must change at once, so the
 rotation never happens. Chosen: versioned labels plus a signed key
 inventory that verifiers consume, giving each key an explicit active,
-verify-only, retired lifecycle. A rotation drill in CI is planned, not
-built. The CA hierarchy's own rotation, intermediate re-issue as the
+verify-only, retired lifecycle. `ci/rotation-drill.sh` runs that
+lifecycle in CI on a throwaway token set: provision, sign, roll to the
+next version, sign again, retire the old version by destroying it on the
+token, with the signers' choice and the verifiers' acceptance checked at
+every state, and an older inventory refused as a rollback when it is
+rendered into the admission policy. The CA hierarchy's own rotation, intermediate re-issue as the
 routine case and root roll-over with cross-signing as the exceptional one,
 is in [`key-ceremony-and-recovery.md`](key-ceremony-and-recovery.md).
 

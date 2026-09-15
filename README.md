@@ -60,7 +60,10 @@ image-signing key cannot issue a certificate. A compromised CA key cannot
 sign a release. Every key carries a **versioned label**
 (`image-signing-key-v1`), and verifiers consume a published, signed **key
 inventory**. Rotation provisions the next version, keeps the previous one
-verify-only for a stated window, then destroys it on the token.
+verify-only for a stated window, then destroys it on the token. That
+lifecycle is exercised, not just described: `ci/rotation-drill.sh` runs
+it on a throwaway token set, and at every state checks which key the
+signers pick and which signatures the verifiers accept.
 
 The Kubernetes admission policy is **generated from that inventory**, and
 the generator verifies the inventory's signature first. Images are admitted
@@ -213,9 +216,10 @@ HSM_PKI_TRUST_ANCHOR_REPO=... HSM_PKI_TRUST_ANCHOR_COMMIT=... HSM_PKI_TRUST_ANCH
 
 Built and running: the PKCS#11 core, the two-tier CA, the container and its
 Kubernetes deployment with a generated admission policy, the
-infrastructure-as-code modules, the scanning pipeline, and the signing
-layer. In progress: authentication on the write endpoints (mTLS, issued by
-this platform's own CA), the key-rotation drill in CI, and Vault custody.
+infrastructure-as-code modules, the scanning pipeline, the signing layer,
+and the key-rotation drill that runs it through a roll and a retirement
+in CI. In progress: authentication on the write endpoints (mTLS, issued
+by this platform's own CA), and Vault custody.
 
 ## Running it
 
