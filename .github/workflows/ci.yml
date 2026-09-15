@@ -308,6 +308,17 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Both tracks, for the same reason the publish job needs both: v2
+      # makes the PKCS#11 image signatures in the layout Kyverno reads,
+      # v3 signs the release binary. The first version of this job fetched
+      # neither and the test ran to step 4/6 before dying on the missing
+      # v3 -- far enough to look like it had worked.
+      - name: Fetch and verify cosign, both tracks
+        if: steps.needed.outputs.run == 'true'
+        run: |
+          HSM_PKI_COSIGN_VERSION=v2 ci/cosign.sh fetch
+          HSM_PKI_COSIGN_VERSION=v3 ci/cosign.sh fetch
+
       - name: Prove the PKCS#11 signing path end to end
         if: steps.needed.outputs.run == 'true'
         run: ci/signing-mechanism-test.sh
