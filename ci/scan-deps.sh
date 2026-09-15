@@ -80,7 +80,7 @@ echo "==> trivy fs: HIGH and CRITICAL in the module graph"
 # .local/ holds trivy's own database; scanning it means scanning the
 # scanner.
 TRIVY_FS_ARGS=(
-    fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1
+    fs --scanners vuln --severity "HIGH,CRITICAL" --exit-code 1
     --ignorefile "/repo/${ALLOWLIST}" --skip-dirs .local
     --quiet --skip-version-check --no-progress /repo
 )

@@ -124,6 +124,14 @@ jobs:
       - name: Every third-party image is pinned by digest
         run: ci/check-image-pins.sh
 
+      # Every gate in this pipeline is a shell script, and until this
+      # step nothing read them for the mistakes shellcheck exists to
+      # catch: it was installed in the development environment and
+      # invoked by nothing. Warning and above fail. The sourced files
+      # carry a shell directive, because a sourced file has no shebang.
+      - name: Every shell script passes shellcheck
+        run: ci/lint-shell.sh
+
       - name: Every relative link in the documentation resolves
         run: tools/check-public-links.sh
 

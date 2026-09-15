@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 #
 # Resolve which key a signer must use, from the signed key inventory.
 # Sourced, never executed:

@@ -1,3 +1,6 @@
+# shellcheck shell=bash
+# Sourced: every name defined here is read by the script that sources it.
+# shellcheck disable=SC2034
 # The identity every keyless signature from this repository's pipeline
 # carries. Sourced by the scripts that verify or re-attest keyless material.
 #
