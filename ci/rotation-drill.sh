@@ -26,8 +26,11 @@
 #      verify through the inventory, and the admission policy renders
 #      both keys
 #   6. retire: calling the old key retired while its private half is on
-#      the token is refused. Destroy it, republish (version 3). The
-#      inventory still carries its public key and the retirement date
+#      the token is refused. Destroy it with retire-signing-key, which
+#      refuses a listing that names another key under the label, and
+#      afterwards refuses twice more: the label is gone from the token,
+#      then the document says retired. Republish (version 3); the
+#      inventory still carries the public key and the retirement date
 #   7. signing with it is impossible twice over -- the resolver refuses
 #      the label, and the token no longer holds it. Before-roll stops
 #      verifying, after-roll still does, the policy renders one key, and
@@ -126,12 +129,11 @@ assert_equal() {
     echo "    ok: $1"
 }
 
-# The keytool and token-cleanup, built once in the dev image and run from
-# it with the token store mounted. deploy/docker/provision-signing-keys.sh
-# goes through `go run` for each of its four calls; the roll and the
-# retirement need five more, so one build. The Go caches under
-# .local/ci-cache are mounted when they exist, as ci/scanner-pins.sh's
-# goRun does.
+# The keytool, built once in the dev image and run from it with the token
+# store mounted. deploy/docker/provision-signing-keys.sh goes through
+# `go run` for each of its four calls; the roll and the retirement need
+# eight more, so one build. The Go caches under .local/ci-cache are
+# mounted when they exist, as ci/scanner-pins.sh's goRun does.
 build_tools() {
     local cache_args=()
     [ -d "$REPO_ROOT/.local/ci-cache/gobuild" ] && cache_args+=(-v "$REPO_ROOT/.local/ci-cache/gobuild":/root/.cache/go-build)
@@ -139,7 +141,7 @@ build_tools() {
     mkdir -p "$WORK/bin"
     docker run --rm "${cache_args[@]}" -v "$REPO_ROOT":/repo -w /repo "$DEV_IMAGE" sh -c '
         git config --global --add safe.directory /repo >/dev/null
-        go build -o "/repo/$1/bin/" ./cmd/hsm-pki-keytool ./ci/token-cleanup' sh "$WORK_REL"
+        go build -o "/repo/$1/bin/" ./cmd/hsm-pki-keytool' sh "$WORK_REL"
 }
 
 # tool <binary> [args]: run one of the built tools against the token
@@ -156,9 +158,14 @@ tool() {
         "$DEV_IMAGE" "/repo/$WORK_REL/bin/$1" "${@:2}"
 }
 keytool() { tool hsm-pki-keytool "$@"; }
-token_cleanup() {
-    tool token-cleanup -module /pkcs11/libsofthsm2.so \
-        -workspace "$SUPPLY_TOKEN_LABEL" -pin-env HSM_PKI_SUPPLY_PIN "$@"
+
+# retire <label> [inventory, repo-relative]: the retirement command, which
+# takes its permission from the inventory before it touches the token.
+retire() {
+    keytool retire-signing-key \
+        -module /pkcs11/libsofthsm2.so \
+        -workspace "$SUPPLY_TOKEN_LABEL" -pin-env HSM_PKI_SUPPLY_PIN \
+        -key-label "$1" -inventory "/repo/${2:-$KEYS_REL/key-inventory.json}"
 }
 
 # regenerate_inventory <purpose:label:status>...: republish the inventory
@@ -284,7 +291,7 @@ echo "    image key      $V1 (active)"
 echo "    artifact key   $ARTIFACT_KEY (active; not rotated by this drill)"
 echo "    next version   $V2"
 
-step "building the keytool and token-cleanup once"
+step "building the keytool once"
 build_tools >/dev/null
 echo "    $WORK_REL/bin/"
 
@@ -362,6 +369,9 @@ export COSIGN_PKCS11_PIN="$SUPPLY_PIN"
 "$REPO_ROOT/ci/attest-image.sh" "$BEFORE_REF" "$SBOM" "$WORK/provenance.json" >/dev/null
 expect_line "signature +$V1\$" "before-roll verifies through inventory version 1, signed by $V1" \
     -- verify_release "$BEFORE_REF"
+step "the active key cannot be retired"
+expect_fail "rotated, not retired" "retiring $V1 while the inventory lists it as active" \
+    -- retire "$V1"
 
 log "5/7  rolling to $V2"
 step "provisioning $V2 on the supply-chain token"
@@ -407,22 +417,38 @@ cmp -s "$KEYS/key-inventory.json" "$WORK/history/key-inventory.v2.json" \
     || die "the refused regeneration changed the published inventory"
 echo "    ok: the refused run wrote nothing"
 
-step "destroying $V1 on the token: both halves, and nothing else"
-# ci/token-cleanup matches by label prefix. On this token the prefix is
-# exact -- the only other image key is the next version -- and the dry
-# run's count is checked before -confirm so that stays true. A retirement
-# command that destroys exactly one label is the tool this step should
-# have; a prefix that also matched a later version would be a defect on a
-# token that has reached ten versions.
-DRY="$(token_cleanup -prefix "$V1")"
-MATCHED="$(printf '%s\n' "$DRY" | sed -nE 's/.* ([0-9]+) matching prefix .*/\1/p' | head -1)"
-[ "$MATCHED" = "2" ] || { printf '%s\n' "$DRY" >&2; die "expected the two halves of $V1 to match, token-cleanup found ${MATCHED:-nothing}"; }
-expect_line "destroyed 2 objects, 0 failures" "$V1 destroyed" -- token_cleanup -prefix "$V1" -confirm
+step "a listing that names another key under the label is refused"
+# The inventory of version 2 with a key that is on no token in place of
+# the old version's. The label is addressing; the command compares the
+# public key on the token with the one the document lists, and destroys
+# nothing when they differ.
+mkdir -p "$WORK/forged"
+openssl ecparam -name prime256v1 -genkey -noout -out "$WORK/forged/k.pem" 2>/dev/null
+python3 - "$KEYS/key-inventory.json" "$WORK/forged/key-inventory.json" "$WORK/forged/k.pem" "$V1" <<'FORGE'
+import json, pathlib, subprocess, sys
+src, dst, keyfile, label = sys.argv[1:5]
+d = json.loads(pathlib.Path(src).read_text())
+pub = subprocess.run(["openssl", "ec", "-in", keyfile, "-pubout"], check=True, capture_output=True, text=True).stdout
+next(k for k in d["keys"] if k["label"] == label)["public_key"] = pub
+pathlib.Path(dst).write_text(json.dumps(d, indent=2) + "\n")
+FORGE
+rm -f "$WORK/forged/k.pem"
+expect_fail "is not the key the inventory lists" "retiring $V1 against a listing of another key" \
+    -- retire "$V1" "$WORK_REL/forged/key-inventory.json"
+
+step "destroying $V1 on the token: both halves, by the command that reads the inventory first"
+expect_line "private: +destroyed" "$V1 destroyed, private half first" -- retire "$V1"
+
+step "retiring it again is refused: the token no longer holds it"
+expect_fail "no key object found" "retiring $V1 a second time" -- retire "$V1"
 
 step "republishing the inventory: $V1 retired, $V2 active"
 regenerate_inventory "image:$V1:retired" "image:$V2:active" "artifact:$ARTIFACT_KEY:active" >/dev/null
 inventory_token_offline
 snapshot_inventory 3
+
+step "and now the document itself refuses: $V1 is already retired"
+expect_fail "already listed as retired" "retiring $V1 after the inventory says so" -- retire "$V1"
 
 step "the retired entry still says what was once valid"
 python3 - "$KEYS/key-inventory.json" "$V1" "$KEYS/$V1.pub" "$WORK/history/key-inventory.v1.json" <<'PY'
