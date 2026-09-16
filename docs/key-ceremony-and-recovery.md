@@ -474,14 +474,20 @@ their rotation is the shape the CA-hierarchy gaps should take.
 new versioned label. It never overwrites one, and it refuses a token that
 already holds a CA-hierarchy key. `hsm-pki-keytool generate-inventory -in
 <current>` republishes the signed list with the previous version marked
-`verify-only`. Retirement is `ci/token-cleanup -prefix <label> -confirm`
-against the supply-chain token, after a dry run has shown the prefix
-matches exactly the two halves of that key. The inventory refuses to call
-a key retired while its private half is still on the token, so the
-destruction has to come first. `ci/rotation-drill.sh` runs the whole
-sequence in CI on a throwaway token set, and proves at the end that the
-retired label can no longer sign, either through the resolver or straight
-through cosign.
+`verify-only`. Retirement is `hsm-pki-keytool retire-signing-key`, which
+takes the label and the current inventory and refuses before it logs in
+unless the document lists the label as `verify-only`: an active key is
+rotated first, a key the document never listed is not this command's to
+remove, and a key the document already calls retired should not be on
+the token at all. On the token it compares the public key under the
+label with the one the inventory lists and refuses a mismatch, then
+destroys both halves, private first. The inventory refuses to call a key
+retired while its private half is still on the token, so the destruction
+comes first and `generate-inventory -in … -key <purpose>:<label>:retired`
+comes after. `ci/rotation-drill.sh` runs the whole sequence in CI on a
+throwaway token set, including each of those refusals, and proves at the
+end that the retired label can no longer sign, either through the
+resolver or straight through cosign.
 
 ## 8. Cross-references
 
