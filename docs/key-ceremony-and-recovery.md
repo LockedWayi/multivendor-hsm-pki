@@ -94,8 +94,8 @@ never leave, their respective tokens. `RunCeremony` asserts
 the CLI's success output prints that:
 
 ```
-no private key material was written anywhere; both key pairs remain on their respective HSM tokens
-root private key: CKA_EXTRACTABLE=true; eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)
+no private key material was written anywhere; both key pairs remain on their tokens
+root private key: CKA_EXTRACTABLE=true, eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)
 ```
 
 The second line echoes the §5.2 decision. It is printed so it is part of

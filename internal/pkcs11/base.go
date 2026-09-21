@@ -119,8 +119,9 @@ func checkCtx(ctx context.Context) error {
 // inside C_GetSlotList with two concurrent callers under a read lock,
 // although the module is initialized with CKF_OS_LOCKING_OK. The cost is
 // that a module stalled in C_GetSlotList stalls every other operation.
-// TestConformance/*/Workspaces_ConcurrentCallsAreSafe hangs on that
-// backend if this goes back to withReadLock.
+// The subtest that found this was removed: it destabilized the rest of
+// the ProtectServer run (see the note at the end of conformance_test.go).
+// Going back to withReadLock here reintroduces the hang.
 func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err

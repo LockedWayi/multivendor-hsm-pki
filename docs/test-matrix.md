@@ -59,16 +59,18 @@ Three properties of the harness matter for a new vendor:
 | Suite | Tests | Proves |
 |---|---:|---|
 | `internal/pkcs11` `TestConformance` | 1 group, ~20 subtests | The `VendorAdapter` contract: sessions, login lifecycle, key generation and **key protection attributes**, sign/verify, encrypt/decrypt, wrap/unwrap, find/attributes, error mapping |
-| `internal/ca` ceremony + intermediate | 12 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, `LoadIntermediate`'s startup gates |
-| `internal/ca` issuance + signer | 15 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points |
+| `internal/ca` ceremony, re-issue + intermediate | 18 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, intermediate re-issue under an existing root, `LoadIntermediate`'s startup gates |
+| `internal/ca` issuance + signer | 17 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points |
 | `internal/api` HTTP surface | 27 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness |
-| `internal/signingkey` | 16 | Supply-chain key provisioning: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
-| `cmd/hsm-pki-keytool` | 16 | The ceremony, the supply-chain key provisioning, and the signed key-inventory generation as an operator runs them, through the CLI's own adapter, including the two-token refusal and the openssl check of an HSM-made inventory signature |
+| `internal/signingkey` | 18 | Supply-chain key provisioning and destruction: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, the duplicate-key check, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
+| `cmd/hsm-pki-keytool` | 18 | The ceremony, the supply-chain key provisioning, its retirement against the inventory, and the signed key-inventory generation as an operator runs them, through the CLI's own adapter, including the two-token refusal and the openssl check of an HSM-made inventory signature |
 | `cmd/hsm-pki-server` | 3 | Startup: workspace resolution and anchor login, an unknown workspace refused, a wrong PIN refused |
 
-Counted per backend, a full run executes **96 top-level
-`Test.../<backend>` subtests on each configured backend**, the conformance
-suite included. Re-measured 2026-09-10 from the suite's own output:
+The per-suite numbers above are counts of `hsmtest.ForEach` call sites in
+the source on 2026-09-21, which is what a top-level `Test.../<backend>`
+subtest is. The last full-suite measurement, 2026-09-10, counted **96**
+before the retirement command and its tests landed; the next run inside
+the container re-measures it with:
 
 ```sh
 go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'

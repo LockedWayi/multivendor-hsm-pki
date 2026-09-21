@@ -227,7 +227,7 @@ Two refinements sharpen this picture:
   a claim. An object search is a measurement.
 - **Every signing key lives under a versioned label and a published,
   signed key inventory**, so rotation is a lifecycle state change verifiers
-  already understand. The planned audit chain adds a fourth purpose,
+  already understand. The planned audit chain adds a fifth purpose,
   `audit-signing-key`, under the same rules.
 
 The CA issuing a certificate to one of the other keys is not key reuse.
