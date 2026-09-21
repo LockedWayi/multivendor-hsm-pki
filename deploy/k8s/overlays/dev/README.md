@@ -171,12 +171,13 @@ curl -s localhost:18080/crl | openssl crl -inform DER -noout -text
 # because the service trusts the ceremony root and has to get there.
 curl -s --cacert .local/dev/etc/root.pem \
     --cert .local/dev/operator/operator-chain.pem --key .local/dev/operator/operator.key \
-    --data-binary @your.csr https://localhost:18443/certificates
+    --data-binary @your.csr "https://localhost:18443/certificates?profile=tls-server"
 ```
 
 `POST /certificates` on port 8080 is a 404: the public surface routes no
 write endpoint. The same request on 8443 without `--cert` fails the
-handshake.
+handshake, and one naming no profile is a 400 that lists the profiles
+that exist.
 
 ## Proving the guardrail rejects
 

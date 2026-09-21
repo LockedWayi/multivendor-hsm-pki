@@ -284,9 +284,10 @@ cat <<EOF
         -addext subjectAltName=DNS:leaf.example.test
     curl -s --cacert $STATE/etc/root.pem \\
         --cert $STATE/operator/operator-chain.pem --key $STATE/operator/operator.key \\
-        --data-binary @leaf.csr https://localhost:$TLS_PORT/certificates
+        --data-binary @leaf.csr "https://localhost:$TLS_PORT/certificates?profile=tls-server"
   The same request without --cert and --key is refused at the handshake,
-  and POST /certificates on the public port is a 404.
+  POST /certificates on the public port is a 404, and a request naming no
+  profile, or one the service does not know, is a 400.
 
   Ctrl-C to stop.
 EOF

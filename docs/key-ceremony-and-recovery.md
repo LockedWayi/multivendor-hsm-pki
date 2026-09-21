@@ -574,8 +574,13 @@ to get there:
 ```sh
 cat alice.pem /etc/hsm-pki/intermediate.pem > alice-chain.pem
 curl --cacert root.pem --cert alice-chain.pem --key alice.key \
-    --data-binary @leaf.csr https://pki.example.org:8443/certificates
+    --data-binary @leaf.csr "https://pki.example.org:8443/certificates?profile=tls-server"
 ```
+
+Every request names a profile; one that names none is refused. The
+operator certificate this command issues is a `tls-client` certificate,
+and the identity it provisions is a `tls-server` one; both profiles are
+built in and the commands choose them, never the operator.
 
 The command prints the identities the certificate carries: each URI SAN
 as written, then the common name. One of them goes in `api.issuers` or

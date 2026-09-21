@@ -9,10 +9,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -230,11 +232,20 @@ func TestKeyUsageFor_CoversEveryAllowedKeyType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	if got := keyUsageFor(&ecKey.PublicKey); got != x509.KeyUsageDigitalSignature {
+	fromProfile := x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
+	if got := keyUsageFor(&ecKey.PublicKey, fromProfile); got != x509.KeyUsageDigitalSignature {
 		t.Fatalf("ECDSA keyUsage = %v, want digitalSignature only: an EC key cannot do keyEncipherment (RFC 5480 §3)", got)
 	}
-	// RSA is exercised through Issue in ca_test.go, where a 2048-bit key is
-	// already generated.
+	// A profile that never listed keyEncipherment gains nothing from an
+	// RSA key: the profile's set is the most any certificate asserts.
+	if got := keyUsageFor(&rsa.PublicKey{}, x509.KeyUsageDigitalSignature); got != x509.KeyUsageDigitalSignature {
+		t.Fatalf("RSA keyUsage under a digitalSignature-only profile = %v, want digitalSignature only", got)
+	}
+	// RSA under a profile listing keyEncipherment is exercised through
+	// Issue in ca_test.go, where a 2048-bit key is already generated.
+	if minRSAKeyBits != profile.MinRSAKeyBits {
+		t.Fatalf("the CA's RSA floor is %d and the profile package's is %d; they must agree", minRSAKeyBits, profile.MinRSAKeyBits)
+	}
 }
 
 func pemBlock(t *testing.T, der []byte) []byte {
@@ -282,7 +293,7 @@ func TestIssue_RefusesAnIssuerOutsideItsOwnValidityWindow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cert, key := buildIntermediateWithKey(t, intermediateOpts{notBefore: tc.notBefore, notAfter: tc.notAfter})
 			c := NewCA(cert, key, time.Minute, testDist())
-			if _, err := c.Issue(testCSR(t)); !errors.Is(err, ErrIssuerNotValid) {
+			if _, err := c.Issue(testCSR(t), clientFor(time.Minute)); !errors.Is(err, ErrIssuerNotValid) {
 				t.Fatalf("Issue error = %v, want ErrIssuerNotValid", err)
 			}
 		})
@@ -296,17 +307,18 @@ func TestIssue_RefusesALeafThatWouldOutliveItsIssuer(t *testing.T) {
 		notBefore: now.Add(-time.Hour),
 		notAfter:  now.Add(time.Hour),
 	})
-	// Issuer has an hour left; the configured leaf TTL is a day.
+	// Issuer has an hour left; the profile grants a day, under a ceiling
+	// of a day, so the ceiling passes and the issuer check must refuse.
 	c := NewCA(cert, key, 24*time.Hour, testDist())
 
-	_, err := c.Issue(testCSR(t))
+	_, err := c.Issue(testCSR(t), clientFor(24*time.Hour))
 	if !errors.Is(err, ErrValidityExceedsIssuer) {
 		t.Fatalf("Issue error = %v, want ErrValidityExceedsIssuer", err)
 	}
 
-	// A TTL inside the window still issues.
+	// A validity inside the window still issues.
 	c = NewCA(cert, key, time.Minute, testDist())
-	leaf, err := c.Issue(testCSR(t))
+	leaf, err := c.Issue(testCSR(t), clientFor(time.Minute))
 	if err != nil {
 		t.Fatalf("Issue with a TTL inside the issuer's window: %v", err)
 	}

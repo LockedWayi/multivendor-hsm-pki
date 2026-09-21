@@ -316,7 +316,7 @@ func TestRunCeremony_ConcurrentIssuanceUnderCeremonyIntermediate(t *testing.T) {
 					issueErrs[i] = err
 					return
 				}
-				leaves[i], issueErrs[i] = intermediateCA.Issue(csr)
+				leaves[i], issueErrs[i] = intermediateCA.Issue(csr, tlsClient())
 			}(i)
 		}
 		wg.Wait()
@@ -510,7 +510,7 @@ func issueTestLeaf(t *testing.T, b *ceremonyBackend, interCert *x509.Certificate
 		t.Fatalf("ParseCertificateRequest: %v", err)
 	}
 
-	leaf, err := intermediateCA.Issue(csr)
+	leaf, err := intermediateCA.Issue(csr, tlsClient())
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}

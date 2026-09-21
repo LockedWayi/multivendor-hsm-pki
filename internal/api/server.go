@@ -26,6 +26,7 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
@@ -112,13 +113,16 @@ type RootArtifacts struct {
 // checked against. CRLValidity sets each CRL's window. Root carries the
 // static artifacts. Authorization names who may write.
 type Config struct {
-	Issuer        *ca.CA
-	Adapter       pk11.VendorAdapter
-	Workspace     pk11.Workspace
-	Records       store.Store
-	CRLValidity   time.Duration
-	Root          RootArtifacts
-	Logger        *slog.Logger
+	Issuer      *ca.CA
+	Adapter     pk11.VendorAdapter
+	Workspace   pk11.Workspace
+	Records     store.Store
+	CRLValidity time.Duration
+	Root        RootArtifacts
+	Logger      *slog.Logger
+	// Profiles are what a request may ask to be issued under. A request
+	// names one with ?profile=; none, or one not here, is refused.
+	Profiles      profile.Set
 	Authorization Authorization
 }
 
@@ -150,6 +154,7 @@ func NewServer(cfg Config) Handlers {
 		store:       cfg.Records,
 		crlValidity: cfg.CRLValidity,
 		root:        cfg.Root,
+		profiles:    cfg.Profiles,
 	}
 	// x509.Certificate.Raw is already the DER RFC 2585 wants at that URL.
 	if cfg.Issuer != nil && cfg.Issuer.Certificate() != nil {
@@ -192,6 +197,7 @@ type server struct {
 	adapter     pk11.VendorAdapter
 	workspace   pk11.Workspace
 	store       store.Store
+	profiles    profile.Set
 	crlValidity time.Duration
 	root        RootArtifacts
 	// intermediateDER is this service's own CA certificate, served at
@@ -255,6 +261,16 @@ func (s *server) writeError(w http.ResponseWriter, status int, msg string) {
 // DER CSR, validate it, and return the signed certificate. Every rejection
 // responds before the result is recorded.
 func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) {
+	// The profile is resolved before the body is read: it is the one
+	// input every request needs, and a request that names none is not a
+	// request for anything. Refused, never defaulted. The message names
+	// the profiles that exist, which is public policy, not a secret.
+	prof, err := s.profiles.Lookup(r.URL.Query().Get("profile"))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("%v; name one with ?profile= (available: %s)", err, strings.Join(s.profiles.Names(), ", ")))
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxCSRBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -273,7 +289,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	cert, err := s.ca.Issue(csr)
+	cert, err := s.ca.Issue(csr, prof)
 	if err != nil {
 		status, msg := issueErrorResponse(err)
 		if status >= 500 {
@@ -303,6 +319,7 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	// The identity is a name off the client's certificate, never a secret.
 	loggerFromContext(r.Context()).Info("certificate issued",
 		"client", clientFromContext(r.Context()),
+		"profile", prof.Name,
 		"serial", cert.SerialNumber.String(),
 		"subject", cert.Subject.String(),
 	)
@@ -491,6 +508,11 @@ func issueErrorResponse(err error) (int, string) {
 		return http.StatusBadRequest, "CSR subject is empty"
 	case errors.Is(err, ca.ErrDisallowedKeyType):
 		return http.StatusBadRequest, "CSR public key type is not allowed"
+	// The three policy refusals carry the profile's own wording, which
+	// says what was asked for and what the profile permits. Nothing in
+	// them is about this service's state.
+	case errors.Is(err, ca.ErrNameNotAllowed), errors.Is(err, ca.ErrSubjectNotAllowed), errors.Is(err, ca.ErrValidityExceedsPolicy):
+		return http.StatusBadRequest, err.Error()
 	default:
 		return http.StatusInternalServerError, "certificate issuance failed"
 	}

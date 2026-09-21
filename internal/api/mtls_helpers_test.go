@@ -74,6 +74,7 @@ func startServersOn(t *testing.T, public *httptest.Server, c *ca.CA, adapter pk1
 	}
 
 	handlers := api.NewServer(api.Config{
+		Profiles:      testProfiles(),
 		Issuer:        c,
 		Adapter:       adapter,
 		Workspace:     ws,
@@ -132,7 +133,7 @@ func issueServerIdentity(t *testing.T, c *ca.CA) tls.Certificate {
 	if err != nil {
 		t.Fatalf("ParseCertificateRequest: %v", err)
 	}
-	leaf, err := c.Issue(csr)
+	leaf, err := c.Issue(csr, tlsServer())
 	if err != nil {
 		t.Fatalf("issuing the server identity: %v", err)
 	}
@@ -186,7 +187,7 @@ func issueClientLeaf(t *testing.T, c *ca.CA, identity string) (*x509.Certificate
 	if err != nil {
 		t.Fatalf("ParseCertificateRequest: %v", err)
 	}
-	leaf, err := c.Issue(csr)
+	leaf, err := c.Issue(csr, tlsClient())
 	if err != nil {
 		t.Fatalf("issuing the client certificate: %v", err)
 	}

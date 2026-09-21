@@ -41,7 +41,7 @@ func issueTestCert(t *testing.T, ts *testServers, cn string) *x509.Certificate {
 	}
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-	resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+	resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(csrPEM))
 	if err != nil {
 		t.Fatalf("POST /certificates: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
-		resp, err := first.client.Post(first.tls.URL+"/certificates", "application/x-pem-file",
+		resp, err := first.client.Post(first.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file",
 			bytes.NewReader(csrPEMFor(t, priv, "survives-restart.example.test")))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)

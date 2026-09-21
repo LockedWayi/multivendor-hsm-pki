@@ -59,7 +59,7 @@ func TestIssueCertificate_Success(t *testing.T) {
 		}
 		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
-		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -104,7 +104,7 @@ func TestIssueCertificate_MalformedBodyRejected(t *testing.T) {
 		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
 		defer ts.Close()
 
-		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", strings.NewReader("this is not a CSR"))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", strings.NewReader("this is not a CSR"))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -140,7 +140,7 @@ func TestIssueCertificate_BrokenSignatureRejected(t *testing.T) {
 		tampered[len(tampered)-1] ^= 0xFF // corrupts the trailing signature BIT STRING
 		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: tampered})
 
-		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -174,7 +174,7 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 		}
 		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -212,7 +212,7 @@ func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
 		}
 		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -241,7 +241,7 @@ func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 		defer ts.Close()
 
 		oversized := bytes.Repeat([]byte("A"), 128*1024) // well past the 64 KiB limit
-		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(oversized))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(oversized))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -290,7 +290,7 @@ func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 				}
 				csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-				resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+				resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(csrPEM))
 				if err != nil {
 					errs[i] = err
 					return
@@ -350,7 +350,7 @@ func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 		}
 		csrPEM := csrPEMFor(t, priv, "chain.example.test")
 
-		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -535,7 +535,8 @@ func TestIntermediateCertEndpoint(t *testing.T) {
 // 200.
 func TestIntermediateCertEndpoint_MissingIssuerFailsHonestly(t *testing.T) {
 	pub := httptest.NewServer(api.NewServer(api.Config{
-		Records: store.NewMemory(), CRLValidity: 24 * time.Hour, Logger: testLogger(),
+		Profiles: testProfiles(),
+		Records:  store.NewMemory(), CRLValidity: 24 * time.Hour, Logger: testLogger(),
 	}).Public)
 	defer pub.Close()
 
@@ -569,7 +570,7 @@ func TestIssuedLeafDistributionPointsResolve(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
-		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file",
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates?profile=tls-client", "application/x-pem-file",
 			bytes.NewReader(csrPEMFor(t, priv, "resolve.example.test")))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)

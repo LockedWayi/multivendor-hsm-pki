@@ -100,6 +100,7 @@ func run(configPath string, logger *slog.Logger) error {
 	// The two URLs are logged because every leaf will carry them and they
 	// cannot be fixed afterwards. Both are public.
 	logger.Info("intermediate CA ready",
+		"profiles", cfg.CA.ProfileSet.Names(),
 		"subject", caInstance.Certificate().Subject.String(),
 		"serial", caInstance.Certificate().SerialNumber.String(),
 		"not_after", caInstance.Certificate().NotAfter,
@@ -127,6 +128,7 @@ func run(configPath string, logger *slog.Logger) error {
 		CRLValidity: time.Duration(cfg.CA.CRLValidityHours) * time.Hour,
 		Root:        rootArtifacts,
 		Logger:      logger,
+		Profiles:    cfg.CA.ProfileSet,
 		Authorization: api.Authorization{
 			Issuers:  cfg.API.Issuers,
 			Revokers: cfg.API.Revokers,

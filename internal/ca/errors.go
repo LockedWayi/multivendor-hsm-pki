@@ -39,4 +39,17 @@ var (
 	// ErrNoDistributionPoints is returned by Issue when the CA has no CRL
 	// distribution point or AIA URL to write. The HTTP layer maps it to a 500.
 	ErrNoDistributionPoints = errors.New("ca: no leaf distribution points configured")
+
+	// ErrNameNotAllowed is returned by Issue when the CSR carries a subject
+	// alternative name of a type the profile does not copy, or none where
+	// the profile requires one.
+	ErrNameNotAllowed = errors.New("ca: subject alternative names are not allowed by the profile")
+
+	// ErrSubjectNotAllowed is returned by Issue when the CSR's subject
+	// carries an attribute the profile does not copy.
+	ErrSubjectNotAllowed = errors.New("ca: subject is not allowed by the profile")
+
+	// ErrValidityExceedsPolicy is returned by Issue when the profile would
+	// grant a longer validity than the CA's ceiling permits.
+	ErrValidityExceedsPolicy = errors.New("ca: profile validity exceeds the CA's ceiling")
 )

@@ -229,8 +229,11 @@ in CI, and mutual TLS on the write endpoints, with clients authorised by
 name from certificates this CA issued, its HSM-held TLS identity and the
 first operator certificate minted by two operator-run commands
 ([`docs/key-ceremony-and-recovery.md`](docs/key-ceremony-and-recovery.md)
-§8) and wired through the local run and the Kubernetes overlay. Planned
-next: certificate profiles, then Vault custody.
+§8) and wired through the local run and the Kubernetes overlay; and
+certificate profiles, so every certificate is issued under a stated
+policy and none under a default. Planned next: binding each client
+identity to the profiles and names it may request, an OCSP responder,
+then Vault custody.
 
 ## Running it
 
@@ -253,8 +256,14 @@ deploy/docker/run-local.sh
 curl -s localhost:8080/readyz                       # the public surface
 curl -s --cacert .local/dev/etc/root.pem \
     --cert .local/dev/operator/operator-chain.pem --key .local/dev/operator/operator.key \
-    --data-binary @leaf.csr https://localhost:8443/certificates   # a write, over mutual TLS
+    --data-binary @leaf.csr "https://localhost:8443/certificates?profile=tls-server"
 ```
+
+Every write names a profile. Four are built in — `tls-server`,
+`tls-client`, `code-signing`, `ocsp-responder` — and each fixes the key
+usages, the name types, the subject attributes copied from the request,
+the key algorithms and the lifetime; a deployment can replace the set in
+its configuration. A request naming none is refused, not defaulted.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 
