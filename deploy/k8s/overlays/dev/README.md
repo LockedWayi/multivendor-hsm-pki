@@ -30,11 +30,25 @@ kubectl -n hsm-pki-dev create configmap hsm-pki-config \
     --from-file=softhsm2.conf \
     --from-file=intermediate.pem \
     --from-file=root.pem \
-    --from-file=root-crl.pem
+    --from-file=root-crl.pem \
+    --from-file=tls.pem
 ```
 
-`deploy/docker/run-local.sh` produces all five of those in `.local/dev/etc/`,
-so the fastest way to get a working set is to run it once.
+`deploy/docker/run-local.sh` produces all six of those in `.local/dev/etc/`,
+so the fastest way to get a working set is to run it once. `tls.pem` is the
+service's TLS certificate for the mutual-TLS listener; its key is on the
+intermediate's token under `server.tls.key_label`, so the token store you
+copy must be the one `provision-tls-identity` ran against.
+
+**The CA store, and why the operator credential is in it.** The service
+authorises a client by looking its serial up in the store, not by trusting
+its chain. So the operator certificate `run-local.sh` issued is only a
+credential against the store it was recorded in. `k3d-up.sh` seeds the
+cluster's store from `.local/dev/var` when the cluster's is empty, for the
+same reason it seeds the token store. A cluster that already has a store
+keeps it, and then a client certificate has to be issued against *that*
+store: scale the deployment to zero, run `hsm-pki-keytool
+issue-client-cert -store .local/k3d/node/store/ca.db …`, scale back up.
 
 `config.yaml` must point at the paths this overlay mounts:
 
@@ -50,6 +64,8 @@ ca:
 ```
 
 and `softhsm2.conf` must set `directories.tokendir = /var/lib/softhsm/tokens`.
+`server.tls.cert_path` must be `/etc/hsm-pki/tls.pem`, where the ConfigMap
+puts it; `run-local.sh` writes the block that way.
 
 ## The node prerequisite
 
@@ -146,11 +162,21 @@ kubectl -n hsm-pki-dev get endpoints hsm-pki
 Then, since there is no ingress in this overlay:
 
 ```sh
-kubectl -n hsm-pki-dev port-forward svc/hsm-pki 18080:8080 &
+kubectl -n hsm-pki-dev port-forward svc/hsm-pki 18080:8080 18443:8443 &
 curl -s localhost:18080/readyz
-curl -s -X POST --data-binary @your.csr localhost:18080/certificates
 curl -s localhost:18080/crl | openssl crl -inform DER -noout -text
+
+# A write goes to the mutual-TLS port, as the operator run-local.sh issued
+# a certificate to. The client presents its chain, leaf then intermediate,
+# because the service trusts the ceremony root and has to get there.
+curl -s --cacert .local/dev/etc/root.pem \
+    --cert .local/dev/operator/operator-chain.pem --key .local/dev/operator/operator.key \
+    --data-binary @your.csr https://localhost:18443/certificates
 ```
+
+`POST /certificates` on port 8080 is a 404: the public surface routes no
+write endpoint. The same request on 8443 without `--cert` fails the
+handshake.
 
 ## Proving the guardrail rejects
 
@@ -174,6 +200,9 @@ exits rather than one that serves errors.
 | `CKR_SLOT_ID_INVALID` / workspace not found | The token store on the node does not hold a token with the configured label |
 | `CKR_PIN_INCORRECT` | The Secret's value is not the token's user PIN |
 | `reading CA certificate` | The ConfigMap is missing the ceremony artifacts |
+| `no key object found` naming `ca-tls-key-v1` | The token store predates `provision-tls-identity`; the TLS key is not on it. Re-run `run-local.sh --reset`, then `k3d-up.sh` against an empty `.local/k3d/node/tokens` |
+| `no server.tls configured` in the log, writes refused | `config.yaml` has no `tls:` block. The service is up and issues nothing |
+| 403 `not issued by this CA` on a write | The client certificate was recorded in another store than the one this pod reads. Issue one against this store, or seed the store with the token |
 
 ## Two constraints that are not negotiable here
 

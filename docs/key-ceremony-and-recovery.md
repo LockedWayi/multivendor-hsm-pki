@@ -567,6 +567,16 @@ hsm-pki-keytool issue-client-cert \
     -cert-out alice.pem
 ```
 
+The file written is the leaf alone. A TLS client presents its chain, and
+the service trusts the ceremony root, so the client needs the intermediate
+to get there:
+
+```sh
+cat alice.pem /etc/hsm-pki/intermediate.pem > alice-chain.pem
+curl --cacert root.pem --cert alice-chain.pem --key alice.key \
+    --data-binary @leaf.csr https://pki.example.org:8443/certificates
+```
+
 The command prints the identities the certificate carries: each URI SAN
 as written, then the common name. One of them goes in `api.issuers` or
 `api.revokers`, which are exact-match lists. A request with neither a URI

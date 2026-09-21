@@ -1,5 +1,9 @@
-# One port, the one the service actually serves. Everything a relying party
-# needs -- the CRL, the issuing certificate, the root artifacts -- is on it.
+# Two ports, one per surface. Everything a relying party needs -- the CRL,
+# the issuing certificate, the root artifacts -- is on the public one, plain
+# HTTP. Every write is on the mutual-TLS one, where the service itself
+# terminates TLS: there is no ingress in front of it holding the identity,
+# because a client is authorised by its certificate and a proxy that
+# terminated TLS would have to forward that as a header, which is a claim.
 apiVersion: v1
 kind: Service
 metadata:
@@ -15,4 +19,8 @@ spec:
     - name: http
       port: 8080
       targetPort: http
+      protocol: TCP
+    - name: https
+      port: 8443
+      targetPort: https
       protocol: TCP

@@ -58,6 +58,10 @@ done
     echo "run deploy/docker/run-local.sh first -- no ceremony artifacts in $LOCAL/etc" >&2
     exit 1
 }
+[ -f "$LOCAL/etc/tls.pem" ] || {
+    echo "run deploy/docker/run-local.sh --reset first -- $LOCAL predates the authenticated listener (no tls.pem)" >&2
+    exit 1
+}
 
 if [ "${1:-}" = "--recreate" ]; then
     log "deleting cluster $CLUSTER (host-side state in .local/k3d is kept)"
@@ -97,6 +101,20 @@ if [ -z "$(ls -A "$NODE_STATE/tokens" 2>/dev/null)" ]; then
         | docker exec -i "$NODE" tar -C /opt/hsm-pki/tokens -xf -
 else
     echo "    token store already populated, left alone"
+fi
+# The CA store travels with the token, and for the same reason: the TLS
+# certificate and the operator certificate run-local.sh issued are records
+# in it, and the service authorises a client by its record, not its chain.
+# A cluster seeded with the token and not the store would refuse the only
+# operator credential there is. Seeded only when empty, like the token
+# store, so a running CA's issued and revoked records are never replaced.
+if [ -z "$(ls -A "$NODE_STATE/store" 2>/dev/null)" ]; then
+    echo "    seeding the CA store with run-local's records (the TLS and operator certificates)"
+    docker run --rm -v "$LOCAL/var":/s "$ALPINE_IMAGE" tar -C /s -cf - . \
+        | docker exec -i "$NODE" tar -C /opt/hsm-pki/store -xf -
+else
+    echo "    CA store already populated, left alone"
+    echo "    (a client certificate is a record in it: one issued against another store is refused)"
 fi
 docker exec "$NODE" sh -c 'chown -R 65532:65532 /opt/hsm-pki/tokens /opt/hsm-pki/store; chmod 0770 /opt/hsm-pki/tokens /opt/hsm-pki/store'
 
@@ -179,7 +197,8 @@ kubectl -n "$NS" create configmap hsm-pki-config \
     --from-file=softhsm2.conf="$LOCAL/etc/softhsm2.conf" \
     --from-file=intermediate.pem="$LOCAL/etc/intermediate.pem" \
     --from-file=root.pem="$LOCAL/etc/root.pem" \
-    --from-file=root-crl.pem="$LOCAL/etc/root-crl.pem" >/dev/null
+    --from-file=root-crl.pem="$LOCAL/etc/root-crl.pem" \
+    --from-file=tls.pem="$LOCAL/etc/tls.pem" >/dev/null
 
 pinfile="$(mktemp)"; trap 'rm -f "$pinfile"' EXIT
 printf '%s' "${HSM_PKI_DEV_PIN:-1234}" > "$pinfile"
@@ -198,7 +217,13 @@ kubectl -n "$NS" rollout status deploy/hsm-pki --timeout=180s
 cat <<EOF
 
   kubectl -n $NS get endpoints hsm-pki
-  kubectl -n $NS port-forward svc/hsm-pki 18080:8080
+  kubectl -n $NS port-forward svc/hsm-pki 18080:8080 18443:8443
+
+  A write, as the operator run-local.sh issued a certificate to:
+    curl -s --cacert $LOCAL/etc/root.pem \\
+        --cert $LOCAL/operator/operator-chain.pem --key $LOCAL/operator/operator.key \\
+        --data-binary @your.csr https://localhost:18443/certificates
+  The TLS certificate names localhost, which is what the port-forward is.
 
 State that survives 'k3d cluster delete', all under $NODE_STATE:
   store/    the CA's issued and revoked records and its CRL number

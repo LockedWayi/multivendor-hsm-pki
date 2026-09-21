@@ -225,14 +225,12 @@ Built and running: the PKCS#11 core, the two-tier CA, the container and its
 Kubernetes deployment with a generated admission policy, the
 infrastructure-as-code modules, the scanning pipeline, the signing layer,
 and the key-rotation drill that runs it through a roll and a retirement
-in CI. Built and not yet wired into the deployments: mutual TLS on the
-write endpoints, with clients authorised by name from certificates this
-CA issued, and the two operator-run commands that mint the credentials it
-needs — the service's HSM-held TLS identity and the first client
-certificate
+in CI, and mutual TLS on the write endpoints, with clients authorised by
+name from certificates this CA issued, its HSM-held TLS identity and the
+first operator certificate minted by two operator-run commands
 ([`docs/key-ceremony-and-recovery.md`](docs/key-ceremony-and-recovery.md)
-§8). In progress: the run-local and Kubernetes plumbing for the second
-listener. Planned next: certificate profiles, then Vault custody.
+§8) and wired through the local run and the Kubernetes overlay. Planned
+next: certificate profiles, then Vault custody.
 
 ## Running it
 
@@ -244,6 +242,18 @@ docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev go test -race -p 1 ./...
 ci/scan-code.sh          # Semgrep
 ci/scan-deps.sh          # trivy fs + govulncheck
 ci/terraform-scan.sh     # OpenTofu fmt, validate, trivy
+```
+
+The whole thing on one machine, with no HSM: two SoftHSM2 tokens, a root
+ceremony, the root token moved out of reach, the service's TLS identity and
+an operator certificate minted, then the service on two ports:
+
+```sh
+deploy/docker/run-local.sh
+curl -s localhost:8080/readyz                       # the public surface
+curl -s --cacert .local/dev/etc/root.pem \
+    --cert .local/dev/operator/operator-chain.pem --key .local/dev/operator/operator.key \
+    --data-binary @leaf.csr https://localhost:8443/certificates   # a write, over mutual TLS
 ```
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.

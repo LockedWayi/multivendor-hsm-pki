@@ -76,8 +76,20 @@ spec:
           args: ["-config", "/etc/hsm-pki/config.yaml"]
 
           ports:
+            # The public surface. The probes below all target it: a probe
+            # cannot present a client certificate, and readiness is a
+            # question about the HSM session, not about the operator's
+            # credential.
             - name: http
               containerPort: 8080
+              protocol: TCP
+            # The mutual-TLS surface, the only place a write is routed.
+            # Needs server.tls in the ConfigMap's config.yaml, tls.pem
+            # beside it, and the TLS key on the token under
+            # server.tls.key_label; without the block the service starts
+            # and issues nothing, and says so.
+            - name: https
+              containerPort: 8443
               protocol: TCP
 
           env:
@@ -170,7 +182,8 @@ spec:
           volumeMounts:
             # Config and the public ceremony artifacts: config.yaml,
             # softhsm2.conf, the intermediate certificate, the root
-            # certificate and the root CRL. No key material, no PIN.
+            # certificate, the root CRL and the service's TLS certificate.
+            # No key material, no PIN: the TLS key is on the token.
             - name: config
               mountPath: /etc/hsm-pki
               readOnly: true
