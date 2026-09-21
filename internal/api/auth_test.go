@@ -384,7 +384,7 @@ func TestAuthenticatedListener_ServesAnHSMHeldIdentity(t *testing.T) {
 		records := store.NewMemory()
 		handlers := api.NewServer(api.Config{
 			Profiles: testProfiles(),
-			Issuer: c, Adapter: adapter, Workspace: ws, Records: records, CRLValidity: 24 * time.Hour,
+			Issuer:   c, Adapter: adapter, Workspace: ws, Records: records, CRLValidity: 24 * time.Hour,
 			Root: rootArtifacts, Logger: testLogger(),
 			Authorization: api.Authorization{Issuers: []string{testIssuer}, Revokers: []string{testIssuer}},
 		})
