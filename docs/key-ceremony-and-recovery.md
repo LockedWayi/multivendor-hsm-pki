@@ -489,7 +489,118 @@ throwaway token set, including each of those refusals, and proves at the
 end that the retired label can no longer sign, either through the
 resolver or straight through cosign.
 
-## 8. Cross-references
+## 8. The credentials the authenticated API needs
+
+The write endpoints accept only a client certificate this CA issued, which
+makes the first one a circular problem: the API that would issue it is the
+API it exists to open. Two operator-run commands break the circle, and
+both are deliberately outside the service.
+
+**Both write to the service's store, which is single-writer SQLite. Stop
+the service before running either.** A certificate this CA signed but did
+not record is one the service refuses, because a client is authorised by
+its store record and not by its chain, so the record is not bookkeeping.
+
+### 8.1 The service's TLS identity
+
+`hsm-pki-keytool provision-tls-identity` generates the key pair the
+authenticated listener presents and issues its certificate under the
+intermediate.
+
+```sh
+hsm-pki-keytool provision-tls-identity \
+    -module /usr/lib/softhsm/libsofthsm2.so \
+    -workspace hsm-pki-intermediate -pin-env HSM_PKI_PIN \
+    -intermediate-key-label ca-intermediate-key-v1 \
+    -intermediate-cert /etc/hsm-pki/intermediate.pem \
+    -base-url https://pki.example.org \
+    -store /var/lib/hsm-pki/ca.sqlite \
+    -tls-key-label ca-tls-key-v1 \
+    -dns pki.example.org \
+    -cert-out /etc/hsm-pki/tls.pem
+```
+
+The key lives on the intermediate's token under its own versioned label
+and never leaves it: TLS handshakes are signed through the same HSM path
+as certificates. It is never the intermediate's own key, and the command
+refuses that label, because a handshake signs bytes the connecting peer
+chooses and the key that signs certificates must not do that. The
+certificate is a `serverAuth` leaf and needs a subject alternative name:
+a server certificate identified only by its common name is one no modern
+client accepts.
+
+The two flags it prints at the end are `server.tls.key_label` and
+`server.tls.cert_path`.
+
+On a token whose RNG restarts with every library initialisation, the
+command refuses rather than provisions: the key pair it generates is one
+the token has handed out before, and `signingkey.Provision` destroys it
+and reports which existing label it duplicated. Measured on ProtectToolkit-C
+software emulation, where the duplicate is the ceremony's intermediate
+key, so the refusal is the difference between a TLS key of its own and
+the CA's key serving handshakes. That backend is a conformance target,
+never a key source ([`test-matrix.md`](test-matrix.md), "RNG reseeding
+across `C_Initialize`").
+
+### 8.2 The first client certificate
+
+`hsm-pki-keytool issue-client-cert` issues the certificate an operator
+authenticates with, from a request they generated themselves. The
+client's private key never reaches this command or this host.
+
+```sh
+# On the operator's own machine.
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout alice.key -out alice.csr \
+    -subj "/CN=alice" \
+    -addext "subjectAltName=URI:urn:hsm-pki:operator:alice"
+
+# On the CA host, service stopped.
+hsm-pki-keytool issue-client-cert \
+    -module /usr/lib/softhsm/libsofthsm2.so \
+    -workspace hsm-pki-intermediate -pin-env HSM_PKI_PIN \
+    -intermediate-key-label ca-intermediate-key-v1 \
+    -intermediate-cert /etc/hsm-pki/intermediate.pem \
+    -base-url https://pki.example.org \
+    -store /var/lib/hsm-pki/ca.sqlite \
+    -csr alice.csr \
+    -cert-out alice.pem
+```
+
+The command prints the identities the certificate carries: each URI SAN
+as written, then the common name. One of them goes in `api.issuers` or
+`api.revokers`, which are exact-match lists. A request with neither a URI
+SAN nor a common name is refused before it is signed, because no entry in
+either list could ever match the certificate it would produce.
+
+After the first one exists, further client certificates are issued over
+the API by a client already listed in `api.issuers`. This command is for
+the first, and for the day the last one is lost.
+
+### 8.3 Rotation and loss
+
+Both certificates default to ninety days and **nothing renews either of
+them**. Both commands print the expiry; putting it in a calendar is the
+mechanism today.
+
+- **The TLS key rotates under the next label.** Run
+  `provision-tls-identity` with `-tls-key-label ca-tls-key-v2`, point
+  `server.tls` at the new pair, and restart. The old key stays on the
+  token until it is destroyed by hand; nothing consumes it once the
+  configuration stops naming it. A label already holding a key pair is
+  refused, so a rotation cannot overwrite the identity currently serving.
+- **A lost operator certificate costs one revocation.** Issue the
+  replacement, then revoke the lost one through the API with the
+  replacement's credential. The check reads the store on every request,
+  so a revoked client is refused on its next connection rather than at
+  the next CRL refresh. The root does not come out for any of this.
+- **Losing every client certificate** is the case this section exists
+  for: the API cannot issue the replacement, so `issue-client-cert` is
+  run again on the CA host with the service stopped. That is the whole
+  reason the command is not a bootstrap mode inside the service, which
+  would be a window open at every restart.
+
+## 9. Cross-references
 
 - Threat model, what each key is worth and what each attacker gets:
   [`threat-model.md`](threat-model.md)

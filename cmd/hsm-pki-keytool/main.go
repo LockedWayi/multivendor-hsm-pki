@@ -1,9 +1,13 @@
 // Command hsm-pki-keytool hosts the operator-run key operations: the root
 // and intermediate ceremony, intermediate re-issue, signing-key
-// provisioning and retirement, and inventory generation. It is a separate binary from
+// provisioning and retirement, inventory generation, and the two
+// credentials that open the authenticated listener. It is a separate binary from
 // cmd/hsm-pki-server because these operations touch the root key, which
 // the service's configuration must never name. Both binaries share one
 // PIN-handling implementation, pkcs11.SecurePIN.
+//
+// issue-client-cert and provision-tls-identity write to the service's
+// store, which is single-writer. Run them with the service stopped.
 package main
 
 import (
@@ -32,7 +36,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hsm-pki-keytool <command> [flags]\n  commands: ceremony, reissue-intermediate, provision-signing-key, retire-signing-key, generate-inventory")
+		return errors.New("usage: hsm-pki-keytool <command> [flags]\n  commands: ceremony, reissue-intermediate, provision-signing-key, retire-signing-key, generate-inventory, provision-tls-identity, issue-client-cert")
 	}
 	switch args[0] {
 	case "ceremony":
@@ -45,8 +49,12 @@ func run(args []string) error {
 		return runRetireSigningKeyCmd(args[1:])
 	case "generate-inventory":
 		return runGenerateInventoryCmd(args[1:])
+	case "provision-tls-identity":
+		return runProvisionTLSIdentityCmd(args[1:])
+	case "issue-client-cert":
+		return runIssueClientCertCmd(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (want: ceremony, reissue-intermediate, provision-signing-key, retire-signing-key, generate-inventory)", args[0])
+		return fmt.Errorf("unknown command %q (want: ceremony, reissue-intermediate, provision-signing-key, retire-signing-key, generate-inventory, provision-tls-identity, issue-client-cert)", args[0])
 	}
 }
 
