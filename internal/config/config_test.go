@@ -286,8 +286,11 @@ func TestConfig_NoRootKeyReferences(t *testing.T) {
 	caType := reflect.TypeOf(CAConfig{})
 	pkcs11Type := reflect.TypeOf(PKCS11Config{})
 	vendorType := reflect.TypeOf(VendorConfig{})
+	serverType := reflect.TypeOf(ServerConfig{})
+	tlsType := reflect.TypeOf(TLSConfig{})
+	apiType := reflect.TypeOf(APIConfig{})
 
-	for _, typ := range []reflect.Type{caType, pkcs11Type, vendorType} {
+	for _, typ := range []reflect.Type{caType, pkcs11Type, vendorType, serverType, tlsType, apiType} {
 		for i := 0; i < typ.NumField(); i++ {
 			tag := typ.Field(i).Tag.Get("yaml")
 			name, _, _ := strings.Cut(tag, ",")
@@ -427,6 +430,119 @@ func TestLoad_RejectsNonPositiveSessionBudgets(t *testing.T) {
 				"    "+tc.field+": \""+tc.value+"\"\n", 1)
 			if _, err := Load(writeConfig(t, body)); err == nil {
 				t.Fatalf("Load with %s=%s succeeded, want an error", tc.field, tc.value)
+			}
+		})
+	}
+}
+
+func TestLoad_AuthenticatedSurface(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	// The tls block is nested under server, which validSoftHSM2Config
+	// opens at the top of the document; yaml needs it under that key.
+	body := `
+server:
+  listen_addr: "0.0.0.0:8080"
+  tls:
+    listen_addr: "0.0.0.0:8443"
+    key_label: "ca-tls-key-v1"
+    cert_path: "tls.pem"
+api:
+  issuers: ["urn:hsm-pki:operator:alice"]
+  revokers: ["urn:hsm-pki:operator:alice", "urn:hsm-pki:operator:bob"]
+` + validSoftHSM2Config[len("\nserver:\n  listen_addr: \"0.0.0.0:8080\"\n"):]
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.TLS == nil {
+		t.Fatal("Server.TLS is nil after loading a tls block")
+	}
+	if cfg.Server.TLS.ListenAddr != "0.0.0.0:8443" || cfg.Server.TLS.KeyLabel != "ca-tls-key-v1" || cfg.Server.TLS.CertPath != "tls.pem" {
+		t.Fatalf("Server.TLS = %+v", *cfg.Server.TLS)
+	}
+	if len(cfg.API.Issuers) != 1 || len(cfg.API.Revokers) != 2 {
+		t.Fatalf("API = %+v, want one issuer and two revokers", cfg.API)
+	}
+}
+
+func TestLoad_WithoutTLSTheWriteEndpointsAreUnreachable(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	cfg, err := Load(writeConfig(t, validSoftHSM2Config))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.TLS != nil {
+		t.Fatalf("Server.TLS = %+v, want nil when no tls block is present", *cfg.Server.TLS)
+	}
+	if len(cfg.API.Issuers) != 0 || len(cfg.API.Revokers) != 0 {
+		t.Fatalf("API = %+v, want empty lists", cfg.API)
+	}
+}
+
+// TestLoad_AuthenticatedSurfaceRefusals: the tls and api blocks are
+// checked together, and every half-configuration is refused.
+func TestLoad_AuthenticatedSurfaceRefusals(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	base := validSoftHSM2Config[len("\nserver:\n  listen_addr: \"0.0.0.0:8080\"\n"):]
+	for _, tc := range []struct {
+		name, server, api, want string
+	}{
+		{
+			"api lists without a tls listener",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n",
+			"api:\n  issuers: [\"urn:a\"]\n",
+			"server.tls is not",
+		},
+		{
+			"tls without issuers",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  revokers: [\"urn:a\"]\n",
+			"api.issuers is empty",
+		},
+		{
+			"tls without revokers",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers: [\"urn:a\"]\n",
+			"api.revokers is empty",
+		},
+		{
+			"tls missing its key label",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers: [\"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"server.tls.key_label is empty",
+		},
+		{
+			"tls on the public listener's address",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8080\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers: [\"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"same as server.listen_addr",
+		},
+		{
+			"the intermediate's key as the TLS key",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-intermediate-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers: [\"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"is the intermediate's key label",
+		},
+		{
+			"an identity listed twice",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers: [\"urn:a\", \"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"lists \"urn:a\" twice",
+		},
+		{
+			"an empty identity",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers: [\"\"]\n  revokers: [\"urn:a\"]\n",
+			"contains an empty identity",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tc.server+tc.api+base))
+			if err == nil {
+				t.Fatal("Load succeeded, want a refusal")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to mention %q", err, tc.want)
 			}
 		})
 	}

@@ -225,8 +225,11 @@ Built and running: the PKCS#11 core, the two-tier CA, the container and its
 Kubernetes deployment with a generated admission policy, the
 infrastructure-as-code modules, the scanning pipeline, the signing layer,
 and the key-rotation drill that runs it through a roll and a retirement
-in CI. Planned next: authentication on the write endpoints (mTLS, issued
-by this platform's own CA), then Vault custody.
+in CI. Built and not yet wired into the deployments: mutual TLS on the
+write endpoints, with clients authorised by name from certificates this
+CA issued. In progress: the keytool command that issues the first client
+certificate, and the run-local and Kubernetes plumbing for the second
+listener. Planned next: certificate profiles, then Vault custody.
 
 ## Running it
 

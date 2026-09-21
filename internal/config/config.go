@@ -27,11 +27,47 @@ type Config struct {
 	Server ServerConfig `yaml:"server"`
 	PKCS11 PKCS11Config `yaml:"pkcs11"`
 	CA     CAConfig     `yaml:"ca"`
+	API    APIConfig    `yaml:"api"`
 }
 
-// ServerConfig configures the HTTP listener.
+// ServerConfig configures the listeners. ListenAddr serves the public
+// surface over plain HTTP: the CRLs, the certificates and the probes,
+// which a relying party fetches with no credential. TLS, when present,
+// adds the authenticated listener that carries the write endpoints.
+// Without it the service issues and revokes nothing: there is no plain
+// HTTP path to a write endpoint.
 type ServerConfig struct {
+	ListenAddr string     `yaml:"listen_addr"`
+	TLS        *TLSConfig `yaml:"tls"`
+}
+
+// TLSConfig configures the authenticated listener. The service's TLS key
+// lives on the token this service authenticates, beside the
+// intermediate, under its own label. The certificate is a leaf this CA
+// issued over that key. Clients are verified against the ceremony root
+// named by ca.root_cert_path; there is no separate client CA, because
+// the clients are certificates this CA issued.
+type TLSConfig struct {
 	ListenAddr string `yaml:"listen_addr"`
+	// KeyLabel is the CKA_LABEL of the TLS key pair. Never the
+	// intermediate's label: Load refuses that.
+	KeyLabel string `yaml:"key_label"`
+	// CertPath is the TLS certificate, PEM, one certificate.
+	CertPath string `yaml:"cert_path"`
+}
+
+// APIConfig names the clients that may write, by an identity off their
+// certificate: a URI SAN as written, or the subject common name. Both
+// lists are required when server.tls is configured, and refused when it
+// is not, because without the authenticated listener nobody can reach
+// the endpoints they authorise.
+type APIConfig struct {
+	// Issuers may POST /certificates.
+	Issuers []string `yaml:"issuers"`
+	// Revokers may POST /certificates/{serial}/revoke. Not defaulted from
+	// Issuers: who may withdraw a certificate is a separate decision, and
+	// during an incident it is the one that matters.
+	Revokers []string `yaml:"revokers"`
 }
 
 // PKCS11Config selects and configures the vendor adapter.
@@ -192,8 +228,62 @@ func Load(path string) (*Config, error) {
 	if c.CA.CRLValidityHours == 0 {
 		c.CA.CRLValidityHours = defaultCRLValidityHours
 	}
+	if err := c.validateAuthenticatedSurface(); err != nil {
+		return nil, err
+	}
 
 	return &c, nil
+}
+
+// validateAuthenticatedSurface checks server.tls and api together. Either
+// both are configured or neither is: a TLS listener with nobody
+// authorised serves write endpoints that refuse everyone, and an
+// authorisation list with no TLS listener names clients who cannot
+// connect. Both read as configured and do nothing.
+func (c *Config) validateAuthenticatedSurface() error {
+	tlsCfg := c.Server.TLS
+	if tlsCfg == nil {
+		if len(c.API.Issuers) > 0 || len(c.API.Revokers) > 0 {
+			return fmt.Errorf("config: api.issuers or api.revokers is set but server.tls is not; the write endpoints are served over mutual TLS only, so nobody named there could reach them")
+		}
+		return nil
+	}
+	for field, v := range map[string]string{
+		"server.tls.listen_addr": tlsCfg.ListenAddr,
+		"server.tls.key_label":   tlsCfg.KeyLabel,
+		"server.tls.cert_path":   tlsCfg.CertPath,
+	} {
+		if v == "" {
+			return fmt.Errorf("config: %s is empty", field)
+		}
+	}
+	if tlsCfg.ListenAddr == c.Server.ListenAddr {
+		return fmt.Errorf("config: server.tls.listen_addr %q is the same as server.listen_addr; the public and the authenticated surfaces need their own listeners", tlsCfg.ListenAddr)
+	}
+	// The TLS key signs whatever bytes a connecting client makes the
+	// handshake sign. That must never be the key that signs certificates.
+	if tlsCfg.KeyLabel == c.CA.IntermediateKeyLabel {
+		return fmt.Errorf("config: server.tls.key_label %q is the intermediate's key label; the TLS identity needs its own key pair, because a handshake signs bytes the peer chooses", tlsCfg.KeyLabel)
+	}
+	for field, list := range map[string][]string{
+		"api.issuers":  c.API.Issuers,
+		"api.revokers": c.API.Revokers,
+	} {
+		if len(list) == 0 {
+			return fmt.Errorf("config: %s is empty; server.tls is configured, so name at least one client identity, or nobody can use that endpoint", field)
+		}
+		seen := make(map[string]bool, len(list))
+		for _, id := range list {
+			if id == "" {
+				return fmt.Errorf("config: %s contains an empty identity", field)
+			}
+			if seen[id] {
+				return fmt.Errorf("config: %s lists %q twice", field, id)
+			}
+			seen[id] = true
+		}
+	}
+	return nil
 }
 
 // validateBaseURL checks ca.base_url the way the certificate extensions it

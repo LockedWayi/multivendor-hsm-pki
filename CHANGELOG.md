@@ -7,6 +7,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Mutual TLS on the write endpoints.** The service serves two
+  listeners. The public one, `server.listen_addr`, carries the CRLs, the
+  CA certificates and the probes over plain HTTP and routes no write
+  endpoint at all. The authenticated one, `server.tls.listen_addr`,
+  carries everything, and `POST /certificates` and `POST
+  /certificates/{serial}/revoke` accept only a client whose certificate
+  chains to the ceremony root, is in the store as issued and not revoked,
+  and carries an identity (a URI SAN, or the common name) listed in
+  `api.issuers` or `api.revokers`. Revoking a client takes effect on its
+  next request, because the check reads the store rather than a CRL.
+
+  The service's own TLS key lives on the intermediate's token under its
+  own label and signs each handshake through the same `crypto.Signer` the
+  CA signs certificates with; no private key reaches disk. The
+  configuration refuses the intermediate's label as the TLS key, because
+  a handshake signs bytes the peer chooses. Without a `server.tls` block
+  the service starts, warns, and issues nothing: there is no plain-HTTP
+  path to a write.
+
+  Measured: a client with no certificate, or with one from another CA,
+  fails the handshake; one this CA issued but never recorded is refused;
+  a revoked one is refused on the next connection; an issuer cannot
+  revoke and a revoker cannot issue; and a TLS 1.3 handshake completes
+  against a listener whose CertificateVerify the HSM signed. The keytool
+  command that issues the first client certificate follows.
 - **The image-signing key's lifecycle runs in CI, on a throwaway token
   set.** `ci/rotation-drill.sh` provisions version 1, signs, rolls to the
   next version, republishes the inventory with the old one `verify-only`,

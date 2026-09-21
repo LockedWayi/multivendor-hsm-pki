@@ -115,10 +115,17 @@ surface is never large and untested at once.
    (SAST), vulnerable dependencies and images, and leaked secrets before
    deploy.
 
-   Planned next: authentication on the issuance API, then an enforced
-   issuance policy (certificate profiles, naming authorization) and a
-   delegated OCSP responder. Those controls separate a CA from a signing
-   oracle.
+   The issuance API is behind mutual TLS. The service serves two
+   listeners: a public one, plain HTTP, carrying only what a relying
+   party fetches, and an authenticated one where every write needs a
+   client certificate this CA issued, still valid in its own store, and
+   named in the configuration as an issuer or a revoker. The service's
+   own TLS key lives on the intermediate's token under its own label, so
+   no private key reaches disk for this either.
+
+   Planned next: an enforced issuance policy (certificate profiles,
+   naming authorization) and a delegated OCSP responder. Those controls
+   separate a CA from a signing oracle.
 
 6. **Vault with HSM auto-unseal (planned capstone).** Key custody moves
    out of process memory into Vault, and Vault's own root of trust is

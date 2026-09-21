@@ -8,7 +8,36 @@
 # "simplify" this into a literal `pin:` field.
 
 server:
+  # The public surface, plain HTTP: the CRLs, the CA certificates and the
+  # probes. No write endpoint is routed here, so nothing on it needs a
+  # client. The URLs written into certificates point at this listener.
   listen_addr: "0.0.0.0:8080"
+
+  # The authenticated surface, mutual TLS. Every write goes through here,
+  # and without this block the service serves no write endpoint at all:
+  # it starts, warns, and issues nothing.
+  tls:
+    listen_addr: "0.0.0.0:8443"
+    # CKA_LABEL of the service's TLS key pair, on the same token as the
+    # intermediate, under its own label. Never the intermediate's label:
+    # a handshake signs bytes the peer chooses, and the key that signs
+    # certificates must not do that. Load refuses the intermediate's.
+    key_label: "ca-tls-key-v1"
+    # The service's TLS certificate: a leaf this CA issued over that key,
+    # PEM, one certificate. The intermediate is appended at run time.
+    cert_path: "/etc/hsm-pki/tls.pem"
+
+# Who may write, by an identity off the client certificate: a URI SAN as
+# written, or the subject common name. Both lists are required when
+# server.tls is set, and refused when it is not. A client must also chain
+# to the root in ca.root_cert_path and be in the store as issued and not
+# revoked; a name alone authorises nothing. There is no separate client
+# CA: the clients are certificates this CA issued.
+api:
+  issuers: ["urn:hsm-pki:operator:alice"]
+  # Not defaulted from issuers. Who may withdraw a certificate is a
+  # separate decision.
+  revokers: ["urn:hsm-pki:operator:alice"]
 
 pkcs11:
   # Which vendor adapter to use: "softhsm2" or "protectserver".

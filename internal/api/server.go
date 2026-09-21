@@ -1,5 +1,12 @@
 // Package api implements the CA's HTTP surface: certificate issuance,
 // revocation, CRL distribution, and the health and readiness endpoints.
+//
+// The surface is served twice. The public handler carries what a relying
+// party fetches and nothing that writes, over plain HTTP, because a CRL
+// distribution point has to be reachable by a client that holds no
+// credential. The authenticated handler carries everything, over mutual
+// TLS, and a write is accepted only from a client whose certificate this
+// CA issued, has not revoked, and whose name the configuration lists.
 package api
 
 import (
@@ -99,29 +106,77 @@ type RootArtifacts struct {
 	CRLDER []byte
 }
 
-// NewServer builds the HTTP handler for the CA service. issuer is the
-// intermediate CA. adapter and workspace back the /readyz probe. records
-// is the durable store and the source of CRL numbers. crlValidity sets
-// each CRL's window. root carries the static artifacts.
-func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspace, records store.Store, crlValidity time.Duration, root RootArtifacts, logger *slog.Logger) http.Handler {
+// Config is what NewServer needs. Issuer is the intermediate CA. Adapter
+// and Workspace back the /readyz probe. Records is the durable store, the
+// source of CRL numbers, and the record every client certificate is
+// checked against. CRLValidity sets each CRL's window. Root carries the
+// static artifacts. Authorization names who may write.
+type Config struct {
+	Issuer        *ca.CA
+	Adapter       pk11.VendorAdapter
+	Workspace     pk11.Workspace
+	Records       store.Store
+	CRLValidity   time.Duration
+	Root          RootArtifacts
+	Logger        *slog.Logger
+	Authorization Authorization
+}
+
+// Handlers are the two surfaces one service serves. They are built over
+// one state, so a revocation taken on the authenticated surface drops the
+// CRL cache the public surface reads from at once. Two independent
+// handlers would each keep a cache, and a relying party could be served a
+// CRL that omits a revocation until nextUpdate.
+type Handlers struct {
+	// Public is what a relying party fetches and what the orchestrator
+	// probes: the CRLs, the certificates, /healthz and /readyz. No write
+	// endpoint is routed here, so serving it over plain HTTP exposes
+	// nothing that needs a client. The URLs written into certificates
+	// point at this surface.
+	Public http.Handler
+	// Authenticated is the whole surface, and every write endpoint on it
+	// runs behind requireClient. It is meant to be served with TLSConfig,
+	// which is what makes r.TLS.VerifiedChains exist; over plain HTTP the
+	// write endpoints refuse everything.
+	Authenticated http.Handler
+}
+
+// NewServer builds both surfaces of the CA service.
+func NewServer(cfg Config) Handlers {
 	s := &server{
-		ca:          issuer,
-		adapter:     adapter,
-		workspace:   workspace,
-		store:       records,
-		crlValidity: crlValidity,
-		root:        root,
+		ca:          cfg.Issuer,
+		adapter:     cfg.Adapter,
+		workspace:   cfg.Workspace,
+		store:       cfg.Records,
+		crlValidity: cfg.CRLValidity,
+		root:        cfg.Root,
 	}
 	// x509.Certificate.Raw is already the DER RFC 2585 wants at that URL.
-	if issuer != nil && issuer.Certificate() != nil {
-		s.intermediateDER = issuer.Certificate().Raw
+	if cfg.Issuer != nil && cfg.Issuer.Certificate() != nil {
+		s.intermediateDER = cfg.Issuer.Certificate().Raw
 	}
 
-	mux := http.NewServeMux()
+	wrap := func(mux *http.ServeMux) http.Handler {
+		return withRequestLogging(cfg.Logger, http.TimeoutHandler(mux, requestTimeout, `{"error":"request timed out"}`))
+	}
+
+	public := http.NewServeMux()
+	s.routePublic(public)
+
+	authenticated := http.NewServeMux()
+	s.routePublic(authenticated)
+	authenticated.HandleFunc("POST /certificates",
+		s.requireClient(cfg.Authorization.Issuers, s.handleIssueCertificate))
+	authenticated.HandleFunc("POST /certificates/{serial}/revoke",
+		s.requireClient(cfg.Authorization.Revokers, s.handleRevoke))
+
+	return Handlers{Public: wrap(public), Authenticated: wrap(authenticated)}
+}
+
+// routePublic registers the read-only endpoints on mux.
+func (s *server) routePublic(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
-	mux.HandleFunc("POST /certificates", s.handleIssueCertificate)
-	mux.HandleFunc("POST /certificates/{serial}/revoke", s.handleRevoke)
 	mux.HandleFunc("GET "+CRLPath, s.handleCRL)
 	// The AIA CA-Issuers target of every leaf.
 	mux.HandleFunc("GET "+IntermediateCertPath, s.handleIntermediateCert)
@@ -130,8 +185,6 @@ func NewServer(issuer *ca.CA, adapter pk11.VendorAdapter, workspace pk11.Workspa
 	// certificates are signed.
 	mux.HandleFunc("GET "+RootCertPath, s.handleRootCert)
 	mux.HandleFunc("GET "+RootCRLPath, s.handleRootCRL)
-
-	return withRequestLogging(logger, http.TimeoutHandler(mux, requestTimeout, `{"error":"request timed out"}`))
 }
 
 type server struct {
@@ -247,6 +300,12 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, "certificate issuance failed")
 		return
 	}
+	// The identity is a name off the client's certificate, never a secret.
+	loggerFromContext(r.Context()).Info("certificate issued",
+		"client", clientFromContext(r.Context()),
+		"serial", cert.SerialNumber.String(),
+		"subject", cert.Subject.String(),
+	)
 
 	// The full chain, leaf first, then the intermediate, the order TLS uses
 	// (RFC 8446 §4.4.2). The root is not included: it is the trust anchor
@@ -317,6 +376,11 @@ func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.invalidateCRLCache()
+	loggerFromContext(r.Context()).Info("certificate revoked",
+		"client", clientFromContext(r.Context()),
+		"serial", serial.String(),
+		"reason", req.Reason,
+	)
 
 	w.WriteHeader(http.StatusNoContent)
 }
