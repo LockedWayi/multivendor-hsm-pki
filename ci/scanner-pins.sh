@@ -27,7 +27,7 @@ TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:22cb52f6c5bf5c72a48a8f56d993d8df3e9
 
 # alpine:3. Used for one root-owned file operation at a time: chown a
 # signature bundle, delete token state a root container created.
-ALPINE_IMAGE="alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+ALPINE_IMAGE="alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
 TOFU_CLEANUP_IMAGE="$ALPINE_IMAGE"
 
 # koalaman/shellcheck:v0.11.0
