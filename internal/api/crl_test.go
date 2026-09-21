@@ -14,7 +14,6 @@ import (
 	"io"
 	"math/big"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,13 +21,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
-// issueTestCert issues a certificate against srv and returns it, parsed.
-func issueTestCert(t *testing.T, srvURL string, cn string) *x509.Certificate {
+// issueTestCert issues a certificate through the authenticated surface
+// and returns it, parsed.
+func issueTestCert(t *testing.T, ts *testServers, cn string) *x509.Certificate {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -42,7 +41,7 @@ func issueTestCert(t *testing.T, srvURL string, cn string) *x509.Certificate {
 	}
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-	resp, err := http.Post(srvURL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+	resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
 	if err != nil {
 		t.Fatalf("POST /certificates: %v", err)
 	}
@@ -59,13 +58,13 @@ func issueTestCert(t *testing.T, srvURL string, cn string) *x509.Certificate {
 	return cert
 }
 
-func revokeTestCert(t *testing.T, srvURL string, serial fmt.Stringer) *http.Response {
+func revokeTestCert(t *testing.T, ts *testServers, serial fmt.Stringer) *http.Response {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, srvURL+"/certificates/"+serial.String()+"/revoke", nil)
+	req, err := http.NewRequest(http.MethodPost, ts.tls.URL+"/certificates/"+serial.String()+"/revoke", nil)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := ts.client.Do(req)
 	if err != nil {
 		t.Fatalf("POST revoke: %v", err)
 	}
@@ -97,12 +96,12 @@ func TestRevoke_Success(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		cert := issueTestCert(t, srv.URL, "to-revoke.example.test")
+		cert := issueTestCert(t, ts, "to-revoke.example.test")
 
-		resp := revokeTestCert(t, srv.URL, cert.SerialNumber)
+		resp := revokeTestCert(t, ts, cert.SerialNumber)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("revoke status = %d, want %d", resp.StatusCode, http.StatusNoContent)
@@ -125,14 +124,14 @@ func TestRevoke_UnknownSerialFails(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		req, err := http.NewRequest(http.MethodPost, srv.URL+"/certificates/999999999999/revoke", nil)
+		req, err := http.NewRequest(http.MethodPost, ts.tls.URL+"/certificates/999999999999/revoke", nil)
 		if err != nil {
 			t.Fatalf("NewRequest: %v", err)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := ts.client.Do(req)
 		if err != nil {
 			t.Fatalf("POST revoke: %v", err)
 		}
@@ -147,18 +146,18 @@ func TestRevoke_IsIdempotent(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		cert := issueTestCert(t, srv.URL, "revoke-twice.example.test")
+		cert := issueTestCert(t, ts, "revoke-twice.example.test")
 
-		first := revokeTestCert(t, srv.URL, cert.SerialNumber)
+		first := revokeTestCert(t, ts, cert.SerialNumber)
 		first.Body.Close()
 		if first.StatusCode != http.StatusNoContent {
 			t.Fatalf("first revoke status = %d, want %d", first.StatusCode, http.StatusNoContent)
 		}
 
-		second := revokeTestCert(t, srv.URL, cert.SerialNumber)
+		second := revokeTestCert(t, ts, cert.SerialNumber)
 		second.Body.Close()
 		if second.StatusCode != http.StatusNoContent {
 			t.Fatalf("second revoke status = %d, want %d (revocation should be idempotent)", second.StatusCode, http.StatusNoContent)
@@ -170,17 +169,17 @@ func TestCRL_ContainsRevokedSerial(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		cert := issueTestCert(t, srv.URL, "in-crl.example.test")
-		resp := revokeTestCert(t, srv.URL, cert.SerialNumber)
+		cert := issueTestCert(t, ts, "in-crl.example.test")
+		resp := revokeTestCert(t, ts, cert.SerialNumber)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("revoke status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 		}
 
-		crl := fetchCRL(t, srv.URL)
+		crl := fetchCRL(t, ts.public.URL)
 		if err := crl.CheckSignatureFrom(c.Certificate()); err != nil {
 			t.Fatalf("CheckSignatureFrom(ca): %v", err)
 		}
@@ -201,10 +200,10 @@ func TestCRL_EmptyWhenNothingRevoked(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		crl := fetchCRL(t, srv.URL)
+		crl := fetchCRL(t, ts.public.URL)
 		if len(crl.RevokedCertificateEntries) != 0 {
 			t.Fatalf("CRL has %d entries, want 0", len(crl.RevokedCertificateEntries))
 		}
@@ -222,23 +221,23 @@ func TestCRL_RevocationInvalidatesCache(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		// Populate the cache before anything is revoked.
-		initial := fetchCRL(t, srv.URL)
+		initial := fetchCRL(t, ts.public.URL)
 		if len(initial.RevokedCertificateEntries) != 0 {
 			t.Fatalf("initial CRL has %d entries, want 0", len(initial.RevokedCertificateEntries))
 		}
 
-		cert := issueTestCert(t, srv.URL, "cache-invalidation.example.test")
-		resp := revokeTestCert(t, srv.URL, cert.SerialNumber)
+		cert := issueTestCert(t, ts, "cache-invalidation.example.test")
+		resp := revokeTestCert(t, ts, cert.SerialNumber)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("revoke status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 		}
 
-		after := fetchCRL(t, srv.URL)
+		after := fetchCRL(t, ts.public.URL)
 		found := false
 		for _, entry := range after.RevokedCertificateEntries {
 			if entry.SerialNumber.Cmp(cert.SerialNumber) == 0 {
@@ -260,17 +259,17 @@ func TestCRL_OpenSSLVerify(t *testing.T) {
 		}
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		cert := issueTestCert(t, srv.URL, "openssl-crl-check.example.test")
-		resp := revokeTestCert(t, srv.URL, cert.SerialNumber)
+		cert := issueTestCert(t, ts, "openssl-crl-check.example.test")
+		resp := revokeTestCert(t, ts, cert.SerialNumber)
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNoContent {
 			t.Fatalf("revoke status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 		}
 
-		crlResp, err := http.Get(srv.URL + "/crl")
+		crlResp, err := http.Get(ts.public.URL + "/crl")
 		if err != nil {
 			t.Fatalf("GET /crl: %v", err)
 		}
@@ -313,14 +312,14 @@ func TestCRL_NumberSurvivesRestart(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 
-		first := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
-		beforeRestart := fetchCRL(t, first.URL)
+		first := startServers(t, c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts)
+		beforeRestart := fetchCRL(t, first.public.URL)
 		first.Close()
 
 		// A new server with a new in-memory store.
-		second := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
+		second := startServers(t, c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts)
 		defer second.Close()
-		afterRestart := fetchCRL(t, second.URL)
+		afterRestart := fetchCRL(t, second.public.URL)
 
 		if afterRestart.Number.Cmp(beforeRestart.Number) <= 0 {
 			t.Fatalf("CRL number went backwards across a restart: %v then %v", beforeRestart.Number, afterRestart.Number)
@@ -334,17 +333,17 @@ func TestCRL_NumberIncreasesWithinOneRun(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		first := fetchCRL(t, srv.URL)
+		first := fetchCRL(t, ts.public.URL)
 
 		// Force regeneration.
-		cert := issueTestCert(t, srv.URL, "crl-number.example.test")
-		resp := revokeTestCert(t, srv.URL, cert.SerialNumber)
+		cert := issueTestCert(t, ts, "crl-number.example.test")
+		resp := revokeTestCert(t, ts, cert.SerialNumber)
 		resp.Body.Close()
 
-		second := fetchCRL(t, srv.URL)
+		second := fetchCRL(t, ts.public.URL)
 		if second.Number.Cmp(first.Number) <= 0 {
 			t.Fatalf("CRL number did not increase within one run: %v then %v", first.Number, second.Number)
 		}
@@ -356,10 +355,10 @@ func TestCRL_NumberIncreasesWithinOneRun(t *testing.T) {
 func TestCRL_ThisUpdateIsBackdated(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		crl := fetchCRL(t, srv.URL)
+		crl := fetchCRL(t, ts.public.URL)
 		if !crl.ThisUpdate.Before(time.Now()) {
 			t.Fatalf("CRL ThisUpdate %v is not backdated relative to now", crl.ThisUpdate)
 		}
@@ -386,13 +385,13 @@ func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 
 		// First run: issue, then revoke.
 		records := openStore()
-		first := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
+		first := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
 
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
-		resp, err := http.Post(first.URL+"/certificates", "application/x-pem-file",
+		resp, err := first.client.Post(first.tls.URL+"/certificates", "application/x-pem-file",
 			bytes.NewReader(csrPEMFor(t, priv, "survives-restart.example.test")))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
@@ -408,7 +407,7 @@ func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 			t.Fatalf("parsing issued leaf: %v", err)
 		}
 
-		revokeResp, err := http.Post(first.URL+"/certificates/"+leaf.SerialNumber.String()+"/revoke", "application/json", nil)
+		revokeResp, err := first.client.Post(first.tls.URL+"/certificates/"+leaf.SerialNumber.String()+"/revoke", "application/json", nil)
 		if err != nil {
 			t.Fatalf("POST revoke: %v", err)
 		}
@@ -417,7 +416,7 @@ func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 			t.Fatalf("revoke status = %d, want 204", revokeResp.StatusCode)
 		}
 
-		beforeRestart := fetchCRL(t, first.URL)
+		beforeRestart := fetchCRL(t, first.public.URL)
 		if !crlContains(beforeRestart, leaf.SerialNumber) {
 			t.Fatal("the CRL does not list the certificate that was just revoked")
 		}
@@ -431,10 +430,10 @@ func TestCRL_RevocationSurvivesRestart(t *testing.T) {
 		// Second run over the same file.
 		reopened := openStore()
 		defer reopened.Close()
-		second := httptest.NewServer(api.NewServer(c, adapter, ws, reopened, 24*time.Hour, rootArtifacts, testLogger()))
+		second := startServers(t, c, adapter, ws, reopened, 24*time.Hour, rootArtifacts)
 		defer second.Close()
 
-		afterRestart := fetchCRL(t, second.URL)
+		afterRestart := fetchCRL(t, second.public.URL)
 		if !crlContains(afterRestart, leaf.SerialNumber) {
 			t.Fatalf("serial %s is absent from the CRL after a restart: a revoked certificate has reappeared as valid",
 				leaf.SerialNumber)
@@ -464,10 +463,10 @@ func TestCRL_NextUpdateNeverOutlivesTheIssuer(t *testing.T) {
 
 		// A validity far beyond the intermediate's lifetime.
 		crlValidity := 100 * 365 * 24 * time.Hour
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), crlValidity, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, store.NewMemory(), crlValidity, rootArtifacts)
+		defer ts.Close()
 
-		resp, err := http.Get(srv.URL + "/crl")
+		resp, err := http.Get(ts.public.URL + "/crl")
 		if err != nil {
 			t.Fatalf("GET /crl: %v", err)
 		}

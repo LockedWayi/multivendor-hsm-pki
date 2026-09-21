@@ -22,7 +22,6 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
@@ -45,8 +44,8 @@ func TestIssueCertificate_Success(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -60,7 +59,7 @@ func TestIssueCertificate_Success(t *testing.T) {
 		}
 		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
-		resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -82,8 +81,8 @@ func TestIssueCertificate_Success(t *testing.T) {
 			t.Fatalf("CheckSignatureFrom(ca): %v", err)
 		}
 
-		if records.Len() != 1 {
-			t.Fatalf("store holds %d records, want 1", records.Len())
+		if records.Len() != ts.seeded+1 {
+			t.Fatalf("store holds %d records, want %d", records.Len(), ts.seeded+1)
 		}
 		rec, ok, err := records.Get(context.Background(), cert.SerialNumber)
 		if err != nil {
@@ -102,10 +101,10 @@ func TestIssueCertificate_MalformedBodyRejected(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", strings.NewReader("this is not a CSR"))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", strings.NewReader("this is not a CSR"))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -114,8 +113,8 @@ func TestIssueCertificate_MalformedBodyRejected(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 		}
-		if records.Len() != 0 {
-			t.Fatalf("store holds %d records, want 0 after a rejected request", records.Len())
+		if records.Len() != ts.seeded+0 {
+			t.Fatalf("store holds %d records, want %d after a rejected request", records.Len(), ts.seeded+0)
 		}
 	})
 }
@@ -124,8 +123,8 @@ func TestIssueCertificate_BrokenSignatureRejected(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -141,7 +140,7 @@ func TestIssueCertificate_BrokenSignatureRejected(t *testing.T) {
 		tampered[len(tampered)-1] ^= 0xFF // corrupts the trailing signature BIT STRING
 		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: tampered})
 
-		resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -150,8 +149,8 @@ func TestIssueCertificate_BrokenSignatureRejected(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 		}
-		if records.Len() != 0 {
-			t.Fatalf("store holds %d records, want 0 after a rejected request", records.Len())
+		if records.Len() != ts.seeded+0 {
+			t.Fatalf("store holds %d records, want %d after a rejected request", records.Len(), ts.seeded+0)
 		}
 	})
 }
@@ -160,8 +159,8 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
@@ -175,7 +174,7 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 		}
 		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-		resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -184,8 +183,8 @@ func TestIssueCertificate_UnsupportedKeyTypeRejected(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
 		}
-		if records.Len() != 0 {
-			t.Fatalf("store holds %d records, want 0 after a rejected request", records.Len())
+		if records.Len() != ts.seeded+0 {
+			t.Fatalf("store holds %d records, want %d after a rejected request", records.Len(), ts.seeded+0)
 		}
 	})
 }
@@ -196,8 +195,8 @@ func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		adapter.Close()
 
@@ -213,7 +212,7 @@ func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
 		}
 		csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-		resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -228,8 +227,8 @@ func TestIssueCertificate_AdapterErrorDoesNotLeakDetail(t *testing.T) {
 				t.Fatalf("response body leaked internal detail (%q): %s", leak, body)
 			}
 		}
-		if records.Len() != 0 {
-			t.Fatalf("store holds %d records, want 0 after a failed request", records.Len())
+		if records.Len() != ts.seeded+0 {
+			t.Fatalf("store holds %d records, want %d after a failed request", records.Len(), ts.seeded+0)
 		}
 	})
 }
@@ -238,11 +237,11 @@ func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		oversized := bytes.Repeat([]byte("A"), 128*1024) // well past the 64 KiB limit
-		resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(oversized))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(oversized))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -251,8 +250,8 @@ func TestIssueCertificate_OversizedBodyRejected(t *testing.T) {
 		if resp.StatusCode != http.StatusRequestEntityTooLarge {
 			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusRequestEntityTooLarge)
 		}
-		if records.Len() != 0 {
-			t.Fatalf("store holds %d records, want 0 after a rejected request", records.Len())
+		if records.Len() != ts.seeded+0 {
+			t.Fatalf("store holds %d records, want %d after a rejected request", records.Len(), ts.seeded+0)
 		}
 	})
 }
@@ -265,8 +264,8 @@ func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		const concurrent = 8
 		var wg sync.WaitGroup
@@ -291,7 +290,7 @@ func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 				}
 				csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 
-				resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+				resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
 				if err != nil {
 					errs[i] = err
 					return
@@ -329,8 +328,8 @@ func TestIssueCertificate_ConcurrentRequests(t *testing.T) {
 			}
 			seen[s] = true
 		}
-		if records.Len() != concurrent {
-			t.Fatalf("store holds %d records, want %d", records.Len(), concurrent)
+		if records.Len() != ts.seeded+concurrent {
+			t.Fatalf("store holds %d records, want %d", records.Len(), ts.seeded+concurrent)
 		}
 	})
 }
@@ -342,8 +341,8 @@ func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
@@ -351,7 +350,7 @@ func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 		}
 		csrPEM := csrPEMFor(t, priv, "chain.example.test")
 
-		resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEM))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
 		}
@@ -427,11 +426,11 @@ func TestIssueCertificate_ReturnsFullChain(t *testing.T) {
 func TestRootArtifactEndpoints(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		t.Run("GET /root.crt serves the ceremony root as DER", func(t *testing.T) {
-			resp, err := http.Get(srv.URL + "/root.crt")
+			resp, err := http.Get(ts.public.URL + "/root.crt")
 			if err != nil {
 				t.Fatalf("GET /root.crt: %v", err)
 			}
@@ -454,7 +453,7 @@ func TestRootArtifactEndpoints(t *testing.T) {
 		})
 
 		t.Run("GET /root.crl serves the ceremony root CRL as DER", func(t *testing.T) {
-			resp, err := http.Get(srv.URL + "/root.crl")
+			resp, err := http.Get(ts.public.URL + "/root.crl")
 			if err != nil {
 				t.Fatalf("GET /root.crl: %v", err)
 			}
@@ -501,10 +500,10 @@ func TestRootArtifactEndpoints(t *testing.T) {
 func TestIntermediateCertEndpoint(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		resp, err := http.Get(srv.URL + api.IntermediateCertPath)
+		resp, err := http.Get(ts.public.URL + api.IntermediateCertPath)
 		if err != nil {
 			t.Fatalf("GET %s: %v", api.IntermediateCertPath, err)
 		}
@@ -535,10 +534,12 @@ func TestIntermediateCertEndpoint(t *testing.T) {
 // cannot reject a nil issuer, so the handler answers 503, not an empty
 // 200.
 func TestIntermediateCertEndpoint_MissingIssuerFailsHonestly(t *testing.T) {
-	srv := httptest.NewServer(api.NewServer(nil, nil, pk11.Workspace{}, store.NewMemory(), 24*time.Hour, api.RootArtifacts{}, testLogger()))
-	defer srv.Close()
+	pub := httptest.NewServer(api.NewServer(api.Config{
+		Records: store.NewMemory(), CRLValidity: 24 * time.Hour, Logger: testLogger(),
+	}).Public)
+	defer pub.Close()
 
-	resp, err := http.Get(srv.URL + api.IntermediateCertPath)
+	resp, err := http.Get(pub.URL + api.IntermediateCertPath)
 	if err != nil {
 		t.Fatalf("GET %s: %v", api.IntermediateCertPath, err)
 	}
@@ -555,19 +556,20 @@ func TestIntermediateCertEndpoint_MissingIssuerFailsHonestly(t *testing.T) {
 // same ordering is why ca.base_url is operator-supplied.
 func TestIssuedLeafDistributionPointsResolve(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
-		srv := httptest.NewUnstartedServer(nil)
-		baseURL := "http://" + srv.Listener.Addr().String()
+		// The public listener, where the leaf's URLs will point.
+		public := httptest.NewUnstartedServer(nil)
+		baseURL := "http://" + public.Listener.Addr().String()
 
 		c, adapter, ws, rootArtifacts := newTestCAAt(t, b, baseURL)
-		srv.Config.Handler = api.NewServer(c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts, testLogger())
-		srv.Start()
-		defer srv.Close()
+		ts := startServersOn(t, public, c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts,
+			api.Authorization{Issuers: []string{testIssuer}, Revokers: []string{testIssuer}})
+		defer ts.Close()
 
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
-		resp, err := http.Post(srv.URL+"/certificates", "application/x-pem-file",
+		resp, err := ts.client.Post(ts.tls.URL+"/certificates", "application/x-pem-file",
 			bytes.NewReader(csrPEMFor(t, priv, "resolve.example.test")))
 		if err != nil {
 			t.Fatalf("POST /certificates: %v", err)
@@ -612,7 +614,7 @@ func TestIssuedLeafDistributionPointsResolve(t *testing.T) {
 		// Revoke the leaf and confirm it appears at the URL the certificate
 		// names. A CDP serving an unrelated CRL would pass every check above.
 		t.Run("revoking the leaf makes it appear at its own CDP", func(t *testing.T) {
-			revokeResp, err := http.Post(srv.URL+"/certificates/"+leaf.SerialNumber.String()+"/revoke", "application/json", nil)
+			revokeResp, err := ts.client.Post(ts.tls.URL+"/certificates/"+leaf.SerialNumber.String()+"/revoke", "application/json", nil)
 			if err != nil {
 				t.Fatalf("POST revoke: %v", err)
 			}

@@ -2,11 +2,9 @@ package api_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
@@ -15,10 +13,10 @@ func TestHealthz_AlwaysSucceeds(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		resp, err := http.Get(srv.URL + "/healthz")
+		resp, err := http.Get(ts.public.URL + "/healthz")
 		if err != nil {
 			t.Fatalf("GET /healthz: %v", err)
 		}
@@ -33,14 +31,14 @@ func TestHealthz_SucceedsEvenAfterAdapterClosed(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		// Release, not Close: the harness then reopens a fresh connection for
 		// cleanup instead of failing against a closed one.
 		b.Release()
 
-		resp, err := http.Get(srv.URL + "/healthz")
+		resp, err := http.Get(ts.public.URL + "/healthz")
 		if err != nil {
 			t.Fatalf("GET /healthz: %v", err)
 		}
@@ -55,10 +53,10 @@ func TestHealthReadyz_SucceedsWhenAdapterIsUp(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
-		resp, err := http.Get(srv.URL + "/readyz")
+		resp, err := http.Get(ts.public.URL + "/readyz")
 		if err != nil {
 			t.Fatalf("GET /readyz: %v", err)
 		}
@@ -75,14 +73,14 @@ func TestHealthReadyz_FailsWhenAdapterClosed(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
-		srv := httptest.NewServer(api.NewServer(c, adapter, ws, records, 24*time.Hour, rootArtifacts, testLogger()))
-		defer srv.Close()
+		ts := startServers(t, c, adapter, ws, records, 24*time.Hour, rootArtifacts)
+		defer ts.Close()
 
 		// Release, not Close: the harness then reopens a fresh connection for
 		// cleanup instead of failing against a closed one.
 		b.Release()
 
-		resp, err := http.Get(srv.URL + "/readyz")
+		resp, err := http.Get(ts.public.URL + "/readyz")
 		if err != nil {
 			t.Fatalf("GET /readyz: %v", err)
 		}

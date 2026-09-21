@@ -119,34 +119,80 @@ func run(configPath string, logger *slog.Logger) error {
 	}
 	defer records.Close()
 
-	httpServer := &http.Server{
-		Addr:    cfg.Server.ListenAddr,
-		Handler: api.NewServer(caInstance, adapter, ws, records, time.Duration(cfg.CA.CRLValidityHours)*time.Hour, rootArtifacts, logger),
-		// http.TimeoutHandler bounds a dispatched handler. It does nothing
-		// about a client that never finishes sending its headers, which is
-		// the Slowloris shape. ReadHeaderTimeout closes that. All four are
-		// well above api.requestTimeout, so the handler's own deadline
-		// fires first in normal operation.
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+	handlers := api.NewServer(api.Config{
+		Issuer:      caInstance,
+		Adapter:     adapter,
+		Workspace:   ws,
+		Records:     records,
+		CRLValidity: time.Duration(cfg.CA.CRLValidityHours) * time.Hour,
+		Root:        rootArtifacts,
+		Logger:      logger,
+		Authorization: api.Authorization{
+			Issuers:  cfg.API.Issuers,
+			Revokers: cfg.API.Revokers,
+		},
+	})
+
+	// The public surface, plain HTTP. It routes no write endpoint.
+	servers := []*http.Server{newHTTPServer(cfg.Server.ListenAddr, handlers.Public)}
+
+	// The authenticated surface, mutual TLS, when configured. The TLS key
+	// lives on the token beside the intermediate, so this runs after the
+	// anchor login and before anything listens.
+	if cfg.Server.TLS != nil {
+		identity, err := ca.LoadServiceCertificate(ctx, adapter, ws, cfg.PKCS11.SessionOptions, caInstance.Certificate(), ca.ServiceCertificateParams{
+			KeyLabel: cfg.Server.TLS.KeyLabel,
+			CertPath: cfg.Server.TLS.CertPath,
+			Curve:    cfg.CA.Curve(),
+		})
+		if err != nil {
+			return err
+		}
+		trustAnchor, err := x509.ParseCertificate(rootArtifacts.CertDER)
+		if err != nil {
+			return err
+		}
+		logger.Info("authenticated listener ready",
+			"tls_subject", identity.Leaf.Subject.String(),
+			"tls_key_label", cfg.Server.TLS.KeyLabel,
+			"tls_not_after", identity.Leaf.NotAfter,
+			"issuers", len(cfg.API.Issuers),
+			"revokers", len(cfg.API.Revokers),
+		)
+		tlsServer := newHTTPServer(cfg.Server.TLS.ListenAddr, handlers.Authenticated)
+		tlsServer.TLSConfig = api.TLSConfig(identity, trustAnchor)
+		servers = append(servers, tlsServer)
+	} else {
+		logger.Warn("no server.tls configured: the write endpoints are not served, so this CA issues and revokes nothing")
 	}
 
-	serveErr := make(chan error, 1)
-	go func() {
-		logger.Info("listening", "addr", cfg.Server.ListenAddr)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- err
-			return
-		}
-		serveErr <- nil
-	}()
+	serveErr := make(chan error, len(servers))
+	for _, srv := range servers {
+		go func(srv *http.Server) {
+			var err error
+			if srv.TLSConfig != nil {
+				logger.Info("listening", "addr", srv.Addr, "surface", "authenticated (mutual TLS)")
+				// The certificate and key are in TLSConfig already.
+				err = srv.ListenAndServeTLS("", "")
+			} else {
+				logger.Info("listening", "addr", srv.Addr, "surface", "public")
+				err = srv.ListenAndServe()
+			}
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serveErr <- err
+				return
+			}
+			serveErr <- nil
+		}(srv)
+	}
 
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown signal received, draining in-flight requests")
 	case err := <-serveErr:
+		// One listener failing to bind takes the process down; a CA whose
+		// public surface is up and whose authenticated one is not would
+		// look healthy to a probe and refuse every operator.
 		if err != nil {
 			return err
 		}
@@ -155,11 +201,30 @@ func run(configPath string, logger *slog.Logger) error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		return err
+	for _, srv := range servers {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
 	}
 	logger.Info("shutdown complete")
 	return nil
+}
+
+// newHTTPServer builds a listener with the timeouts every surface gets.
+// http.TimeoutHandler bounds a dispatched handler. It does nothing about
+// a client that never finishes sending its headers, which is the
+// Slowloris shape. ReadHeaderTimeout closes that. All four are well
+// above api.requestTimeout, so the handler's own deadline fires first in
+// normal operation.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 // verifyHSMConnection resolves the configured workspace and establishes

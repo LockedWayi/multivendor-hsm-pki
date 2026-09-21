@@ -6,12 +6,13 @@ not this codebase. Every claim about what an attacker cannot do should be
 traceable to a specific mechanism in the code. Every claim that is not yet
 true is labelled as such.
 
-**Status on 2026-09-10.** The platform has a two-tier CA with an offline
+**Status on 2026-09-21.** The platform has a two-tier CA with an offline
 root, durable revocation state, a published CRL, a containerized
-deployment whose cluster refuses unsigned and unpinned images, and a
-pipeline that signs every build of `main` keyless. It has **no
-authentication on the issuance API**, no OCSP responder, no audit log, and
-no Vault custody. §8 says what planned work changes.
+deployment whose cluster refuses unsigned and unpinned images, a pipeline
+that signs every build of `main` keyless, and **mutual TLS on the write
+endpoints**, with the clients authorised by name from certificates this
+CA issued. It has no certificate profiles, no OCSP responder, no audit
+log, and no Vault custody. §8 says what planned work changes.
 
 ---
 
@@ -58,9 +59,16 @@ carries the name of an environment variable, never a value).
 
 ```
                     ┌───────────────────────────────────────────┐
-   INTERNET ────────┤ B1: the HTTP surface                      │
-   (unauthenticated)│  POST /certificates, /revoke, GET /crl    │
-                    │  no authentication yet                    │
+   INTERNET ────────┤ B1: the public surface, plain HTTP        │
+   (unauthenticated)│  GET /crl, /root.crl, /intermediate.crt,  │
+                    │  /root.crt, /healthz, /readyz. No write   │
+                    │  endpoint is routed here at all.          │
+                    ├───────────────────────────────────────────┤
+   OPERATORS ───────┤ B1': the authenticated surface, mutual TLS│
+   (client cert     │  POST /certificates, /revoke. The client  │
+    this CA issued) │  must chain to the root, be in the store  │
+                    │  as issued and unrevoked, and be named in │
+                    │  api.issuers or api.revokers.             │
                     └───────────────────┬───────────────────────┘
                                         │
                     ┌───────────────────▼───────────────────────┐
@@ -155,37 +163,56 @@ Three consequences follow, and each is an attacker capability:
 
 ### A1: Unauthenticated network client
 
-**Gets, today:** a valid certificate for any subject and any SAN it asks
-for. This is the largest open gap in the platform. `POST /certificates`
-has no authentication. Anyone who can reach the port can obtain a
-certificate signed by the intermediate.
+**Gets:** the public artifacts, which are public: the two CRLs, the two
+CA certificates, and the probe answers. Nothing else. The write endpoints
+are not routed on the plain listener, so there is no request an
+unauthenticated client can make that reaches `Issue` or the store. On the
+authenticated listener the handshake itself refuses a client with no
+certificate, or with one that does not chain to the ceremony root, before
+any handler runs.
 
-It can also revoke any certificate whose serial it knows
-(`POST /certificates/{serial}/revoke`), which is a denial of service
-against that certificate's holder. Serials are 128-bit random, so this
-requires knowing the serial, typically by having been issued the
-certificate or by reading one off a TLS handshake.
+**Does not get:** a certificate, a revocation, any key material, or any
+answer from the store. Before 2026-09-21 this attacker got a certificate
+for any subject and any SAN, and could revoke any serial it knew. That
+was the largest gap in the platform and it is closed. The residual is
+denial: an attacker who can reach the public port can fetch the CRL as
+often as it likes, and the CRL is cached per process (§6.2).
 
-**Does not get:** any key material; the ability to choose its own serial,
-validity window, key usage, or CA status (every one of those is set by
-`Issue` from the CA's own policy, never from the CSR); the ability to have
-a CSR with an unverifiable self-signature, an empty subject, or a weak key
-accepted; or the ability to make the CA sign anything that is not a
-certificate.
+### A2: Legitimate requester
 
-**Mitigation status:** authentication is planned, and this service is not
-exposed publicly before it lands. Until then the deployment boundary is
-the authentication boundary.
+An A2 holds a certificate this CA issued, still valid in the store, whose
+URI SAN or common name appears in `api.issuers` or `api.revokers`. The
+first such certificate is issued by the operator with the keytool before
+the service is up, over the intermediate token; every later one is issued
+through the API by an issuer.
 
-### A2: Legitimate requester (once authentication exists)
+**Gets:** with an issuer identity, a certificate for any subject and any
+SAN it asks for; with a revoker identity, the revocation of any serial.
+Today there are no profiles: every leaf gets `serverAuth` **and**
+`clientAuth`, and any subject the CSR asks for. An issuer can therefore
+mint a certificate carrying another issuer's name, or a revoker's, and
+use it. The two lists separate the two operations; they do not separate
+issuers from each other. Certificate profiles, planned, bound what an
+issuer may name.
 
-**Gets:** certificates within whatever profile and naming policy grants
-its identity.
+**Does not get:** anything the CSR could choose that `Issue` sets from
+policy: serial, validity window, key usage, CA status. A revoked issuer
+gets nothing on its next request: the service reads its own store, not a
+CRL, so revocation of a client takes effect at once with no fetch in
+between. An A2 whose certificate was issued by another intermediate under
+the same root gets nothing either, because the store has no record of
+it.
 
-**Does not get:** certificates outside that policy, once profiles exist.
-Today there are no profiles. Every leaf gets `serverAuth` **and**
-`clientAuth`, and any subject the CSR asks for. Certificate profiles are
-planned, not built.
+**What the check is, precisely.** The TLS layer verifies the chain to
+the root and requires the `clientAuth` extended key usage. The handler
+then looks the leaf's serial up in the store, refuses an unknown serial,
+refuses a record whose subject differs from the leaf's, refuses a revoked
+one, and only then compares the leaf's identities against the list for
+that endpoint. The service's own TLS identity is a leaf this CA issued
+over a key held on the intermediate's token under its own label, and
+`config` refuses a configuration that names the intermediate's key as
+the TLS key: a handshake signs bytes the peer chooses, and the key that
+signs certificates must never do that.
 
 ### A3: Compromised service process, the central case
 
@@ -495,8 +522,7 @@ A threat model that claims everything is defended is not a threat model:
 
 | Work | Changes for this model |
 |---|---|
-| **Authentication on the issuance API** | Closes A1, the largest current gap. |
-| **Certificate profiles and OCSP** | Profiles bound what A2 can obtain. OCSP narrows A8's blocking window. |
+| **Certificate profiles and OCSP** | Profiles bound what A2 can obtain, and separate issuers from each other. OCSP narrows A8's blocking window. |
 | **Vault custody** | Changes where the intermediate lives and what a compromised service can reach. The custody decision must be made against this model. |
 | **The audit chain** | Makes compromises evidenced. Its key must not be reachable by the process it audits (§6.1). A deleted webhook (B7) and an excluded-namespace bypass (A9) become visible. |
 
