@@ -7,6 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **The authenticated listener is wired through the local run and the
+  Kubernetes overlay.** `deploy/docker/run-local.sh` provisions the TLS
+  identity and an operator certificate after the root token is out of
+  reach, writes the `server.tls` and `api` blocks, and starts the service
+  on both ports; its `Try:` block issues a certificate over mutual TLS
+  with curl. The base `Service` and `Deployment` carry the second port,
+  the probes stay on the public one, and `k3d-up.sh` puts `tls.pem` in
+  the ConfigMap and seeds the cluster's CA store from run-local's when
+  empty, because the operator certificate is a record in that store and
+  a cluster seeded with the token alone would refuse it. The image
+  exposes both ports.
 - **The two credentials the authenticated listener needs, as operator-run
   keytool commands.** `hsm-pki-keytool provision-tls-identity` generates
   the service's TLS key pair on the intermediate's token under its own

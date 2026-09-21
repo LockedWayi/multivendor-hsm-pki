@@ -66,8 +66,9 @@ COPY --from=build /out/hsm-pki-server /usr/local/bin/hsm-pki-server
 # a base image change cannot silently return this container to root.
 USER 65532:65532
 
-# The only port served. server.listen_addr must agree with it.
-EXPOSE 8080
+# The two ports served: the public surface and the mutual-TLS surface.
+# server.listen_addr and server.tls.listen_addr must agree with them.
+EXPOSE 8080 8443
 
 # The binary probes itself. A HEALTHCHECK normally shells out to curl or
 # wget, and this image has neither, nor a shell to run them from -- which is

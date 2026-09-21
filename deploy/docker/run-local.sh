@@ -11,13 +11,18 @@
 #   2. initializes two SoftHSM2 tokens, a root and an intermediate
 #   3. runs the offline root ceremony against them (cmd/hsm-pki-keytool)
 #   4. moves the root token out of the store the service can reach
-#   5. starts the service, read-only and non-root, against what is left
+#   5. provisions the service's TLS identity on the intermediate's token and
+#      issues the first operator certificate, both recorded in the CA store
+#   6. starts the service, read-only and non-root, against what is left:
+#      a public listener for the CRLs and probes, and a mutual-TLS listener
+#      for the write endpoints
 #
 # Step 4 is the important one. The two-tier hierarchy's guarantee is that
 # a compromised service cannot reach the root. In production that is a
 # token in a safe. Here it is a directory moved out of the token store
 # before the service starts: the root's token is not in the filesystem the
-# service is given.
+# service is given. Step 5 runs after it on purpose: neither credential
+# needs the root, and running them with it already gone proves that.
 #
 # Usage:
 #   deploy/docker/run-local.sh          start (creates state on first run)
@@ -32,6 +37,10 @@ STATE="${HSM_PKI_LOCAL_STATE:-$REPO_ROOT/.local/dev}"
 SERVICE_IMAGE="hsm-pki-server:local"
 DEV_IMAGE="hsm-pki-dev:local"
 PORT="${HSM_PKI_LOCAL_PORT:-8080}"
+TLS_PORT="${HSM_PKI_LOCAL_TLS_PORT:-8443}"
+# The identity the first operator certificate carries, as a URI SAN, and
+# the one name in the service's issuer and revoker lists.
+OPERATOR_ID="urn:hsm-pki:operator:local"
 
 # Throwaway PINs for a throwaway local token. They are passed to the
 # containers as environment variables and never written into config.yaml,
@@ -61,6 +70,10 @@ fi
 if [[ -d "$STATE" ]]; then
     log "reusing existing local state at $STATE (--reset to start over)"
     SETUP_DONE=1
+    if ! grep -q '^  tls:' "$STATE/etc/config.yaml" 2>/dev/null; then
+        echo "    this state predates the authenticated listener: the service will start,"
+        echo "    warn, and issue nothing. Run with --reset to provision the credentials."
+    fi
 else
     SETUP_DONE=0
 fi
@@ -161,12 +174,67 @@ EOF
     '
     echo "the service is never given $STATE/offline-root-token"
 
+    log "provisioning the TLS identity and the first operator certificate"
+    # Both commands write the CA store, which is single-writer, so they run
+    # here, before the service has ever started. They need the
+    # intermediate's PIN and nothing else: the root token is already out of
+    # reach, and that is the point of running them after step 4.
+    #
+    # The operator's key pair is generated as the reader's own user, into a
+    # directory the service is never given. Only the request crosses over.
+    mkdir -p "$STATE/operator"
+    docker run --rm --user "$(id -u):$(id -g)" -v "$STATE/operator":/operator "$DEV_IMAGE" \
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+            -keyout /operator/operator.key -out /operator/operator.csr \
+            -subj "/CN=local operator" \
+            -addext "subjectAltName=URI:$OPERATOR_ID" 2>/dev/null
+    # The PIN is passed by name, so it never reaches the host's process
+    # list; the keytool reads it from the environment at the point of use.
+    export HSM_PKI_INTERMEDIATE_PIN="$INTERMEDIATE_PIN"
+    docker run --rm \
+        -v "$REPO_ROOT":/repo -w /repo \
+        -v "$STATE/tokens":/var/lib/softhsm/tokens \
+        -v "$STATE/pkcs11":/pkcs11:ro \
+        -v "$STATE/etc":/artifacts \
+        -v "$STATE/var":/var/lib/hsm-pki \
+        -v "$STATE/operator":/operator \
+        -e SOFTHSM2_CONF=/artifacts/softhsm2.conf \
+        -e HSM_PKI_INTERMEDIATE_PIN \
+        "$DEV_IMAGE" sh -c "
+            set -e
+            git config --global --add safe.directory /repo
+            go build -o /tmp/keytool ./cmd/hsm-pki-keytool
+            issuer='-module /pkcs11/libsofthsm2.so
+                    -workspace $INTERMEDIATE_TOKEN_LABEL -pin-env HSM_PKI_INTERMEDIATE_PIN
+                    -intermediate-key-label ca-intermediate-key-v1
+                    -intermediate-cert /artifacts/intermediate.pem
+                    -base-url http://localhost:$PORT
+                    -store /var/lib/hsm-pki/ca.db'
+            /tmp/keytool provision-tls-identity \$issuer \
+                -tls-key-label ca-tls-key-v1 -dns localhost -ip 127.0.0.1 \
+                -cert-out /artifacts/tls.pem
+            /tmp/keytool issue-client-cert \$issuer \
+                -csr /operator/operator.csr -cert-out /operator/operator.pem
+        "
+    unset HSM_PKI_INTERMEDIATE_PIN
+    # A TLS client presents its chain, not its leaf alone: the service
+    # trusts the ceremony root and needs the intermediate to get there.
+    cat "$STATE/operator/operator.pem" "$STATE/etc/intermediate.pem" > "$STATE/operator/operator-chain.pem"
+
     log "writing config.yaml"
     # No PIN in this file, by design: pin_env names the variable the PIN is
     # read from at startup, so a leaked config.yaml leaks nothing.
     cat > "$STATE/etc/config.yaml" <<EOF
 server:
   listen_addr: "0.0.0.0:$PORT"
+  tls:
+    listen_addr: "0.0.0.0:$TLS_PORT"
+    key_label: "ca-tls-key-v1"
+    cert_path: "/etc/hsm-pki/tls.pem"
+
+api:
+  issuers: ["$OPERATOR_ID"]
+  revokers: ["$OPERATOR_ID"]
 
 pkcs11:
   adapter: "softhsm2"
@@ -204,11 +272,21 @@ cat <<EOF
   read-only root filesystem, non-root UID, no shell in the image.
   Writable state is explicit: the token store and the CA database, nothing else.
 
-  Try:
+  Try, on the public surface:
     curl -s localhost:$PORT/healthz
     curl -s localhost:$PORT/readyz
     curl -sI localhost:$PORT/root.crt
     curl -s localhost:$PORT/root.crl | openssl crl -inform DER -noout -text | head
+
+  Issue a certificate over mutual TLS, as the operator in $STATE/operator:
+    openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \\
+        -keyout leaf.key -out leaf.csr -subj /CN=leaf \\
+        -addext subjectAltName=DNS:leaf.example.test
+    curl -s --cacert $STATE/etc/root.pem \\
+        --cert $STATE/operator/operator-chain.pem --key $STATE/operator/operator.key \\
+        --data-binary @leaf.csr https://localhost:$TLS_PORT/certificates
+  The same request without --cert and --key is refused at the handshake,
+  and POST /certificates on the public port is a 404.
 
   Ctrl-C to stop.
 EOF
@@ -228,6 +306,7 @@ exec docker run --rm "${TTY_FLAGS[@]}" \
     --cap-drop ALL \
     --security-opt no-new-privileges \
     -p "$PORT:$PORT" \
+    -p "$TLS_PORT:$TLS_PORT" \
     -v "$STATE/pkcs11":/pkcs11:ro \
     -v "$STATE/etc":/etc/hsm-pki:ro \
     -v "$STATE/tokens":/var/lib/softhsm/tokens \
