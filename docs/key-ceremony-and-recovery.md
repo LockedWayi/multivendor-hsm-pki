@@ -532,6 +532,16 @@ client accepts.
 The two flags it prints at the end are `server.tls.key_label` and
 `server.tls.cert_path`.
 
+On a token whose RNG restarts with every library initialisation, the
+command refuses rather than provisions: the key pair it generates is one
+the token has handed out before, and `signingkey.Provision` destroys it
+and reports which existing label it duplicated. Measured on ProtectToolkit-C
+software emulation, where the duplicate is the ceremony's intermediate
+key, so the refusal is the difference between a TLS key of its own and
+the CA's key serving handshakes. That backend is a conformance target,
+never a key source ([`test-matrix.md`](test-matrix.md), "RNG reseeding
+across `C_Initialize`").
+
 ### 8.2 The first client certificate
 
 `hsm-pki-keytool issue-client-cert` issues the certificate an operator

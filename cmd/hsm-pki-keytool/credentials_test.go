@@ -23,6 +23,7 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
@@ -202,6 +203,7 @@ func TestCredentials_TheServiceAcceptsWhatTheKeytoolIssues(t *testing.T) {
 			"-cert-out", tlsCertPath,
 		)
 		if err := runProvisionTLSIdentityCmd(tlsArgs); err != nil {
+			skipIfTheTokenRepeatedAKey(t, b, err, tlsKeyLabel, tlsCertPath)
 			t.Fatalf("provision-tls-identity: %v", err)
 		}
 		serviceCert := readCert(t, tlsCertPath)
@@ -357,6 +359,31 @@ func TestRunIssueClientCertCmd_TakesTheRequestTheRunbookTellsAnOperatorToMake(t 
 	})
 }
 
+// skipIfTheTokenRepeatedAKey handles the one refusal a correct command can
+// return on a backend whose RNG restarts on every C_Initialize: the key
+// just generated is a key pair already on the token, and Provision
+// destroys it rather than hand it back. Measured on ProtectToolkit-C
+// software emulation, where the command's first key pair is the ceremony's
+// intermediate key, so without the refusal the service's TLS key would
+// have been the CA's key.
+//
+// The refusal is asserted to be complete, then the rest of the test is
+// skipped for that backend with the reason in the log, because what the
+// test exists to measure cannot be measured on a token that is not a key
+// source. It does not skip on any other error.
+func skipIfTheTokenRepeatedAKey(t *testing.T, b *hsmtest.Backend, err error, label, certOut string) {
+	t.Helper()
+	if !errors.Is(err, signingkey.ErrDuplicateKey) {
+		return
+	}
+	if _, statErr := os.Stat(certOut); !os.IsNotExist(statErr) {
+		t.Fatalf("a certificate was written for a refused duplicate key: %v", err)
+	}
+	assertLabelIsFree(t, b, label)
+	t.Skipf("%s: the token repeated a key pair it had already generated and the command refused it, writing nothing and freeing the label; "+
+		"this backend is not a key source, so the identity cannot be provisioned here: %v", b.Name, err)
+}
+
 // TestRunProvisionTLSIdentityCmd_RefusesASecondKeyUnderTheSameLabel: key
 // generation is irreversible, and a label that already names a key pair
 // is not free. The second run must not overwrite the first.
@@ -372,6 +399,7 @@ func TestRunProvisionTLSIdentityCmd_RefusesASecondKeyUnderTheSameLabel(t *testin
 			)
 		}
 		if err := runProvisionTLSIdentityCmd(args("tls.pem")); err != nil {
+			skipIfTheTokenRepeatedAKey(t, b, err, label, filepath.Join(env.dir, "tls.pem"))
 			t.Fatalf("first run: %v", err)
 		}
 		err := runProvisionTLSIdentityCmd(args("tls-again.pem"))
