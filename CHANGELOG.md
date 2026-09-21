@@ -6,6 +6,65 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **The image-signing key's lifecycle runs in CI, on a throwaway token
+  set.** `ci/rotation-drill.sh` provisions version 1, signs, rolls to the
+  next version, republishes the inventory with the old one `verify-only`,
+  retires it by destroying it on the token, and republishes again. At every
+  state it checks which key the signers pick and which signatures the
+  verifiers accept, that the admission policy renders the right keys, and
+  that rendering an older inventory over a newer one is refused as a
+  rollback. Until this, the lifecycle was a description.
+- **`hsm-pki-keytool retire-signing-key`**, the irreversible last step of a
+  rotation. It takes the label and the current inventory and refuses before
+  it logs in unless the document lists the label as `verify-only`: an
+  active key is rotated first, an unlisted key is not this command's to
+  remove, a key already called retired should not be on the token. On the
+  token it compares the public key under the label with the one the
+  inventory lists and refuses a mismatch, then destroys both halves,
+  private first. The drill exercises each of those refusals as a step.
+- **The signers take their key version from the inventory.**
+  `ci/active-signing-key.sh` resolves the one `active` key per purpose
+  through `ci/select-key`, and `ci/sign-image.sh`, `ci/sign-artifact.sh`,
+  `ci/attest-image.sh` and `ci/countersign-release.sh` call it instead of
+  naming a label. The `HSM_PKI_<PURPOSE>_KEY_LABEL` override is checked
+  against the inventory rather than obeyed. A rotation is now an inventory
+  change, not a change to four scripts.
+- **The pipeline fails on a vulnerability exception that suppressed
+  nothing.** Each scanner records which allowlist entries it used, and the
+  `allowlist` job unions the three and refuses an entry none of them
+  needed. The publish job refuses to run without that job.
+- **The PKCS#11 mechanism test runs on pull requests that can change what
+  is signed.** `ci/mechanism-test-needed.sh` holds the watched paths and
+  prints what it matched, or why it matched nothing, so a skip reads as a
+  skip. The rotation drill runs in the same job, on the same image.
+- **shellcheck is a gate**, warning and above, over every tracked shell
+  script, through a digest-pinned image so the verdict is the same locally
+  and in the pipeline.
+- **A scheduled pin-freshness check** (`ci/check-pin-freshness`) for the
+  digests Dependabot cannot see, with a report that reaches somebody.
+
+### Changed
+- `ci/cosign.sh fetch` returns at once when the pinned binary is already
+  installed and matches the pin.
+- `deploy/docker/provision-signing-keys.sh` requires both token PINs from
+  the caller instead of inventing them, and passes them into the containers
+  by variable name, never as a value on the docker command line.
+- Scanner pins: trivy 0.74.0, semgrep 1.177.0, govulncheck v1.8.0.
+
+### Fixed
+- The dependency gate installed govulncheck and never ran it.
+- The mechanism job's path filter never skipped: the decision was read
+  through a pipe, and the status of a pipe is its last command's.
+- The key resolver counted docker's pull output as active keys on a cold
+  runner.
+- The suite job replayed cached test verdicts against a token it never
+  touched; `-count=1` defeats the result cache and keeps the build cache.
+- Documentation brought back in line with the code: the pipeline has ten
+  jobs, v0.2.0 is a release, authentication is planned rather than in
+  progress, the audit key would be a fifth purpose, and the test-matrix,
+  policy-selftest and cosign-selftest counts were re-counted.
+
 ## [0.2.0], 2026-09-10
 
 ### Fixed

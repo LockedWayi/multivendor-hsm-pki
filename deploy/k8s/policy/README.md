@@ -63,9 +63,9 @@ become the path Kyverno documents first.
 deploy/k8s/policy/policy-selftest.py
 ```
 
-Nineteen cases, mostly **near misses**: a pod satisfying every rule except
+Twenty cases, mostly **near misses**: a pod satisfying every rule except
 one, asserted to be refused with the message belonging to that rule. Three
-cases must be admitted, and one attaches a container to a running pod. The
+cases must be admitted, and two attach a container to a running pod. The
 insecure pod in `testdata/` breaks every rule at once, so admission reports
 the first and the other eight go untested. A rule with a typo in its CEL
 would pass everything until somebody wrote a pod that broke only it.

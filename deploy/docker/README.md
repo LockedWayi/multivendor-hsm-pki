@@ -114,7 +114,8 @@ ci/scan-image.sh
 
 Baseline for this image: **53.8 MB, 19 layers**, UID 65532, one exposed
 port, **11 OS packages**, and **zero HIGH/CRITICAL** findings (trivy
-0.67.0, 2026-09-04). Most of what an image scanner normally reports is
+0.67.0, 2026-09-04; the pin is 0.74.0 now and the tree is still clean,
+2026-09-15). Most of what an image scanner normally reports is
 absent because the shell, the package manager and the toolchain are absent.
 
 ## What has been run

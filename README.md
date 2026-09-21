@@ -71,7 +71,7 @@ by digest.
 
 ## The pipeline
 
-Eight checks. Each reads a different artifact, and a finding from one is
+Ten jobs. Each reads a different artifact, and a finding from one is
 invisible to the others:
 
 | Check | Reads | Answers | Required |
@@ -83,14 +83,20 @@ invisible to the others:
 | `trivy image` | what was assembled | is the shipped image vulnerable? | yes |
 | `trivy config` + OpenTofu | what would be provisioned | is the infrastructure misconfigured? | yes |
 | trust chain | the key inventory, against an anchor in another repository | can this tree still say which key is which? | yes |
+| allowlist | what the three scanners suppressed, unioned | did every vulnerability exception in force suppress something? | blocks publish |
+| mechanism | the PKCS#11 signing path and the key-rotation drill, on a throwaway token and registry | does signing still work end to end, and does every lifecycle state do what the inventory says? | on pull requests that change what is signed |
 | run verification | the keyless signature, both attestations and the binary bundle this run made | are they checkable from a clean checkout, for this run's exact identity? | after merge |
 
 Every check is a script in `ci/`, run the same way locally and in the
-pipeline. Seven of the eight are **required** on `main`, the repository
+pipeline. The first seven are **required** on `main`, the repository
 owner included, and `enforce_admins` is on. No pull-request review is
 required. See A10 in the threat model.
 
-The eighth, run verification, checks the signatures on an image that has
+The allowlist job is downstream of two of the seven, so it cannot block a
+merge the same way; it blocks publication instead, and the publish job
+refuses to run without it. The mechanism job runs only on a pull request
+that touches a path which can change the signed artifacts, and says so
+when it skips. Run verification checks the signatures on an image that has
 already been published, which only happens on a merge to `main`. It is
 skipped on pull requests, runs after the merge, and a failure turns `main`
 red. `ci/verify-release.sh` and admission refuse a wrongly signed image.
@@ -170,8 +176,9 @@ cosign verify-blob --bundle hsm-pki-server.sigstore.json \
     hsm-pki-server
 ```
 
-No release exists yet. Each run on `main` keeps those three files as the
-`release-binary-<sha>` workflow artifact for 90 days.
+[v0.2.0](https://github.com/LockedWayi/multivendor-hsm-pki/releases/tag/v0.2.0)
+is the first release carrying them. Each run on `main` keeps the same three
+files as the `release-binary-<sha>` workflow artifact for 90 days.
 
 ### The two signatures
 
@@ -218,8 +225,8 @@ Built and running: the PKCS#11 core, the two-tier CA, the container and its
 Kubernetes deployment with a generated admission policy, the
 infrastructure-as-code modules, the scanning pipeline, the signing layer,
 and the key-rotation drill that runs it through a roll and a retirement
-in CI. In progress: authentication on the write endpoints (mTLS, issued
-by this platform's own CA), and Vault custody.
+in CI. Planned next: authentication on the write endpoints (mTLS, issued
+by this platform's own CA), then Vault custody.
 
 ## Running it
 
