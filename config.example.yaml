@@ -25,6 +25,10 @@ server:
     key_label: "ca-tls-key-v1"
     # The service's TLS certificate: a leaf this CA issued over that key,
     # PEM, one certificate. The intermediate is appended at run time.
+    #
+    # Both the key pair and this certificate come from
+    # `hsm-pki-keytool provision-tls-identity`, run with the service
+    # stopped. See docs/key-ceremony-and-recovery.md section 8.
     cert_path: "/etc/hsm-pki/tls.pem"
 
 # Who may write, by an identity off the client certificate: a URI SAN as
@@ -33,6 +37,11 @@ server:
 # to the root in ca.root_cert_path and be in the store as issued and not
 # revoked; a name alone authorises nothing. There is no separate client
 # CA: the clients are certificates this CA issued.
+#
+# The first client certificate comes from `hsm-pki-keytool
+# issue-client-cert`; after that, a client listed here can issue the next
+# one over the API. The command prints the identities a certificate
+# carries, which is what goes in these lists.
 api:
   issuers: ["urn:hsm-pki:operator:alice"]
   # Not defaulted from issuers. Who may withdraw a certificate is a

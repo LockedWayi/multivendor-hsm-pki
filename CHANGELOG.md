@@ -7,6 +7,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **The two credentials the authenticated listener needs, as operator-run
+  keytool commands.** `hsm-pki-keytool provision-tls-identity` generates
+  the service's TLS key pair on the intermediate's token under its own
+  versioned label and issues its `serverAuth` certificate; it refuses the
+  intermediate's own label, because a handshake signs bytes the peer
+  chooses. `hsm-pki-keytool issue-client-cert` issues an operator's client
+  certificate from a request the operator generated, and refuses one
+  carrying neither a URI SAN nor a common name, since no entry in
+  `api.issuers` or `api.revokers` could match it.
+
+  Both issue through the same `Issue` call the API serves rather than a
+  template of their own, and both write the store record the service
+  authorises from: a certificate this CA signed but did not record is one
+  the service refuses. Both run with the service stopped, because the
+  store is single-writer.
+
+  They exist because the write endpoints accept only a client certificate
+  this CA issued, which makes the first one circular. A bootstrap mode
+  inside the service was rejected as a window open at every restart, and a
+  ceremony-minted certificate as bringing the root out to sign a leaf.
+  Operator procedure in `docs/key-ceremony-and-recovery.md` §8.
+
+  Measured, both backends: the service's own loader accepts the
+  provisioned identity and a TLS 1.3 mutual handshake completes between
+  it and the issued client certificate, with the server's
+  CertificateVerify signed by the HSM, and fails when the client presents
+  nothing; a request produced by the runbook's own `openssl req`
+  invocation is accepted and `openssl verify` accepts the chain that
+  comes back; a second key under one label is refused and writes nothing;
+  every refusal happens before the token is touched.
 - **Mutual TLS on the write endpoints.** The service serves two
   listeners. The public one, `server.listen_addr`, carries the CRLs, the
   CA certificates and the probes over plain HTTP and routes no write
