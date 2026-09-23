@@ -50,6 +50,7 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
@@ -221,7 +222,11 @@ func runIssueClientCertCmd(args []string) error {
 	defer adapter.Close()
 	defer records.Close()
 
-	cert, err := issuer.Issue(csr)
+	// The built-in tls-client profile, with this command's validity. The
+	// service may run a configured set instead; what this credential must
+	// satisfy is the check in internal/api/auth.go, which needs clientAuth
+	// and a name, and the built-in provides both.
+	cert, err := issuer.Issue(csr, builtinProfile("tls-client", *f.validity))
 	if err != nil {
 		return fmt.Errorf("issuing the client certificate: %w", err)
 	}
@@ -331,7 +336,7 @@ func runProvisionTLSIdentityCmd(args []string) error {
 		return fmt.Errorf("the TLS key pair %q was generated and its label is now taken, but building a CSR over it failed: %w", key.Label, err)
 	}
 
-	cert, err := issuer.Issue(csr)
+	cert, err := issuer.Issue(csr, builtinProfile("tls-server", *f.validity))
 	if err != nil {
 		return fmt.Errorf("the TLS key pair %q was generated and its label is now taken, but issuing a certificate over it failed: %w", key.Label, err)
 	}
@@ -348,6 +353,16 @@ func runProvisionTLSIdentityCmd(args []string) error {
 	fmt.Printf("point the service at it:\n  server.tls.key_label: %s\n  server.tls.cert_path: %s\n", key.Label, *certOut)
 	fmt.Println("nothing renews this certificate; re-run this command under the next version label before it expires")
 	return nil
+}
+
+// builtinProfile returns the platform's built-in profile called name with
+// its validity replaced by -validity. The two commands here issue exactly
+// one kind of certificate each and never take a profile from the
+// operator: the choice is the command.
+func builtinProfile(name string, validity time.Duration) *profile.Profile {
+	p := profile.Builtin()[name]
+	p.Validity = validity
+	return p
 }
 
 // provisionTLSKey generates the TLS key pair on the token the

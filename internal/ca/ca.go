@@ -7,16 +7,20 @@ import (
 	"crypto/rsa"
 	"crypto/sha1" //nolint:gosec // SKI is a non-cryptographic identifier hint (RFC 5280 §4.2.1.2 method 1), not a security boundary.
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
 	"net/url"
 	"time"
+
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 )
 
 // minRSAKeyBits is the smallest RSA modulus this CA signs a CSR for. 2048
 // bits is the floor NIST and the CA/Browser Forum accept. The CA's own key
-// is ECDSA; clients need not match.
-const minRSAKeyBits = 2048
+// is ECDSA; clients need not match. profile.MinRSAKeyBits is the same
+// number, and TestKeyUsageFor_CoversEveryAllowedKeyType pins the two.
+const minRSAKeyBits = profile.MinRSAKeyBits
 
 // issuanceClockSkewAllowance backdates a leaf's NotBefore so a verifier
 // whose clock trails this host's does not reject a certificate as
@@ -76,18 +80,23 @@ func ValidateDistributionURL(field, raw string) error {
 // signing through an HSM-backed crypto.Signer. It never holds the issuer's
 // private key.
 type CA struct {
-	cert    *x509.Certificate
-	signer  crypto.Signer
-	certTTL time.Duration
-	dist    LeafDistribution
+	cert   *x509.Certificate
+	signer crypto.Signer
+	// maxTTL is the longest validity any profile may grant. A profile is
+	// policy an operator wrote; the ceiling is the one number the CA
+	// enforces over every profile, and it is checked at the point of use
+	// rather than only at startup.
+	maxTTL time.Duration
+	dist   LeafDistribution
 }
 
 // NewCA builds a CA from a certificate and signer the caller already
 // validated. LoadIntermediate is the checked path the service uses;
-// RunCeremony and tests use this one. dist may be zero for a CA that only
-// builds CRLs; Issue validates it at the point of use.
-func NewCA(cert *x509.Certificate, signer crypto.Signer, certTTL time.Duration, dist LeafDistribution) *CA {
-	return &CA{cert: cert, signer: signer, certTTL: certTTL, dist: dist}
+// RunCeremony and tests use this one. maxTTL caps every profile's
+// validity. dist may be zero for a CA that only builds CRLs; Issue
+// validates it at the point of use.
+func NewCA(cert *x509.Certificate, signer crypto.Signer, maxTTL time.Duration, dist LeafDistribution) *CA {
+	return &CA{cert: cert, signer: signer, maxTTL: maxTTL, dist: dist}
 }
 
 // Certificate returns the CA's own issuer certificate.
@@ -95,24 +104,49 @@ func (c *CA) Certificate() *x509.Certificate {
 	return c.cert
 }
 
-// Issue validates csr and, if it passes, signs a new leaf certificate under
-// the CA's issuer certificate. A malformed, unparseable, or badly-signed
-// CSR is rejected rather than partially processed.
-func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
+// Issue validates csr against p and, if it passes, signs a new leaf
+// certificate under the CA's issuer certificate. The template is filled
+// from the profile and from nothing else: the request supplies a public
+// key, a subject the profile filters, and names of the types the profile
+// allows. A malformed, badly-signed, or out-of-policy request is refused
+// rather than partially honoured, and a nil profile is refused too; there
+// is no default.
+func (c *CA) Issue(csr *x509.CertificateRequest, p *profile.Profile) (*x509.Certificate, error) {
 	// The CA's own distribution URLs are checked before the CSR. A CA with
 	// nowhere to publish revocation does not issue.
 	if err := c.dist.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoDistributionPoints, err)
 	}
+	if p == nil {
+		return nil, fmt.Errorf("%w: Issue called with no profile", profile.ErrUnknownProfile)
+	}
 	if err := validateCSR(csr); err != nil {
 		return nil, err
+	}
+	// The policy checks, in the order a caller can fix them: the key they
+	// generated, the names they asked for, the subject they wrote.
+	if err := p.AllowsKey(csr.PublicKey); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDisallowedKeyType, err)
+	}
+	if err := p.CheckSANs(csr); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNameNotAllowed, err)
+	}
+	subject, err := p.Subject(csr.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSubjectNotAllowed, err)
+	}
+	// The ceiling is checked here as well as at startup: the profile set
+	// is configuration, and configuration is validated once, while this
+	// runs on every request.
+	if c.maxTTL > 0 && p.Validity > c.maxTTL {
+		return nil, fmt.Errorf("%w: profile %q grants %s, the CA's ceiling is %s", ErrValidityExceedsPolicy, p.Name, p.Validity, c.maxTTL)
 	}
 
 	now := time.Now()
 	// NotBefore is backdated for clock skew. Both ends of the window are
 	// checked against the issuer before anything is signed.
 	notBefore := now.Add(-issuanceClockSkewAllowance)
-	notAfter := now.Add(c.certTTL)
+	notAfter := now.Add(p.Validity)
 	if err := c.checkIssuerCanCover(now, notAfter); err != nil {
 		return nil, err
 	}
@@ -128,23 +162,32 @@ func (c *CA) Issue(csr *x509.CertificateRequest) (*x509.Certificate, error) {
 
 	template := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               csr.Subject,
+		Subject:               subject,
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
-		KeyUsage:              keyUsageFor(csr.PublicKey),
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		KeyUsage:              keyUsageFor(csr.PublicKey, p.KeyUsage),
+		ExtKeyUsage:           append([]x509.ExtKeyUsage(nil), p.ExtKeyUsages...),
 		BasicConstraintsValid: true,
 		IsCA:                  false,
 		SubjectKeyId:          ski,
 		AuthorityKeyId:        c.cert.SubjectKeyId,
-		DNSNames:              csr.DNSNames,
-		IPAddresses:           csr.IPAddresses,
-		EmailAddresses:        csr.EmailAddresses,
-		URIs:                  csr.URIs,
+		// CheckSANs has already refused any type the profile does not
+		// allow, so what is copied here is exactly what was allowed.
+		DNSNames:       csr.DNSNames,
+		IPAddresses:    csr.IPAddresses,
+		EmailAddresses: csr.EmailAddresses,
+		URIs:           csr.URIs,
 		// Both point at this service. No OCSPServer is set; see
 		// LeafDistribution.
 		CRLDistributionPoints: []string{c.dist.CRLURL},
 		IssuingCertificateURL: []string{c.dist.IssuerCertURL},
+	}
+	if p.OCSPNoCheck {
+		// id-pkix-ocsp-nocheck is a NULL (RFC 6960 §4.2.2.2.1): DER 05 00.
+		template.ExtraExtensions = append(template.ExtraExtensions, pkix.Extension{
+			Id:    profile.OIDOCSPNoCheck,
+			Value: []byte{0x05, 0x00},
+		})
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, template, c.cert, csr.PublicKey, c.signer)
@@ -208,21 +251,22 @@ func validateCSR(csr *x509.CertificateRequest) error {
 	return nil
 }
 
-// keyUsageFor returns the key usages for the subject's key algorithm.
-// keyEncipherment is an RSA operation. An EC key cannot do it (RFC 5480
-// §3), so an ECDSA certificate gets digitalSignature only.
-func keyUsageFor(pub crypto.PublicKey) x509.KeyUsage {
+// keyUsageFor narrows a profile's key usage to what the subject's key
+// algorithm can do. keyEncipherment is an RSA operation (RFC 5480 §3), so
+// an ECDSA certificate never carries it whatever the profile lists; the
+// profile's set is the most any certificate under it asserts.
+func keyUsageFor(pub crypto.PublicKey, fromProfile x509.KeyUsage) x509.KeyUsage {
 	switch pub.(type) {
 	case *rsa.PublicKey:
-		return x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
+		return fromProfile
 	case *ecdsa.PublicKey:
-		return x509.KeyUsageDigitalSignature
+		return fromProfile &^ x509.KeyUsageKeyEncipherment
 	default:
 		// Unreachable: validateCSR allows only the two types above. The
-		// narrowest usage is returned, so widening validateCSR grants nothing
-		// here by default. TestKeyUsageFor_CoversEveryAllowedKeyType pins the
-		// two lists together.
-		return x509.KeyUsageDigitalSignature
+		// narrowest reading is returned, so widening validateCSR grants
+		// nothing here by default. TestKeyUsageFor_CoversEveryAllowedKeyType
+		// pins the two lists together.
+		return fromProfile &^ x509.KeyUsageKeyEncipherment
 	}
 }
 

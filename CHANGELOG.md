@@ -7,6 +7,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Certificate profiles.** A request to `POST /certificates` names a
+  profile with `?profile=`, and the profile decides the extended key
+  usages, the key usages, which subject-alternative-name types are
+  copied, which subject attributes are copied, which key algorithms are
+  accepted and the lifetime. A request carrying anything the profile
+  does not copy is refused with the reason, not trimmed. A request
+  naming no profile, or an unknown one, is a 400 that lists the profiles
+  that exist; nothing is recorded on a refusal. Four are built in:
+  `tls-server`, `tls-client`, `code-signing` and `ocsp-responder` (with
+  `id-pkix-ocsp-nocheck`). A deployment may replace the set under
+  `ca.profiles`, in a closed vocabulary that fails startup on an unknown
+  name; `ca.cert_ttl_hours` becomes the ceiling no profile may exceed,
+  checked at startup and again at issuance. The two keytool credential
+  commands issue under `tls-client` and `tls-server`.
+
+  **Changed by this:** every leaf used to carry both `serverAuth` and
+  `clientAuth` and any subject the request asked for. Certificates issued
+  before this release are unaffected; the client check reads the store,
+  not the key usages. `keyEncipherment` is kept for RSA keys and dropped
+  for EC keys, as before, now per profile.
 - **The authenticated listener is wired through the local run and the
   Kubernetes overlay.** `deploy/docker/run-local.sh` provisions the TLS
   identity and an operator certificate after the root token is out of

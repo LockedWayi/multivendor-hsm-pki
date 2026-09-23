@@ -11,8 +11,10 @@ root, durable revocation state, a published CRL, a containerized
 deployment whose cluster refuses unsigned and unpinned images, a pipeline
 that signs every build of `main` keyless, and **mutual TLS on the write
 endpoints**, with the clients authorised by name from certificates this
-CA issued. It has no certificate profiles, no OCSP responder, no audit
-log, and no Vault custody. §8 says what planned work changes.
+CA issued, and certificate profiles, so every certificate is issued
+under a stated policy. It has no per-identity binding of profiles or
+names, no OCSP responder, no audit log, and no Vault custody. §8 says
+what planned work changes.
 
 ---
 
@@ -186,14 +188,17 @@ first such certificate is issued by the operator with the keytool before
 the service is up, over the intermediate token; every later one is issued
 through the API by an issuer.
 
-**Gets:** with an issuer identity, a certificate for any subject and any
-SAN it asks for; with a revoker identity, the revocation of any serial.
-Today there are no profiles: every leaf gets `serverAuth` **and**
-`clientAuth`, and any subject the CSR asks for. An issuer can therefore
-mint a certificate carrying another issuer's name, or a revoker's, and
-use it. The two lists separate the two operations; they do not separate
-issuers from each other. Certificate profiles, planned, bound what an
-issuer may name.
+**Gets:** with an issuer identity, a certificate under any profile the
+service has, for any subject and any name the profile copies; with a
+revoker identity, the revocation of any serial. Profiles bound the
+*shape*: a `tls-client` certificate cannot carry `serverAuth`, a
+`tls-server` certificate cannot carry a URI name, and no profile copies
+a subject attribute it does not list. They do not yet bound the *name*:
+an issuer can still mint a `tls-client` certificate carrying another
+issuer's URI, or a revoker's, and use it. The two lists separate the two
+operations; profiles separate the kinds of certificate; neither yet
+separates issuers from each other. The per-identity binding, planned,
+does.
 
 **Does not get:** anything the CSR could choose that `Issue` sets from
 policy: serial, validity window, key usage, CA status. A revoked issuer

@@ -76,7 +76,7 @@ func LoadIntermediate(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.W
 		return nil, err
 	}
 
-	return &CA{cert: cert, signer: signer, certTTL: params.CertTTL, dist: params.Distribution}, nil
+	return &CA{cert: cert, signer: signer, maxTTL: params.CertTTL, dist: params.Distribution}, nil
 }
 
 // checkIntermediateCert enforces the tier constraints described on

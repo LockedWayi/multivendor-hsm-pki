@@ -85,7 +85,7 @@ func TestIssue_Success(t *testing.T) {
 		}
 		csr := signedCSR(t, priv, pkix.Name{CommonName: "leaf.example.test"})
 
-		cert, err := c.Issue(csr)
+		cert, err := c.Issue(csr, tlsClient())
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
@@ -111,7 +111,7 @@ func TestIssue_OpenSSLVerify(t *testing.T) {
 		}
 		csr := signedCSR(t, priv, pkix.Name{CommonName: "openssl-check.example.test"})
 
-		cert, err := c.Issue(csr)
+		cert, err := c.Issue(csr, tlsClient())
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
@@ -146,11 +146,11 @@ func TestIssue_SerialsAreUnique(t *testing.T) {
 		}
 		csr := signedCSR(t, priv, pkix.Name{CommonName: "serial-test.example.test"})
 
-		first, err := c.Issue(csr)
+		first, err := c.Issue(csr, tlsClient())
 		if err != nil {
 			t.Fatalf("Issue (1st): %v", err)
 		}
-		second, err := c.Issue(csr)
+		second, err := c.Issue(csr, tlsClient())
 		if err != nil {
 			t.Fatalf("Issue (2nd): %v", err)
 		}
@@ -195,7 +195,7 @@ func TestIssue_InvalidSignatureRejected(t *testing.T) {
 			t.Fatalf("ParseCertificateRequest(tampered): %v", err)
 		}
 
-		if _, err := c.Issue(csr); !errors.Is(err, ca.ErrInvalidCSRSignature) {
+		if _, err := c.Issue(csr, tlsClient()); !errors.Is(err, ca.ErrInvalidCSRSignature) {
 			t.Fatalf("Issue with a tampered CSR signature = %v, want ErrInvalidCSRSignature", err)
 		}
 	})
@@ -210,7 +210,7 @@ func TestIssue_EmptySubjectRejected(t *testing.T) {
 		}
 		csr := signedCSR(t, priv, pkix.Name{})
 
-		if _, err := c.Issue(csr); !errors.Is(err, ca.ErrEmptySubject) {
+		if _, err := c.Issue(csr, tlsClient()); !errors.Is(err, ca.ErrEmptySubject) {
 			t.Fatalf("Issue with an empty subject = %v, want ErrEmptySubject", err)
 		}
 	})
@@ -225,7 +225,7 @@ func TestIssue_DisallowedCurveRejected(t *testing.T) {
 		}
 		csr := signedCSR(t, priv, pkix.Name{CommonName: "p224.example.test"})
 
-		if _, err := c.Issue(csr); !errors.Is(err, ca.ErrDisallowedKeyType) {
+		if _, err := c.Issue(csr, tlsClient()); !errors.Is(err, ca.ErrDisallowedKeyType) {
 			t.Fatalf("Issue with a P-224 key = %v, want ErrDisallowedKeyType", err)
 		}
 	})
@@ -240,7 +240,7 @@ func TestIssue_ShortRSAKeyRejected(t *testing.T) {
 		}
 		csr := signedCSR(t, priv, pkix.Name{CommonName: "short-rsa.example.test"})
 
-		if _, err := c.Issue(csr); !errors.Is(err, ca.ErrDisallowedKeyType) {
+		if _, err := c.Issue(csr, tlsClient()); !errors.Is(err, ca.ErrDisallowedKeyType) {
 			t.Fatalf("Issue with a 1024-bit RSA key = %v, want ErrDisallowedKeyType", err)
 		}
 	})
@@ -255,7 +255,7 @@ func TestIssue_UnsupportedKeyAlgorithmRejected(t *testing.T) {
 		}
 		csr := signedCSR(t, priv, pkix.Name{CommonName: "ed25519.example.test"})
 
-		if _, err := c.Issue(csr); !errors.Is(err, ca.ErrDisallowedKeyType) {
+		if _, err := c.Issue(csr, tlsClient()); !errors.Is(err, ca.ErrDisallowedKeyType) {
 			t.Fatalf("Issue with an Ed25519 key = %v, want ErrDisallowedKeyType", err)
 		}
 	})
@@ -272,7 +272,7 @@ func TestIssue_KeyUsageMatchesKeyAlgorithm(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
-		ecCert, err := c.Issue(signedCSR(t, ecKey, pkix.Name{CommonName: "ec.example.test"}))
+		ecCert, err := c.Issue(signedCSR(t, ecKey, pkix.Name{CommonName: "ec.example.test"}), tlsClient())
 		if err != nil {
 			t.Fatalf("Issue (EC): %v", err)
 		}
@@ -287,7 +287,7 @@ func TestIssue_KeyUsageMatchesKeyAlgorithm(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
-		rsaCert, err := c.Issue(signedCSR(t, rsaKey, pkix.Name{CommonName: "rsa.example.test"}))
+		rsaCert, err := c.Issue(signedCSR(t, rsaKey, pkix.Name{CommonName: "rsa.example.test"}), tlsClient())
 		if err != nil {
 			t.Fatalf("Issue (RSA): %v", err)
 		}
@@ -341,7 +341,7 @@ func TestIssue_SetsDistributionPoints(t *testing.T) {
 		}
 		csr := signedCSR(t, priv, pkix.Name{CommonName: "dist-points.example.test"})
 
-		cert, err := c.Issue(csr)
+		cert, err := c.Issue(csr, tlsClient())
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
@@ -388,7 +388,7 @@ func TestIssue_FailsClosedWithoutDistributionPoints(t *testing.T) {
 			// A nil signer: if the guard ever stopped running first, this
 			// would panic rather than pass.
 			c := ca.NewCA(&x509.Certificate{}, nil, time.Hour, tc.dist)
-			if _, err := c.Issue(csr); !errors.Is(err, ca.ErrNoDistributionPoints) {
+			if _, err := c.Issue(csr, tlsClient()); !errors.Is(err, ca.ErrNoDistributionPoints) {
 				t.Fatalf("Issue error = %v, want ErrNoDistributionPoints", err)
 			}
 		})
@@ -408,7 +408,7 @@ func TestIssue_OpenSSLShowsDistributionPoints(t *testing.T) {
 			t.Fatalf("GenerateKey: %v", err)
 		}
 		csr := signedCSR(t, priv, pkix.Name{CommonName: "openssl-dist.example.test"})
-		cert, err := c.Issue(csr)
+		cert, err := c.Issue(csr, tlsClient())
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}

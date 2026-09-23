@@ -222,7 +222,7 @@ cat <<EOF
   A write, as the operator run-local.sh issued a certificate to:
     curl -s --cacert $LOCAL/etc/root.pem \\
         --cert $LOCAL/operator/operator-chain.pem --key $LOCAL/operator/operator.key \\
-        --data-binary @your.csr https://localhost:18443/certificates
+        --data-binary @your.csr "https://localhost:18443/certificates?profile=tls-server"
   The TLS certificate names localhost, which is what the port-forward is.
 
 State that survives 'k3d cluster delete', all under $NODE_STATE:

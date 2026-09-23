@@ -92,10 +92,52 @@ ca:
   # ECDSA P-256 is the default curve; P-384 is available where a larger
   # security margin is warranted.
   curve: "P-256"
-  # Validity window for the leaf certificates this service issues. The
-  # intermediate's own validity was fixed at ceremony time and is not
-  # configurable here.
+  # The ceiling on any profile's validity. It no longer sets a
+  # certificate's lifetime itself: the profile does, and startup refuses a
+  # profile that grants more than this. The intermediate's own validity
+  # was fixed at ceremony time and is not configurable here.
   cert_ttl_hours: 8760
+
+  # Certificate profiles. A request names one with ?profile=; a request
+  # that names none, or one not here, is refused. There is no default:
+  # defaulting would re-create "any well-formed CSR gets serverAuth and
+  # clientAuth" behind a policy-shaped facade.
+  #
+  # Absent, the four built-in profiles apply: tls-server (serverAuth, a
+  # DNS or IP name required, CN, 90 days), tls-client (clientAuth, an
+  # optional URI or email name, CN/O/OU, 90 days), code-signing
+  # (codeSigning, CN/O, a year) and ocsp-responder (ocspSigning with
+  # id-pkix-ocsp-nocheck, 7 days). Present, this section REPLACES them,
+  # so write out every profile the deployment issues under. Every list is
+  # a name from a closed vocabulary and an unknown name fails startup:
+  #   extended_key_usages: serverAuth clientAuth codeSigning
+  #                        emailProtection timeStamping ocspSigning
+  #   key_usages:          digitalSignature contentCommitment
+  #                        keyEncipherment keyAgreement
+  #   san_types:           dns ip uri email
+  #   subject:             CN O OU C ST L   (attributes copied from the CSR;
+  #                        any other attribute in a CSR is refused)
+  #   key_algorithms:      ec-p256 ec-p384 ec-p521 rsa   (rsa is 2048+)
+  # keyEncipherment is kept for RSA keys and dropped for EC keys, which
+  # cannot do it (RFC 5480). keyCertSign and cRLSign cannot be written
+  # here at all: only the ceremony issues CA certificates.
+  #
+  # profiles:
+  #   tls-server:
+  #     extended_key_usages: [serverAuth]
+  #     key_usages: [digitalSignature, keyEncipherment]
+  #     san_types: [dns, ip]
+  #     san_required: true
+  #     subject: [CN]
+  #     key_algorithms: [ec-p256, ec-p384, ec-p521, rsa]
+  #     validity_hours: 2160
+  #   tls-client:
+  #     extended_key_usages: [clientAuth]
+  #     key_usages: [digitalSignature, keyEncipherment]
+  #     san_types: [uri, email]
+  #     subject: [CN, O, OU]
+  #     key_algorithms: [ec-p256, ec-p384, ec-p521, rsa]
+  #     validity_hours: 2160
 
   # This service holds the INTERMEDIATE and nothing above it.
   #

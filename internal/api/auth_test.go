@@ -37,7 +37,7 @@ func postCSR(t *testing.T, client *http.Client, url, cn string) (*http.Response,
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	return client.Post(url+"/certificates", "application/x-pem-file", bytes.NewReader(csrPEMFor(t, priv, cn)))
+	return client.Post(url+"/certificates?profile=tls-client", "application/x-pem-file", bytes.NewReader(csrPEMFor(t, priv, cn)))
 }
 
 // expectStatus reads and closes resp and fails unless it carries want.
@@ -361,7 +361,7 @@ func TestAuthenticatedListener_ServesAnHSMHeldIdentity(t *testing.T) {
 			t.Fatalf("CreateCertificateRequest over the HSM key: %v", err)
 		}
 		csr, _ := x509.ParseCertificateRequest(csrDER)
-		leaf, err := c.Issue(csr)
+		leaf, err := c.Issue(csr, tlsServer())
 		if err != nil {
 			t.Fatalf("issuing the TLS certificate: %v", err)
 		}
@@ -383,7 +383,8 @@ func TestAuthenticatedListener_ServesAnHSMHeldIdentity(t *testing.T) {
 		root, _ := x509.ParseCertificate(rootArtifacts.CertDER)
 		records := store.NewMemory()
 		handlers := api.NewServer(api.Config{
-			Issuer: c, Adapter: adapter, Workspace: ws, Records: records, CRLValidity: 24 * time.Hour,
+			Profiles: testProfiles(),
+			Issuer:   c, Adapter: adapter, Workspace: ws, Records: records, CRLValidity: 24 * time.Hour,
 			Root: rootArtifacts, Logger: testLogger(),
 			Authorization: api.Authorization{Issuers: []string{testIssuer}, Revokers: []string{testIssuer}},
 		})

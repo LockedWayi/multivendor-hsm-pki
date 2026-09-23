@@ -53,7 +53,7 @@ func writeLeaf(t *testing.T, c *ca.CA, key any) (string, *x509.Certificate) {
 		t.Fatalf("CreateCertificateRequest: %v", err)
 	}
 	csr, _ := x509.ParseCertificateRequest(csrDER)
-	leaf, err := c.Issue(csr)
+	leaf, err := c.Issue(csr, tlsServer())
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}

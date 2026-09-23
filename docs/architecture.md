@@ -123,9 +123,24 @@ surface is never large and untested at once.
    own TLS key lives on the intermediate's token under its own label, so
    no private key reaches disk for this either.
 
-   Planned next: an enforced issuance policy (certificate profiles,
-   naming authorization) and a delegated OCSP responder. Those controls
-   separate a CA from a signing oracle.
+   Issuance is profile-driven. A request names a profile, and the
+   profile — not the request — decides the extended key usages, the key
+   usages, which subject-alternative-name types are copied, which subject
+   attributes are copied, which key algorithms are accepted and the
+   lifetime. A request carrying anything the profile does not copy is
+   refused rather than trimmed, and a request naming no profile is
+   refused rather than defaulted: a default profile would re-create "any
+   well-formed CSR gets a certificate" behind a policy-shaped facade.
+   Four profiles are built in (`tls-server`, `tls-client`,
+   `code-signing`, `ocsp-responder`) and a deployment may replace the
+   set in its configuration, written in a closed vocabulary that fails
+   at startup on an unknown name. `ca.cert_ttl_hours` is the ceiling no
+   profile may exceed.
+
+   Planned next: binding each authenticated identity to the profiles and
+   name patterns it may request, and a delegated OCSP responder. Profiles
+   say what a certificate may be; the binding says who may ask for it.
+   Together they separate a CA from a signing oracle.
 
 6. **Vault with HSM auto-unseal (planned capstone).** Key custody moves
    out of process memory into Vault, and Vault's own root of trust is

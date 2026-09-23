@@ -14,6 +14,7 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 )
 
 // Adapter names accepted by pkcs11.adapter in the config file.
@@ -106,8 +107,19 @@ type VendorConfig struct {
 // ceremony. RootCertPath and RootCRLPath name public artifacts with no key
 // material. TestConfig_NoRootKeyReferences pins the distinction.
 type CAConfig struct {
-	CurveName    string `yaml:"curve"`
-	CertTTLHours int    `yaml:"cert_ttl_hours"`
+	CurveName string `yaml:"curve"`
+	// CertTTLHours is the ceiling: no profile may grant a longer validity.
+	// Since profiles exist it no longer sets any certificate's lifetime
+	// itself; the profile does. Startup refuses a profile above it, and
+	// Issue checks again at the point of use.
+	CertTTLHours int `yaml:"cert_ttl_hours"`
+	// Profiles replaces the built-in set (profile.Builtin) when present.
+	// Absent means the built-ins; present and empty is refused. A request
+	// names one of these, and one it does not name is refused: there is
+	// no default profile.
+	Profiles map[string]profile.Spec `yaml:"profiles"`
+	// ProfileSet is derived from Profiles by Load.
+	ProfileSet profile.Set `yaml:"-"`
 	// IntermediateKeyLabel is the CKA_LABEL of the intermediate key pair the
 	// ceremony created, on the token this service authenticates.
 	IntermediateKeyLabel string `yaml:"intermediate_key_label"`
@@ -197,6 +209,11 @@ func Load(path string) (*Config, error) {
 	if c.CA.CertTTLHours <= 0 {
 		return nil, fmt.Errorf("config: ca.cert_ttl_hours must be positive, got %d", c.CA.CertTTLHours)
 	}
+	profiles, err := loadProfiles(c.CA.Profiles, time.Duration(c.CA.CertTTLHours)*time.Hour)
+	if err != nil {
+		return nil, err
+	}
+	c.CA.ProfileSet = profiles
 	// Required, not defaulted. The service never creates a CA when it finds
 	// none, and a defaulted path would point somewhere the operator did not
 	// choose.
@@ -233,6 +250,27 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &c, nil
+}
+
+// loadProfiles compiles ca.profiles, or takes the built-ins when the
+// section is absent, and validates the result against the ceiling. An
+// unknown name in any list is refused here, so a typo cannot become a
+// certificate that asserts less, or more, than the operator meant.
+func loadProfiles(specs map[string]profile.Spec, ceiling time.Duration) (profile.Set, error) {
+	var set profile.Set
+	if specs == nil {
+		set = profile.Builtin()
+	} else {
+		parsed, err := profile.Parse(specs)
+		if err != nil {
+			return nil, fmt.Errorf("config: ca.profiles: %w", err)
+		}
+		set = parsed
+	}
+	if err := set.Validate(ceiling); err != nil {
+		return nil, fmt.Errorf("config: ca.profiles: %w", err)
+	}
+	return set, nil
 }
 
 // validateAuthenticatedSurface checks server.tls and api together. Either
