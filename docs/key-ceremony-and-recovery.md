@@ -489,6 +489,26 @@ throwaway token set, including each of those refusals, and proves at the
 end that the retired label can no longer sign, either through the
 resolver or straight through cosign.
 
+**Where the signing tokens live.** On the maintainer's machine the
+supply-chain token (image and artifact keys) and the offline inventory
+token are SoftHSM2 token directories, and they are the one piece of state
+here that cannot be rebuilt from a repository. `ci/cosign.sh` and
+`ci/countersign-release.sh` find them through `HSM_PKI_SIGNING_STATE`,
+which defaults to `.local/signing` inside the checkout. That default is a
+convenience for a throwaway token set, not a place for keys anyone relies
+on: a path inside a checkout is one `git clean -xdf`, one re-clone or one
+`git add -f` away from being lost or published. Decided 2026-09-23: the
+store lives in a directory outside every checkout, and the shell profile
+exports `HSM_PKI_SIGNING_STATE` pointing at it. Changing the scripts'
+default instead was rejected, because it would move every contributor's
+throwaway store to serve one machine, while the variable already says
+where the real one is. Moving the store between machines follows the same
+rule as §5.3: it travels encrypted and never through a repository, and it
+is not considered moved until every published key in `docs/keys/` has
+signed a fresh blob on the restored token and an independent
+implementation (openssl) has verified that signature against the
+published public key. The copy on the source machine is kept until then.
+
 ## 8. The credentials the authenticated API needs
 
 The write endpoints accept only a client certificate this CA issued, which
