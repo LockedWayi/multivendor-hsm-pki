@@ -58,28 +58,29 @@ Three properties of the harness matter for a new vendor:
 
 | Suite | Tests | Proves |
 |---|---:|---|
-| `internal/pkcs11` `TestConformance` | 1 group, ~20 subtests | The `VendorAdapter` contract: sessions, login lifecycle, key generation and **key protection attributes**, sign/verify, encrypt/decrypt, wrap/unwrap, find/attributes, error mapping |
-| `internal/ca` ceremony, re-issue + intermediate | 18 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, intermediate re-issue under an existing root, `LoadIntermediate`'s startup gates |
-| `internal/ca` issuance + signer | 17 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points |
-| `internal/api` HTTP surface | 27 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness |
+| `internal/pkcs11` `TestConformance` | 1 group, 26 cases | The `VendorAdapter` contract: sessions, login lifecycle, key generation and **key protection attributes**, sign/verify, encrypt/decrypt, wrap/unwrap, find/attributes, error mapping |
+| `internal/ca` ceremony, re-issue + intermediate | 16 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, intermediate re-issue under an existing root, `LoadIntermediate`'s startup gates |
+| `internal/ca` issuance, signer, service + profiles | 25 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points, the profile deciding the certificate and a request without one refused |
+| `internal/api` HTTP surface | 46 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness (27); **mutual TLS on the write endpoints** over an HSM-held TLS identity, with the handshake, the store lookup and the identity lists each refusing on their own (8); the profile query parameter (2); the per-identity binding of profiles and names, every deny path (5); and the OCSP responder over both transports, its error responses, its absence without a key, the AIA pointer in new leaves and `openssl ocsp` agreeing with it (4) |
 | `internal/signingkey` | 18 | Supply-chain key provisioning and destruction: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, the duplicate-key check, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
-| `cmd/hsm-pki-keytool` | 18 | The ceremony, the supply-chain key provisioning, its retirement against the inventory, and the signed key-inventory generation as an operator runs them, through the CLI's own adapter, including the two-token refusal and the openssl check of an HSM-made inventory signature |
+| `cmd/hsm-pki-keytool` | 24 | The ceremony, the supply-chain key provisioning, its retirement against the inventory, the signed key-inventory generation (18), and the three credential commands (6): the TLS identity, the first client certificate and the OCSP responder key, as an operator runs them through the CLI's own adapter, including the openssl-made request the runbook tells an operator to make and a real mutual handshake against the service |
 | `cmd/hsm-pki-server` | 3 | Startup: workspace resolution and anchor login, an unknown workspace refused, a wrong PIN refused |
 
-The per-suite numbers above are counts of `hsmtest.ForEach` call sites in
-the source on 2026-09-21, which is what a top-level `Test.../<backend>`
-subtest is. The last full-suite measurement, 2026-09-10, counted **96**
-before the retirement command and its tests landed; the next run inside
-the container re-measures it with:
+**133** per-backend subtests in total, measured 2026-09-23 inside the
+container from the run that produced the per-suite numbers above, with:
 
 ```sh
 go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
 ```
 
+The count was 96 on 2026-09-10; the difference is the retirement
+command, the credential commands, mutual TLS, profiles, the binding and
+the responder.
+
 The anchor matters. `--- PASS:` lines carry a timing suffix, so an
 end-anchored pattern against them matches nothing and reports zero. An
 unanchored pattern counts nested subtests too, which is a different number
-(138) measuring a different thing.
+measuring a different thing.
 
 ## 4. What does not multiply
 
@@ -95,6 +96,16 @@ prove nothing:
   validity window and its signature verification are pure logic, and the
   openssl cross-check there needs no token
 - `internal/store`: SQLite records, revocation, CRL counter
+- `internal/profile` and `internal/entitlement`: a profile is a
+  vocabulary and a set of rules over a request, and a binding is a set
+  of glob patterns over names; both are decided before a key is touched
+- `internal/responder`: the OCSP responder's logic (status from the
+  store, the cache and its invalidation, the error responses, the
+  renewal half-life, `tryLater` under an expired certificate) over
+  software keys. The HSM-signed path is `internal/api`'s OCSP tests,
+  which run on every backend
+- `internal/artifactsig`: the release-artifact verifier reads a bundle
+  and a public key; nothing in it opens a token
 - `cmd/hsm-pki-server`'s health-check probe (`healthcheck_test.go`): HTTP
   against a local test server and listen-address rewriting. It never opens
   a token, and `/healthz` is the endpoint that does not
@@ -109,6 +120,21 @@ vendor backend provides. The ambiguous-label refusals in
 sharing one label. The server test provisions them through
 `hsmtest.NewSoftHSM2Tokens` and says why in its comment. That is the one
 exception to the every-backend rule in `cmd/`.
+
+Three more run on every backend and **skip on ProtectToolkit-C software
+emulation** after asserting a refusal: the TLS identity, the client
+credential round trip and the OCSP key
+(`TestCredentials_TheServiceAcceptsWhatTheKeytoolIssues`,
+`TestRunProvisionTLSIdentityCmd_RefusesASecondKeyUnderTheSameLabel`,
+`TestRunProvisionOCSPKeyCmd_ProvisionsAKeyTheServiceCanSignWith`). The
+emulator's RNG restarts with every `C_Initialize` (§5), so the first key
+pair a fresh process generates is one the token has handed out before,
+and the command refuses to provision a duplicate. The test checks that
+the refusal wrote nothing and freed the label, then skips with the
+reason in the log, because what it exists to measure cannot be measured
+on a token that is not a key source. The last full run on that backend,
+before public #51 on 2026-09-23, reported 192 passed, 3 skipped, 0
+failed, and those three are the skips.
 
 ---
 

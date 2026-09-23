@@ -6,7 +6,7 @@ not this codebase. Every claim about what an attacker cannot do should be
 traceable to a specific mechanism in the code. Every claim that is not yet
 true is labelled as such.
 
-**Status on 2026-09-21.** The platform has a two-tier CA with an offline
+**Status on 2026-09-23.** The platform has a two-tier CA with an offline
 root, durable revocation state, a published CRL, a containerized
 deployment whose cluster refuses unsigned and unpinned images, a pipeline
 that signs every build of `main` keyless, and **mutual TLS on the write
@@ -44,12 +44,14 @@ Ordered by what their loss costs.
 |---|---|---|
 | `ca-root-key-vN` | Offline token, separate from everything else | Every certificate this PKI has ever issued becomes untrustworthy. A root cannot be revoked. A CRL signed by the compromised key is not evidence of anything, so recovery is distributing a new root to every relying party out of band. |
 | `ca-intermediate-key-vN` | Online token, authenticated by the service | An attacker issues certificates trusted by anyone trusting the root, until the intermediate is revoked and that revocation reaches relying parties. |
+| `ca-tls-key-vN` | Online token, beside the intermediate, under its own label | An attacker who can use it impersonates the service to its operators: terminates their mutual TLS and reads the requests they submit. It cannot issue, because issuance needs the intermediate's key, and the store still decides who is a client. |
+| `ocsp-signing-key-vN` | Online token, beside the intermediate, under its own label | The attacker answers `good` for a revoked certificate, or `revoked` for a good one, to every relying party that asks the responder, for as long as the responder certificate lives. `id-pkix-ocsp-nocheck` makes that certificate unrevocable in practice, so its seven-day lifetime is the whole limit. It cannot issue or sign a CRL. |
 | `image-signing-key-vN`, `artifact-signing-key-vN` | Supply-chain token, separate from the CA's tokens (§6.1) | Forged container images pass admission. Forged release artifacts pass the release verifier. |
 | `inventory-signing-key-vN` | Offline inventory token | The attacker publishes their own list of trusted keys, and every verifier that holds the anchor accepts it. |
 | `audit-signing-key-vN` | Not yet provisioned | The audit chain can be rewritten, so no other compromise leaves reliable evidence. |
 | Token user PINs | Environment variables, read at the point of use | A PIN authenticates the token, so it is equivalent to holding every key on that token. See §6.1. |
 | Revocation state | `ca.store_path`, embedded SQLite | A revoked certificate silently becomes valid again. This is why the store is required with no in-memory fallback. |
-| The CRL publication channel | `GET /crl`, `GET /root.crl` | Not a secret, and still an asset. A relying party that cannot fetch a CRL concludes revocation is unavailable and usually proceeds. Availability of this channel is a security property (§6.2). |
+| The revocation channels | `GET /crl`, `GET /root.crl`, and the OCSP responder at `/ocsp` | Not secrets, and still assets. A relying party that cannot fetch a CRL or reach the responder concludes revocation is unavailable and usually proceeds. Availability of both channels is a security property (§6.2). |
 
 Two assets are not on this list because the design prevents them from
 existing: a private key in a file or a backup (keys are generated on the
@@ -64,7 +66,8 @@ carries the name of an environment variable, never a value).
                     ┌───────────────────────────────────────────┐
    INTERNET ────────┤ B1: the public surface, plain HTTP        │
    (unauthenticated)│  GET /crl, /root.crl, /intermediate.crt,  │
-                    │  /root.crt, /healthz, /readyz. No write   │
+                    │  /root.crt, /healthz, /readyz, and the    │
+                    │  OCSP responder at /ocsp. No write        │
                     │  endpoint is routed here at all.          │
                     ├───────────────────────────────────────────┤
    OPERATORS ───────┤ B1': the authenticated surface, mutual TLS│
@@ -82,8 +85,10 @@ carries the name of an environment variable, never a value).
                             │                       │
             ┌───────────────▼──────────┐   ┌────────▼─────────────┐
             │ B3: the online token     │   │ B4: the store        │
-            │  ca-intermediate-key-vN  │   │  issued + revoked    │
-            │  and nothing else (§6.1) │   │  records, CRL number │
+            │  ca-intermediate-key-vN, │   │  issued + revoked    │
+            │  ca-tls-key-vN,          │   │  records, CRL number │
+            │  ocsp-signing-key-vN;    │   │                      │
+            │  no other purpose (§6.1) │   │                      │
             └──────────────────────────┘   └──────────────────────┘
 
     ═══════════════ no path crosses this line at runtime ═══════════════
@@ -167,7 +172,10 @@ Three consequences follow, and each is an attacker capability:
 ### A1: Unauthenticated network client
 
 **Gets:** the public artifacts, which are public: the two CRLs, the two
-CA certificates, and the probe answers. Nothing else. The write endpoints
+CA certificates, the probe answers, and a signed OCSP answer about any
+serial it cares to name (`good`, `revoked` or `unknown`; a serial this CA
+never issued is `unknown`, never `good`, and is never cached). Nothing
+else. The write endpoints
 are not routed on the plain listener, so there is no request an
 unauthenticated client can make that reaches `Issue` or the store. On the
 authenticated listener the handshake itself refuses a client with no
@@ -235,7 +243,11 @@ that login for its whole lifetime (the anchor login), so an attacker with
 code execution does not need the PIN. The session is already
 authenticated. Concretely: issue arbitrary certificates under the
 intermediate, sign arbitrary CRLs including ones that omit real
-revocations, and read or corrupt the store.
+revocations, and read or corrupt the store. The same login reaches the
+two smaller keys on that token: the attacker can sign OCSP responses that
+call a revoked certificate `good` for as long as the responder
+certificate lives, and can present the service's TLS identity to its
+operators.
 
 **Does not get:**
 
@@ -450,7 +462,18 @@ and not against the attacker it names.
 
 This is the same reasoning that put the root on its own token, applied one
 tier down. **The supply-chain keys are provisioned on a third, separate
-token**, so A3 yields the intermediate and nothing else.
+token**, so A3 yields the online token and nothing on any other.
+
+The online token holds three keys, not one: the intermediate, the
+service's TLS key and the OCSP responder's key, each under its own
+versioned label and each refused for the others' work. The two smaller
+keys share the intermediate's token on purpose. Both are used by the same
+process on every request, so a token of their own would be a second
+login held by the same process, which separates nothing against A3 and
+costs a second PIN to protect. What the separate labels buy is the
+smaller kind of separation: a handshake signs bytes the peer chooses and
+the key that signs certificates must never do that, and a compromised
+responder key can lie about status and nothing else.
 
 **A fourth token exists for the same reason one tier further up.** The
 key inventory is the document that tells every verifier which keys to
@@ -534,7 +557,6 @@ A threat model that claims everything is defended is not a threat model:
 
 | Work | Changes for this model |
 |---|---|
-| **Certificate profiles and OCSP** | Profiles bound what A2 can obtain, and separate issuers from each other. OCSP narrows A8's blocking window. |
 | **Vault custody** | Changes where the intermediate lives and what a compromised service can reach. The custody decision must be made against this model. |
 | **The audit chain** | Makes compromises evidenced. Its key must not be reachable by the process it audits (§6.1). A deleted webhook (B7) and an excluded-namespace bypass (A9) become visible. |
 

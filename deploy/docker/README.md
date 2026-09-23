@@ -54,7 +54,7 @@ Four mounts.
 | Path | Mode | What it is |
 |---|---|---|
 | `/pkcs11/<module>.so` | read-only | The PKCS#11 module. Code. |
-| `/etc/hsm-pki/` | read-only | `config.yaml`, the intermediate certificate, the root certificate and root CRL. No key material, no PIN. |
+| `/etc/hsm-pki/` | read-only | `config.yaml`, the intermediate certificate, the root certificate and root CRL, and the service's TLS certificate (`tls.pem`, a public leaf; its key is on the token). No key material, no PIN. |
 | `/var/lib/softhsm/tokens/` | **writable** | SoftHSM2's token store. Only when using SoftHSM2. |
 | `/var/lib/hsm-pki/` | **writable** | The CA's SQLite store: issued and revoked records and the CRL number. |
 
@@ -124,9 +124,12 @@ absent because the shell, the package manager and the toolchain are absent.
 Both backends, in this image, with only `config.yaml` changing between
 them:
 
-- **SoftHSM2**: full startup, `connected to HSM`, a certificate issued over
-  HTTP (`201`), the SQLite store written on a read-only root filesystem, and
-  the root CRL served as DER and parsed by `openssl crl -inform DER`.
+- **SoftHSM2**: full startup, `connected to HSM`, a certificate issued
+  (`201`; over plain HTTP at the time, over mutual TLS since the write
+  endpoints moved behind it), the SQLite store written on a read-only
+  root filesystem, and the root CRL served as DER and parsed by `openssl
+  crl -inform DER`. `run-local.sh` repeats the whole path on every run,
+  the OCSP query included.
 - **ProtectToolkit-C 7.3.3 software emulation**: `connected to HSM`. The
   module loaded, the token resolved by label, the user login was
   established. Then a clean stop at the missing intermediate certificate,
