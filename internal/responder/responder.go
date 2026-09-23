@@ -26,7 +26,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
-	"crypto/sha1" //nolint:gosec // RFC 6960 identifies the issuer by SHA-1 hashes of its name and key; it is a lookup key, not a security boundary.
+	"crypto/sha1" // RFC 6960 CertID hashes; see issuerHashes.
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -378,7 +378,15 @@ func issuerHashes(issuer *x509.Certificate) (map[crypto.Hash][]byte, map[crypto.
 		var n, k []byte
 		switch h {
 		case crypto.SHA1:
-			s1 := sha1.Sum(issuer.RawSubject) //nolint:gosec // see the import comment
+			// RFC 6960 §4.1.1 identifies the issuer by hashes under the
+			// hash the client chose, and every client sends SHA-1 by
+			// default; a responder refusing it answers no request from
+			// openssl ocsp or any TLS stack. A lookup key, not a
+			// signature: the response is signed with ECDSA over SHA-256.
+			// nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-sha1
+			s1 := sha1.Sum(issuer.RawSubject)
+			// Same reason, the key hash half of the same CertID.
+			// nosemgrep: go.lang.security.audit.crypto.use_of_weak_crypto.use-of-sha1
 			s2 := sha1.Sum(spki.PublicKey.RightAlign())
 			n, k = s1[:], s2[:]
 		case crypto.SHA256:
