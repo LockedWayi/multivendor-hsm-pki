@@ -99,10 +99,14 @@ spec:
               protocol: TCP
 
           env:
-            # Placeholder until Vault holds the PIN. A Kubernetes Secret is
-            # base64-encoded, not encrypted: it is readable by anyone who can
-            # read Secrets in this namespace, and it sits in etcd. The config
-            # file names the variable rather than holding the value, so the
+            # The PIN's custody, and its known weak point. A Kubernetes
+            # Secret is base64-encoded, not encrypted: it is readable by
+            # anyone who can read Secrets in this namespace, it sits in
+            # etcd, and it reaches the process environment. The designed
+            # replacement, a secrets manager releasing the PIN at the point
+            # of use to the pod's own identity, is optional and not
+            # scheduled (docs/architecture.md, layer 6). The config file
+            # names the variable rather than holding the value, so the
             # source can change without the service changing.
             - name: HSM_PKI_INTERMEDIATE_PIN
               valueFrom:

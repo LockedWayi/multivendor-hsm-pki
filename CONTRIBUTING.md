@@ -89,6 +89,24 @@ provenance predicate filled in on a laptop signs as well as a true one.
 Conventional Commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`,
 `chore:`, `ci:`. One logical change per commit.
 
+## Setting up a workstation
+
+One command takes a fresh machine with docker and git to the state every
+script here assumes, and proves it got there:
+
+```sh
+tools/bootstrap-workstation.sh                 # tools, dev image, the suite on SoftHSM2, one local run
+tools/bootstrap-workstation.sh --no-smoke      # the same without bringing the service up
+```
+
+It installs nothing: a missing tool is named with what it is for. The
+summary reports the per-backend subtest counts with the same anchored
+pattern `docs/test-matrix.md` measures. `--with-protectserver` adds the
+maintainer's ProtectToolkit-C emulator when the seven `PROTECTSERVER_*`
+variables are set, and refuses when any is missing rather than quietly
+running SoftHSM2 alone. Vendor clients are never installed by it; what a
+backend must provide is in `docs/test-matrix.md`, section 5.
+
 ## Running tests locally
 
 `internal/pkcs11`'s test suite needs a real SoftHSM2 PKCS#11 module. Unit
