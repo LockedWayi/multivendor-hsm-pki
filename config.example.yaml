@@ -251,6 +251,7 @@ ca:
   # lost; an operator who does know it puts it here.
   # crl_number_floor: "1756384000000"
 
-# There is no vault section. Vault custody is planned (docs/architecture.md,
-# layer 6) and internal/config has no field for it yet; a section here would
-# be parsed as nothing and silently ignored.
+# There is no vault section. A secrets manager for the PIN is designed and
+# optional, not scheduled (docs/architecture.md, layer 6); internal/config
+# has no field for it, so a section here would be parsed as nothing and
+# silently ignored.

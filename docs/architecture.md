@@ -13,9 +13,11 @@ nShield and Luna planned. A Certificate Authority is built on that core.
 It issues, revokes and reports X.509 certificates without caring which
 vendor's HSM holds its keys. The service is containerized, deployed to
 Kubernetes, and shipped by a CI/CD pipeline that scans code, dependencies
-and images before anything ships. The planned capstone anchors the CA's
-root of trust to a hardware HSM through HashiCorp Vault auto-unseal. The
-same core is the platform's signing foundation beyond certificates.
+and images before anything ships. The planned capstone is the same
+abstraction measured against four vendors; Vault custody with
+HSM-anchored auto-unseal was the capstone until 2026-09-23 and is now an
+optional, designed extension. The same core is the platform's signing
+foundation beyond certificates.
 Container images and release artifacts are signed by their own HSM-held
 keys over the same PKCS#11 boundary.
 
@@ -202,11 +204,35 @@ surface is never large and untested at once.
    out is the choice made with the reasons in view rather than by
    habit.
 
-   Planned next: Vault custody.
+   Planned next: the third and fourth backends.
 
-6. **Vault with HSM auto-unseal (planned capstone).** Key custody moves
-   out of process memory into Vault, and Vault's own root of trust is
-   anchored to a hardware HSM.
+6. **Luna and nShield (planned next, the capstone).** Every token-touching
+   test runs against a Luna partition and an nShield softcard under the
+   maintainer's own access, joining SoftHSM2 and ProtectServer in one
+   registry. This is where the login and key-protection models, `CKA_ID`
+   and label handling, EC point encoding, session limits and error codes
+   are expected to differ, and where the core gains a declared capability
+   per adapter that the conformance suite measures, so a difference is
+   absorbed as a declaration rather than a branch on a vendor name. Both
+   paths are maintainer-verified, never CI-verified, and labelled so.
+
+   **Optional, not scheduled: a secrets manager for the PIN.** Decided and
+   set aside on 2026-09-23. If built, no key would move:
+   the CA's keys stay on the HSM, and the secrets manager holds the
+   intermediate token's PIN, the workload's identity and the policy. The
+   pod would prove its ServiceAccount identity, receive a short-lived
+   credential scoped to one path, fetch the PIN at the point of use into
+   the same C-heap buffer the login already uses, and zero it after
+   `C_Login`; the PIN would be in no Secret, ConfigMap, image or process
+   environment, and every read would be an audit event. That replaces the
+   Kubernetes Secret the deployment carries today, and changes nothing
+   for a compromised process, which already holds the anchor login. The
+   shapes that move a key into software (the secrets manager as the CA,
+   or as the intermediate's key store) were considered and rejected: each
+   is a step sideways in custody for the tier that moves. The software
+   would be OpenBao rather than Vault: PKCS#11 auto-unseal is an
+   Enterprise feature in Vault and open source in OpenBao, and Vault is
+   under the same licence this repository already declined for Terraform.
 
 7. **Verifiable evidence (planned).** A signed, hash-chained audit log of
    everything the CA did, countersigned by its own purpose-separated HSM

@@ -557,7 +557,8 @@ A threat model that claims everything is defended is not a threat model:
 
 | Work | Changes for this model |
 |---|---|
-| **Vault custody** | Changes where the intermediate lives and what a compromised service can reach. The custody decision must be made against this model. |
+| **Luna and nShield** | No boundary moves. The claims above that say "against a hardware HSM" (A4, A6) are measured on hardware for the first time; the model will say on which, and what was and was not confirmed. Vendor divergences become §6 findings where they change what an attacker can do. |
+| **A secrets manager for the PIN** (optional, not scheduled) | Would change the "Token user PINs" asset's row: the PIN would live in the secrets manager, be released only to the pod's own identity under a short-lived credential, and be read at the point of use. No key would move, so A3 is unchanged. The custody decision of 2026-09-23 was made against this model and is recorded in `architecture.md`, layer 6. |
 | **The audit chain** | Makes compromises evidenced. Its key must not be reachable by the process it audits (§6.1). A deleted webhook (B7) and an excluded-namespace bypass (A9) become visible. |
 
 ---
