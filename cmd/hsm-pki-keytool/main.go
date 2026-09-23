@@ -67,7 +67,7 @@ func run(args []string) error {
 func runCeremonyCmd(args []string) error {
 	fs := flag.NewFlagSet("ceremony", flag.ExitOnError)
 
-	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\" or \"protectserver\"")
+	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\", \"protectserver\" or \"luna\"")
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	curveName := fs.String("curve", "P-256", "EC curve for both key pairs: P-256, P-384, or P-521")
 
@@ -185,8 +185,10 @@ func newVendorAdapter(adapterName, modulePath string) (pk11.VendorAdapter, error
 		return pk11.NewSoftHSM2Adapter(modulePath)
 	case config.AdapterProtectServer:
 		return pk11.NewProtectServerAdapter(modulePath)
+	case config.AdapterLuna:
+		return pk11.NewLunaAdapter(modulePath)
 	default:
-		return nil, fmt.Errorf("unknown -adapter %q (want %q or %q)", adapterName, config.AdapterSoftHSM2, config.AdapterProtectServer)
+		return nil, fmt.Errorf("unknown -adapter %q (want %q, %q or %q)", adapterName, config.AdapterSoftHSM2, config.AdapterProtectServer, config.AdapterLuna)
 	}
 }
 

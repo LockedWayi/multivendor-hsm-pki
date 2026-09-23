@@ -86,7 +86,7 @@ type issuerFlags struct {
 // addIssuerFlags registers the shared flags on fs.
 func addIssuerFlags(fs *flag.FlagSet) *issuerFlags {
 	return &issuerFlags{
-		adapterName:     fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\" or \"protectserver\""),
+		adapterName:     fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\", \"protectserver\" or \"luna\""),
 		modulePath:      fs.String("module", "", "path to the PKCS#11 module (.so)"),
 		workspaceLabel:  fs.String("workspace", "", "token label the intermediate key lives on"),
 		workspaceSerial: fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label"),
@@ -377,7 +377,7 @@ func builtinProfile(name string, validity time.Duration) *profile.Profile {
 // responder key must be able to lie about status and nothing else.
 func runProvisionOCSPKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("provision-ocsp-key", flag.ExitOnError)
-	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\" or \"protectserver\"")
+	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\", \"protectserver\" or \"luna\"")
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	workspaceLabel := fs.String("workspace", "", "token label the intermediate key lives on")
 	workspaceSerial := fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label")

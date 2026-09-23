@@ -75,6 +75,7 @@ const (
 	AttrWrap           AttributeType = AttributeType(p11.CKA_WRAP)
 	AttrUnwrap         AttributeType = AttributeType(p11.CKA_UNWRAP)
 	AttrKeyType        AttributeType = AttributeType(p11.CKA_KEY_TYPE)
+	AttrValueLen       AttributeType = AttributeType(p11.CKA_VALUE_LEN)
 	AttrEcParams       AttributeType = AttributeType(p11.CKA_EC_PARAMS)
 	AttrEcPoint        AttributeType = AttributeType(p11.CKA_EC_POINT)
 	AttrModulus        AttributeType = AttributeType(p11.CKA_MODULUS)
@@ -184,5 +185,6 @@ type SecretKeyRequest struct {
 	Wrap        bool
 	Unwrap      bool
 	Extractable bool
-	Sensitive   bool
+	// There is no Sensitive field: every secret key is created with
+	// CKA_SENSITIVE true (base.go, GenerateSecretKey).
 }

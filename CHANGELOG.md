@@ -171,8 +171,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and in the pipeline.
 - **A scheduled pin-freshness check** (`ci/check-pin-freshness`) for the
   digests Dependabot cannot see, with a report that reaches somebody.
+- **Luna Network HSM 7 as a third backend** (maintainer-verified, never
+  CI-verified). `pkcs11.LunaAdapter` over the Luna client's
+  `libCryptoki2.so`, `-adapter luna` in `hsm-pki-keytool` and
+  `ci/token-cleanup`, `pkcs11.adapter: luna` in the config, and a
+  registry entry in `internal/hsmtest` and in the conformance suite. The
+  whole suite runs against it with the `LUNA_*` variables and
+  `ChrystokiConfigurationPath`; `LUNA_ROLE` runs the conformance suite as
+  the Crypto Officer or the Limited Crypto Officer
+  (`pkcs11.LunaRoleLimitedCryptoOfficer`, the vendor user type
+  `0x80000003`). Two measured refusals are declared per backend in the
+  suite and asserted, not skipped: Luna does not wrap a private key under
+  its default partition policy, and it needs `CKA_VALUE_LEN` in a
+  secret-key unwrap template that SoftHSM2 refuses as read-only.
 
 ### Changed
+- **Every secret key is created with `CKA_SENSITIVE` true**, as private
+  keys already were, and `SecretKeyRequest` has no `Sensitive` field any
+  more. Luna refuses to create a non-sensitive secret key at all, while
+  SoftHSM2 and ProtectToolkit-C create one whose value any authenticated
+  session can read. No code here generates secret keys outside the tests.
 - `ci/cosign.sh fetch` returns at once when the pinned binary is already
   installed and matches the pin.
 - `deploy/docker/provision-signing-keys.sh` requires both token PINs from

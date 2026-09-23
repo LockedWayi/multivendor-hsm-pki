@@ -23,6 +23,7 @@ import (
 const (
 	AdapterSoftHSM2      = "softhsm2"
 	AdapterProtectServer = "protectserver"
+	AdapterLuna          = "luna"
 )
 
 // Config is the parsed form of config.yaml.
@@ -86,6 +87,7 @@ type PKCS11Config struct {
 	Session       SessionConfig `yaml:"session"`
 	SoftHSM2      *VendorConfig `yaml:"softhsm2"`
 	ProtectServer *VendorConfig `yaml:"protectserver"`
+	Luna          *VendorConfig `yaml:"luna"`
 
 	// SessionOptions is derived from Session by Load. Session holds the raw
 	// YAML strings.
@@ -454,9 +456,14 @@ func (p *PKCS11Config) selectedVendor() (*VendorConfig, error) {
 			return nil, fmt.Errorf("config: pkcs11.adapter is %q but pkcs11.protectserver is not configured", p.Adapter)
 		}
 		return p.ProtectServer, nil
+	case AdapterLuna:
+		if p.Luna == nil {
+			return nil, fmt.Errorf("config: pkcs11.adapter is %q but pkcs11.luna is not configured", p.Adapter)
+		}
+		return p.Luna, nil
 	default:
-		return nil, fmt.Errorf("config: unknown pkcs11.adapter %q (want %q or %q)",
-			p.Adapter, AdapterSoftHSM2, AdapterProtectServer)
+		return nil, fmt.Errorf("config: unknown pkcs11.adapter %q (want %q, %q or %q)",
+			p.Adapter, AdapterSoftHSM2, AdapterProtectServer, AdapterLuna)
 	}
 }
 
@@ -507,6 +514,8 @@ func (c *Config) NewVendorAdapter() (pkcs11.VendorAdapter, error) {
 		return pkcs11.NewSoftHSM2Adapter(vendor.ModulePath)
 	case AdapterProtectServer:
 		return pkcs11.NewProtectServerAdapter(vendor.ModulePath)
+	case AdapterLuna:
+		return pkcs11.NewLunaAdapter(vendor.ModulePath)
 	default:
 		// Unreachable: selectedVendor already rejected any other value.
 		return nil, fmt.Errorf("config: unknown pkcs11.adapter %q", c.PKCS11.Adapter)

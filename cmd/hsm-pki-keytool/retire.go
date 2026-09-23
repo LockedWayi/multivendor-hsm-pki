@@ -39,7 +39,7 @@ import (
 func runRetireSigningKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("retire-signing-key", flag.ExitOnError)
 
-	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\" or \"protectserver\"")
+	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\", \"protectserver\" or \"luna\"")
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 
 	workspaceLabel := fs.String("workspace", "", "token label holding the key; the supply-chain token")
