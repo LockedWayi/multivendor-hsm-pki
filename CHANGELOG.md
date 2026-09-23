@@ -7,6 +7,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **A delegated OCSP responder.** `GET /ocsp/{request}` and `POST /ocsp`
+  on the public listener answer `good`, `revoked` (with time and reason)
+  or `unknown` from the same store the CRL is built from, with the CRL's
+  freshness window, and a revocation drops both caches at once. `unknown`
+  for a serial this CA never issued, never `good`: a responder that
+  defaults to good vouches for forgeries. A malformed request, a request
+  about another issuer, an unavailable store and an expired responder
+  certificate are each answered with the RFC 6960 error response that
+  says so (`malformedRequest`, `unauthorized`, `tryLater`, `tryLater`),
+  not an HTTP error. Nonces are not echoed (RFC 5019).
+
+  The responder signs with its own key on the intermediate's token, from
+  `hsm-pki-keytool provision-ocsp-key`, under a certificate the service
+  issues itself at startup through the `ocsp-responder` profile
+  (`ocspSigning` plus `id-pkix-ocsp-nocheck`, seven days) and renews at
+  half-life; the certificate is checked at the point of signing, not only
+  at startup. Configured by `ca.ocsp.key_label`; absent means no route
+  and no pointer. With a responder configured every newly issued
+  certificate carries the OCSP URL in its AIA. **Certificates issued
+  before the responder existed carry no OCSP pointer and never will**;
+  an extension is fixed at signature time.
+
+  Measured: `openssl ocsp` verifies the response chain and reads good,
+  then revoked after a revocation over the API, then unknown for a serial
+  this CA never issued, on both backends. Adds `golang.org/x/crypto`,
+  the standard library's extension family, for `ocsp`.
 - **Issuance entitlements.** Each issuer in `api.issuers` is bound to the
   profiles it may request and to name patterns over the common name and
   the four subject-alternative-name types (`dns:*.example.test`,

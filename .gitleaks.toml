@@ -23,12 +23,15 @@ useDefault = true
 
 # Public, published key labels. Matching is anchored to the exact versioned
 # label pattern this platform provisions so a genuinely
-# secret value sitting near the word "key" is still reported.
+# secret value sitting near the word "key" is still reported. The OCSP
+# responder's label joined on 2026-09-23: its public half travels in every
+# response the responder signs, so the label is as public as the others,
+# and it recurs the same way (config, run-local, the runbook).
 [[allowlists]]
-description = "published signing-key labels are public by construction (their public halves live in docs/keys/)"
+description = "published signing-key labels are public by construction (their public halves live in docs/keys/, or in the responder certificate every OCSP response carries)"
 regexTarget = "match"
 regexes = [
-  '''(image|artifact|audit|inventory)-signing-key-v[0-9]+''',
+  '''(image|artifact|audit|inventory|ocsp)-signing-key-v[0-9]+''',
 ]
 
 # .local/ is gitignored developer state (throwaway tokens, trivy's

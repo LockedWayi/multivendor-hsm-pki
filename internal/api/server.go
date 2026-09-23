@@ -28,6 +28,7 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/entitlement"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/responder"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
@@ -65,6 +66,11 @@ const (
 	// RootCRLPath serves the ceremony-produced root CRL: the distribution
 	// point named in the intermediate certificate.
 	RootCRLPath = "/root.crl"
+	// OCSPPath serves the delegated OCSP responder: POST with the
+	// request as the body, or GET with the base64 request appended (RFC
+	// 5019). Routed only when a responder is configured, and then named
+	// in every leaf's AIA.
+	OCSPPath = "/ocsp"
 )
 
 // LeafDistributionFor returns the CDP and AIA URLs a service reachable at
@@ -78,6 +84,16 @@ func LeafDistributionFor(baseURL string) ca.LeafDistribution {
 		CRLURL:        base + CRLPath,
 		IssuerCertURL: base + IntermediateCertPath,
 	}
+}
+
+// LeafDistributionWithOCSP is LeafDistributionFor plus the responder's
+// URL, for a service that runs one. A leaf naming a responder that is
+// not there fails closed at a verifier that requires OCSP, so the
+// pointer exists only when the route does.
+func LeafDistributionWithOCSP(baseURL string) ca.LeafDistribution {
+	d := LeafDistributionFor(baseURL)
+	d.OCSPURL = strings.TrimRight(baseURL, "/") + OCSPPath
+	return d
 }
 
 // Media types for the artifacts served at the URLs embedded in
@@ -125,6 +141,9 @@ type Config struct {
 	// names one with ?profile=; none, or one not here, is refused.
 	Profiles      profile.Set
 	Authorization Authorization
+	// Responder answers OCSP requests on the public surface when set.
+	// Nil means no responder: the route is absent and no leaf names it.
+	Responder *responder.Responder
 }
 
 // Handlers are the two surfaces one service serves. They are built over
@@ -156,6 +175,7 @@ func NewServer(cfg Config) Handlers {
 		crlValidity: cfg.CRLValidity,
 		root:        cfg.Root,
 		profiles:    cfg.Profiles,
+		responder:   cfg.Responder,
 	}
 	// x509.Certificate.Raw is already the DER RFC 2585 wants at that URL.
 	if cfg.Issuer != nil && cfg.Issuer.Certificate() != nil {
@@ -192,6 +212,12 @@ func (s *server) routePublic(mux *http.ServeMux) {
 	// certificates are signed.
 	mux.HandleFunc("GET "+RootCertPath, s.handleRootCert)
 	mux.HandleFunc("GET "+RootCRLPath, s.handleRootCRL)
+	if s.responder != nil {
+		// Unauthenticated, like the CRL: a revocation channel that needs
+		// a client defeats itself.
+		mux.HandleFunc("POST "+OCSPPath, s.handleOCSPPost)
+		mux.HandleFunc("GET "+OCSPPath+"/{request...}", s.handleOCSPGet)
+	}
 }
 
 type server struct {
@@ -201,6 +227,7 @@ type server struct {
 	store       store.Store
 	profiles    profile.Set
 	issuers     entitlement.Map
+	responder   *responder.Responder
 	crlValidity time.Duration
 	root        RootArtifacts
 	// intermediateDER is this service's own CA certificate, served at
@@ -420,6 +447,9 @@ func (s *server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.invalidateCRLCache()
+	if s.responder != nil {
+		s.responder.Invalidate()
+	}
 	loggerFromContext(r.Context()).Info("certificate revoked",
 		"client", clientFromContext(r.Context()),
 		"serial", serial.String(),

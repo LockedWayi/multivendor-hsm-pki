@@ -1,6 +1,7 @@
 package ca_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 )
 
@@ -236,6 +238,40 @@ func TestIssue_SubjectIsFilteredNotCopied(t *testing.T) {
 		}
 		if len(cert.Subject.Country) != 0 || len(cert.Subject.Locality) != 0 {
 			t.Fatalf("subject = %q carries attributes the request never asked for", cert.Subject)
+		}
+	})
+}
+
+// TestIssue_OCSPPointerOnlyWhenConfigured: the AIA OCSP URL appears in a
+// leaf exactly when the distribution names a responder, so a leaf never
+// points at a responder that is not there.
+func TestIssue_OCSPPointerOnlyWhenConfigured(t *testing.T) {
+	forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
+		without := newTestCA(t, b)
+		leaf, err := without.Issue(csrWith(t, pkix.Name{CommonName: "a"}, nil, nil, nil), tlsClient())
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		if len(leaf.OCSPServer) != 0 {
+			t.Fatalf("OCSPServer = %v without a responder configured", leaf.OCSPServer)
+		}
+		dist := testLeafDistribution()
+		dist.OCSPURL = "https://pki.example.test/ocsp"
+		// The same token key, over a distribution that names a responder.
+		signer, err := ca.NewSigner(context.Background(), b.adapter, b.interWS, pk11.SessionOptions{}, b.interKeyLabel(), pk11.P256)
+		if err != nil {
+			t.Fatalf("NewSigner: %v", err)
+		}
+		with := ca.NewCA(without.Certificate(), signer, time.Hour, dist)
+		leaf, err = with.Issue(csrWith(t, pkix.Name{CommonName: "a"}, nil, nil, nil), tlsClient())
+		if err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		if len(leaf.OCSPServer) != 1 || leaf.OCSPServer[0] != dist.OCSPURL {
+			t.Fatalf("OCSPServer = %v, want the configured responder", leaf.OCSPServer)
+		}
+		if err := (ca.LeafDistribution{CRLURL: dist.CRLURL, IssuerCertURL: dist.IssuerCertURL, OCSPURL: "ldap://x"}).Validate(); err == nil {
+			t.Fatal("an OCSP URL a certificate cannot carry was accepted")
 		}
 	})
 }

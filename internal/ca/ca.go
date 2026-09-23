@@ -28,14 +28,16 @@ const minRSAKeyBits = profile.MinRSAKeyBits
 // thisUpdate, and the ceremony to the certificates and CRL it signs.
 const issuanceClockSkewAllowance = 5 * time.Minute
 
-// LeafDistribution is the pair of URLs Issue writes into every leaf: where
-// the leaf's CRL is published, and where the issuing certificate can be
-// fetched. Both are required. An extension is fixed at signature time, so
-// a leaf issued without a distribution point can never gain one.
+// LeafDistribution is the set of URLs Issue writes into every leaf: where
+// the leaf's CRL is published, where the issuing certificate can be
+// fetched, and, when a responder exists, where its status can be asked.
+// The first two are required. An extension is fixed at signature time,
+// so a leaf issued without a distribution point can never gain one.
 //
-// There is no OCSP field. No responder exists, and a certificate naming a
-// responder that does not answer fails closed at a verifier that requires
-// OCSP.
+// OCSPURL is optional and is set only when a responder is running: a
+// certificate naming a responder that does not answer fails closed at a
+// verifier that requires OCSP, which is worse than naming none. A leaf
+// issued before the responder existed never carries it.
 type LeafDistribution struct {
 	// CRLURL is the leaf's CRL distribution point, this service's own /crl.
 	// The root's CRL covers the intermediate and is named in the
@@ -44,6 +46,9 @@ type LeafDistribution struct {
 	// IssuerCertURL is the AIA CA-Issuers pointer, where a relying party
 	// holding only the leaf fetches the intermediate that signed it.
 	IssuerCertURL string
+	// OCSPURL is the AIA OCSP pointer, this service's own /ocsp, or empty
+	// when no responder is configured.
+	OCSPURL string
 }
 
 // Validate reports whether both distribution URLs are present and fetchable
@@ -52,7 +57,13 @@ func (d LeafDistribution) Validate() error {
 	if err := ValidateDistributionURL("CRL distribution point", d.CRLURL); err != nil {
 		return err
 	}
-	return ValidateDistributionURL("AIA CA-Issuers URL", d.IssuerCertURL)
+	if err := ValidateDistributionURL("AIA CA-Issuers URL", d.IssuerCertURL); err != nil {
+		return err
+	}
+	if d.OCSPURL != "" {
+		return ValidateDistributionURL("AIA OCSP URL", d.OCSPURL)
+	}
+	return nil
 }
 
 // ValidateDistributionURL rejects a URL that would be written into a
@@ -177,10 +188,13 @@ func (c *CA) Issue(csr *x509.CertificateRequest, p *profile.Profile) (*x509.Cert
 		IPAddresses:    csr.IPAddresses,
 		EmailAddresses: csr.EmailAddresses,
 		URIs:           csr.URIs,
-		// Both point at this service. No OCSPServer is set; see
-		// LeafDistribution.
+		// All of them point at this service. OCSPServer is set only when
+		// a responder is configured; see LeafDistribution.
 		CRLDistributionPoints: []string{c.dist.CRLURL},
 		IssuingCertificateURL: []string{c.dist.IssuerCertURL},
+	}
+	if c.dist.OCSPURL != "" {
+		template.OCSPServer = []string{c.dist.OCSPURL}
 	}
 	if p.OCSPNoCheck {
 		// id-pkix-ocsp-nocheck is a NULL (RFC 6960 §4.2.2.2.1): DER 05 00.
