@@ -229,11 +229,12 @@ in CI, and mutual TLS on the write endpoints, with clients authorised by
 name from certificates this CA issued, its HSM-held TLS identity and the
 first operator certificate minted by two operator-run commands
 ([`docs/key-ceremony-and-recovery.md`](docs/key-ceremony-and-recovery.md)
-§8) and wired through the local run and the Kubernetes overlay; and
+§8) and wired through the local run and the Kubernetes overlay;
 certificate profiles, so every certificate is issued under a stated
-policy and none under a default. Planned next: binding each client
-identity to the profiles and names it may request, an OCSP responder,
-then Vault custody.
+policy and none under a default; and a binding of each issuing identity
+to the profiles and names it may request, so no issuer can obtain a
+certificate it was not granted. Planned next: an OCSP responder, then
+Vault custody.
 
 ## Running it
 
@@ -263,7 +264,11 @@ Every write names a profile. Four are built in — `tls-server`,
 `tls-client`, `code-signing`, `ocsp-responder` — and each fixes the key
 usages, the name types, the subject attributes copied from the request,
 the key algorithms and the lifetime; a deployment can replace the set in
-its configuration. A request naming none is refused, not defaulted.
+its configuration. A request naming none is refused, not defaulted. Each
+issuer is bound in the configuration to the profiles it may request and
+to name patterns such as `dns:*.example.test`; a request outside either
+is a 403 that says nothing more, and an identity not bound issues
+nothing.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 

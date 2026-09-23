@@ -7,6 +7,22 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Issuance entitlements.** Each issuer in `api.issuers` is bound to the
+  profiles it may request and to name patterns over the common name and
+  the four subject-alternative-name types (`dns:*.example.test`,
+  `uri:urn:hsm-pki:operator:*`, `ip:10.0.0.0/8`, and so on). A request
+  for a profile not granted, or carrying one name of one type that no
+  pattern of that type matches, is refused whole with a 403 whose body is
+  a fixed sentence; the reason goes to the log. An identity absent from
+  the mapping issues nothing, an entry granting nothing fails startup, a
+  granted profile that does not exist fails startup, and
+  `ocsp-responder` cannot be granted to any client. Revocation stays a
+  list: any revoker may withdraw any certificate.
+
+  **Changed by this:** `api.issuers` is a map from identity to
+  `{profiles, names}`. The list form fails to parse, which is how a
+  stale configuration announces itself; `config.example.yaml` and
+  `run-local.sh` show the new shape.
 - **Certificate profiles.** A request to `POST /certificates` names a
   profile with `?profile=`, and the profile decides the extended key
   usages, the key usages, which subject-alternative-name types are

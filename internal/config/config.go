@@ -8,11 +8,13 @@ import (
 	"math/big"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/entitlement"
 	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 )
@@ -63,8 +65,15 @@ type TLSConfig struct {
 // is not, because without the authenticated listener nobody can reach
 // the endpoints they authorise.
 type APIConfig struct {
-	// Issuers may POST /certificates.
-	Issuers []string `yaml:"issuers"`
+	// Issuers may POST /certificates, each for the profiles and the name
+	// patterns its entry grants. An identity absent here issues nothing;
+	// an entry granting nothing is refused at load. Written as a map
+	// from identity to {profiles, names}; the earlier list form fails to
+	// parse, which is the intended way for a stale configuration to
+	// announce itself.
+	Issuers map[string]entitlement.Spec `yaml:"issuers"`
+	// Entitlements is derived from Issuers by Load.
+	Entitlements entitlement.Map `yaml:"-"`
 	// Revokers may POST /certificates/{serial}/revoke. Not defaulted from
 	// Issuers: who may withdraw a certificate is a separate decision, and
 	// during an incident it is the one that matters.
@@ -303,23 +312,36 @@ func (c *Config) validateAuthenticatedSurface() error {
 	if tlsCfg.KeyLabel == c.CA.IntermediateKeyLabel {
 		return fmt.Errorf("config: server.tls.key_label %q is the intermediate's key label; the TLS identity needs its own key pair, because a handshake signs bytes the peer chooses", tlsCfg.KeyLabel)
 	}
-	for field, list := range map[string][]string{
-		"api.issuers":  c.API.Issuers,
-		"api.revokers": c.API.Revokers,
-	} {
-		if len(list) == 0 {
-			return fmt.Errorf("config: %s is empty; server.tls is configured, so name at least one client identity, or nobody can use that endpoint", field)
-		}
-		seen := make(map[string]bool, len(list))
-		for _, id := range list {
-			if id == "" {
-				return fmt.Errorf("config: %s contains an empty identity", field)
+	if len(c.API.Issuers) == 0 {
+		return fmt.Errorf("config: api.issuers is empty; server.tls is configured, so name at least one client identity, or nobody can use that endpoint")
+	}
+	ents, err := entitlement.Parse(c.API.Issuers)
+	if err != nil {
+		return fmt.Errorf("config: api.issuers: %w", err)
+	}
+	// Every profile an entitlement grants must exist, or the grant is a
+	// typo that reads as a permission until somebody tries to use it.
+	for _, identity := range ents.Identities() {
+		for _, name := range ents[identity].Profiles() {
+			if _, err := c.CA.ProfileSet.Lookup(name); err != nil {
+				return fmt.Errorf("config: api.issuers: %q is granted profile %q, which ca.profiles does not define (available: %s)", identity, name, strings.Join(c.CA.ProfileSet.Names(), ", "))
 			}
-			if seen[id] {
-				return fmt.Errorf("config: %s lists %q twice", field, id)
-			}
-			seen[id] = true
 		}
+	}
+	c.API.Entitlements = ents
+
+	if len(c.API.Revokers) == 0 {
+		return fmt.Errorf("config: api.revokers is empty; server.tls is configured, so name at least one client identity, or nobody can use that endpoint")
+	}
+	seen := make(map[string]bool, len(c.API.Revokers))
+	for _, id := range c.API.Revokers {
+		if id == "" {
+			return fmt.Errorf("config: api.revokers contains an empty identity")
+		}
+		if seen[id] {
+			return fmt.Errorf("config: api.revokers lists %q twice", id)
+		}
+		seen[id] = true
 	}
 	return nil
 }

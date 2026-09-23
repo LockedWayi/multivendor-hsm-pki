@@ -32,20 +32,36 @@ server:
     cert_path: "/etc/hsm-pki/tls.pem"
 
 # Who may write, by an identity off the client certificate: a URI SAN as
-# written, or the subject common name. Both lists are required when
-# server.tls is set, and refused when it is not. A client must also chain
-# to the root in ca.root_cert_path and be in the store as issued and not
-# revoked; a name alone authorises nothing. There is no separate client
-# CA: the clients are certificates this CA issued.
+# written, or the subject common name. Both are required when server.tls
+# is set, and refused when it is not. A client must also chain to the
+# root in ca.root_cert_path and be in the store as issued and not revoked;
+# a name alone authorises nothing. There is no separate client CA: the
+# clients are certificates this CA issued.
 #
 # The first client certificate comes from `hsm-pki-keytool
 # issue-client-cert`; after that, a client listed here can issue the next
 # one over the API. The command prints the identities a certificate
-# carries, which is what goes in these lists.
+# carries, which is what goes here.
 api:
-  issuers: ["urn:hsm-pki:operator:alice"]
-  # Not defaulted from issuers. Who may withdraw a certificate is a
-  # separate decision.
+  # Each issuer is bound to the profiles it may request and the names it
+  # may put in a certificate, as "<type>:<glob>" patterns over cn, dns,
+  # ip, uri and email. * matches any run of characters; dns matches
+  # case-insensitively; ip takes an address, a CIDR range or *. Every
+  # name in a request must match a pattern of its type, or the whole
+  # request is refused with a 403 that says nothing more; a type with no
+  # pattern is a type the identity may not name at all. An identity not
+  # listed here issues nothing; an entry granting nothing fails startup;
+  # ocsp-responder cannot be granted to anyone.
+  issuers:
+    "urn:hsm-pki:operator:alice":
+      profiles: [tls-server, tls-client]
+      names:
+        - "dns:*.example.test"
+        - "cn:*.example.test"
+        - "uri:urn:hsm-pki:operator:*"
+  # Not defaulted from issuers, and not bound to who issued what: who may
+  # withdraw a certificate is a separate decision, and during an incident
+  # the ability to withdraw any certificate is the one that matters.
   revokers: ["urn:hsm-pki:operator:alice"]
 
 pkcs11:

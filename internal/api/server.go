@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/entitlement"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
@@ -170,8 +171,9 @@ func NewServer(cfg Config) Handlers {
 
 	authenticated := http.NewServeMux()
 	s.routePublic(authenticated)
+	s.issuers = cfg.Authorization.Issuers
 	authenticated.HandleFunc("POST /certificates",
-		s.requireClient(cfg.Authorization.Issuers, s.handleIssueCertificate))
+		s.requireClient(cfg.Authorization.issuerIdentities(), s.handleIssueCertificate))
 	authenticated.HandleFunc("POST /certificates/{serial}/revoke",
 		s.requireClient(cfg.Authorization.Revokers, s.handleRevoke))
 
@@ -198,6 +200,7 @@ type server struct {
 	workspace   pk11.Workspace
 	store       store.Store
 	profiles    profile.Set
+	issuers     entitlement.Map
 	crlValidity time.Duration
 	root        RootArtifacts
 	// intermediateDER is this service's own CA certificate, served at
@@ -271,6 +274,20 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Who is asking, and what they may ask for. The profile exists, so
+	// from here a refusal is about this client and not about the
+	// request's shape: 403, with a fixed body that says nothing about
+	// what the client is or is not entitled to. The reason goes to the
+	// log, where the operator who wrote the mapping reads it.
+	identity := clientFromContext(r.Context())
+	ent, bound := s.issuers[identity]
+	if !bound || !ent.PermitsProfile(prof.Name) {
+		loggerFromContext(r.Context()).Info("issuance refused by entitlement",
+			"client", identity, "profile", prof.Name, "reason", "profile not granted")
+		s.writeError(w, http.StatusForbidden, notEntitledMessage)
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxCSRBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -286,6 +303,16 @@ func (s *server) handleIssueCertificate(w http.ResponseWriter, r *http.Request) 
 	csr, err := parseCSR(body)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "malformed CSR: "+err.Error())
+		return
+	}
+	// The names the request asks for, against the patterns the identity
+	// was granted. Checked before the profile's own policy, so a request
+	// this client may not make at all is a 403 before it is a 400: the
+	// less said to a client outside its entitlement, the better.
+	if err := ent.PermitsNames(csr); err != nil {
+		loggerFromContext(r.Context()).Info("issuance refused by entitlement",
+			"client", identity, "profile", prof.Name, "reason", err.Error())
+		s.writeError(w, http.StatusForbidden, notEntitledMessage)
 		return
 	}
 
@@ -495,6 +522,11 @@ func (s *server) currentCRL(ctx context.Context) ([]byte, error) {
 	s.cachedNextUpdate = nextUpdate
 	return der, nil
 }
+
+// notEntitledMessage is the whole of what a client outside its
+// entitlement is told. The profile and the pattern it failed are in the
+// log, not in the response.
+const notEntitledMessage = "the client is not entitled to this request"
 
 // issueErrorResponse maps a ca.Issue error to an HTTP status and a message
 // safe to return. The listed reasons are about the caller's CSR and map to

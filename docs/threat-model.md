@@ -11,10 +11,10 @@ root, durable revocation state, a published CRL, a containerized
 deployment whose cluster refuses unsigned and unpinned images, a pipeline
 that signs every build of `main` keyless, and **mutual TLS on the write
 endpoints**, with the clients authorised by name from certificates this
-CA issued, and certificate profiles, so every certificate is issued
-under a stated policy. It has no per-identity binding of profiles or
-names, no OCSP responder, no audit log, and no Vault custody. §8 says
-what planned work changes.
+CA issued, certificate profiles, so every certificate is issued under a
+stated policy, and a per-identity binding of profiles and names, so each
+issuer may obtain only what it was granted. It has no OCSP responder, no
+audit log, and no Vault custody. §8 says what planned work changes.
 
 ---
 
@@ -188,17 +188,22 @@ first such certificate is issued by the operator with the keytool before
 the service is up, over the intermediate token; every later one is issued
 through the API by an issuer.
 
-**Gets:** with an issuer identity, a certificate under any profile the
-service has, for any subject and any name the profile copies; with a
-revoker identity, the revocation of any serial. Profiles bound the
-*shape*: a `tls-client` certificate cannot carry `serverAuth`, a
+**Gets:** with an issuer identity, a certificate under a profile it was
+granted, carrying only names that match the patterns it was granted;
+with a revoker identity, the revocation of any serial. Profiles bound
+the *shape*: a `tls-client` certificate cannot carry `serverAuth`, a
 `tls-server` certificate cannot carry a URI name, and no profile copies
-a subject attribute it does not list. They do not yet bound the *name*:
-an issuer can still mint a `tls-client` certificate carrying another
-issuer's URI, or a revoker's, and use it. The two lists separate the two
-operations; profiles separate the kinds of certificate; neither yet
-separates issuers from each other. The per-identity binding, planned,
-does.
+a subject attribute it does not list. The binding bounds the *name*: an
+issuer granted `uri:urn:hsm-pki:team-b:*` cannot mint a `tls-client`
+certificate carrying another issuer's identity, or a revoker's, because
+the request is refused whole. The two lists separate the two
+operations; profiles separate the kinds of certificate; the binding
+separates issuers from each other. What remains is what the binding
+cannot express: an issuer granted `dns:*.example.test` may name any
+host under it, including one it does not operate, and nothing here
+checks that a requester controls a name (there is no ACME-style
+challenge). Revocation is not bound to who issued: any revoker may
+withdraw any certificate, which is the intended shape for an incident.
 
 **Does not get:** anything the CSR could choose that `Issue` sets from
 policy: serial, validity window, key usage, CA status. A revoked issuer
