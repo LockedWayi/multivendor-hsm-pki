@@ -110,7 +110,10 @@ docker image inspect --format '    {{.RepoTags}} {{.Size}} bytes' "$DEV_IMAGE"
 log "3/4  the suite, -race -p 1, inside the image"
 # -p 1 is not optional: several package test binaries would otherwise open
 # the same token store at once. The vendor mounts are added only with the
-# flag, so a run without it cannot half-configure a backend.
+# flag, so a run without it cannot half-configure a backend. -timeout 180s
+# because the ProtectToolkit-C emulator can block forever inside
+# C_OpenSession; the slowest package here takes seconds, so a hang costs
+# three minutes and a goroutine dump rather than the ten-minute default.
 run_args=(--rm -v "$REPO_ROOT":/repo -w /repo)
 if [ "$WITH_PROTECTSERVER" -eq 1 ]; then
     run_args+=(-v "$PROTECTSERVER_SDK_DIR":"$PROTECTSERVER_SDK_DIR":ro
@@ -122,7 +125,7 @@ fi
 suite_status=0
 docker run "${run_args[@]}" "$DEV_IMAGE" sh -c '
     git config --global --add safe.directory /repo
-    go test -race -p 1 -v -buildvcs=false ./...
+    go test -race -p 1 -timeout 180s -v -buildvcs=false ./...
 ' > "$LOG_DIR/suite.log" 2>&1 || suite_status=$?
 
 # The anchored pattern from docs/test-matrix.md section 3: a top-level
@@ -139,6 +142,20 @@ done
 grep -E '^(ok|FAIL|---)' "$LOG_DIR/suite.log" | grep -cE '^ok' | sed 's/^/    packages ok: /'
 if [ "$suite_status" -ne 0 ]; then
     grep -E '^(--- FAIL|FAIL)' "$LOG_DIR/suite.log" | head -20
+    # A killed test binary runs no t.Cleanup, so a timed-out run leaves its
+    # objects on a persistent vendor token, and on the emulator the next
+    # run's provisioning tests then fail their duplicate-key check.
+    if [ "$WITH_PROTECTSERVER" -eq 1 ] && grep -q '^panic: test timed out' "$LOG_DIR/suite.log"; then
+        # The goroutine dump is the evidence for the hang, and the next run
+        # overwrites suite.log; keep this one under its own name.
+        kept="$LOG_DIR/suite-timeout-$(date -u +%Y%m%dT%H%M%SZ).log"
+        cp "$LOG_DIR/suite.log" "$kept"
+        echo "    the timed-out run's log, goroutine dump included, is kept at $kept"
+        echo "    a package timed out: before the next run, clear its leftovers with"
+        echo "    go run ./ci/token-cleanup -adapter protectserver -module \"$PROTECTSERVER_MODULE\" -workspace \"$PROTECTSERVER_WORKSPACE\" -pin-env PROTECTSERVER_PIN -prefix conf-"
+        echo "    inside $DEV_IMAGE with the suite's mounts and variables; dry run first, then"
+        echo "    the same command with -confirm (docs/test-matrix.md section 6)"
+    fi
     fail "the suite failed (full log: $LOG_DIR/suite.log)"
 fi
 if [ "$WITH_PROTECTSERVER" -eq 1 ] && [ "$(count_backend ProtectServer PASS)" -eq 0 ]; then
