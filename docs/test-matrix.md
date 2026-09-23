@@ -240,16 +240,40 @@ in the container**, from the same commit. The coverage gate then goes red
 for a reason that has nothing to do with the code it is measuring.
 
 Every configured backend. `-p 1` is required: the package test binaries
-would otherwise open the same vendor token store in parallel.
+would otherwise open the same vendor token store in parallel. All seven
+variables, not the four the ceremony suite reads: with
+`PROTECTSERVER_MODULE` set and `PROTECTSERVER_PIN` unset, the conformance
+suite fails closed on a half-configured backend rather than skipping.
 
 ```sh
 docker run --rm -v "$PWD":/repo -w /repo \
   -v /opt/safenet:/opt/safenet:ro -v "$HOME/.cryptoki:/root/.cryptoki" \
-  -e PROTECTSERVER_MODULE=... \
+  -e PROTECTSERVER_MODULE=... -e PROTECTSERVER_WORKSPACE=... -e PROTECTSERVER_PIN \
   -e PROTECTSERVER_ROOT_WORKSPACE=... -e PROTECTSERVER_INTERMEDIATE_WORKSPACE=... \
   -e PROTECTSERVER_ROOT_PIN -e PROTECTSERVER_INTERMEDIATE_PIN \
-  hsm-pki-dev go test -race -p 1 ./...
+  hsm-pki-dev go test -race -p 1 -timeout 180s ./...
 ```
+
+`-timeout 180s` because the ProtectToolkit-C software emulator blocks
+forever inside `C_OpenSession` in some runs: three of six measured on
+2026-09-23, under a single caller, at the 18th, 21st and 18th conformance
+subtest, so not one input; not yet narrowed further. The slowest package takes
+seconds, so the limit costs nothing on a healthy run and turns a hang into
+three minutes and a goroutine dump. Keep the dump: it is the evidence, so
+do not stop a hung run by hand. A test binary killed by its timeout runs
+no `t.Cleanup`, which leaves that run's `conf-` objects on the persistent
+emulator token, and because the emulator's RNG restarts from the same
+seed, the next run's provisioning tests then fail their duplicate-key
+check against those leftovers, in packages that did nothing wrong. After
+any timed-out run, before the next one:
+
+```sh
+go run ./ci/token-cleanup -adapter protectserver -module "$PROTECTSERVER_MODULE" \
+    -workspace "$PROTECTSERVER_WORKSPACE" -pin-env PROTECTSERVER_PIN -prefix conf-
+go run ./ci/token-cleanup ... -prefix conf- -confirm
+```
+
+inside the dev image, with the same mounts and variables as the suite.
 
 To see which backends ran, since a missing variable skips silently:
 
