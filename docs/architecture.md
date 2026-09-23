@@ -309,6 +309,15 @@ Two refinements sharpen this picture:
   checked to be distinct by their PKCS#11 serial numbers and by confirming
   the intermediate's key is not visible from the root's token. A serial is
   a claim. An object search is a measurement.
+
+  The online token also holds two smaller keys the same process uses on
+  every request, each under its own versioned label: the service's TLS
+  key (`ca-tls-key-v1`), which signs handshakes and is refused as the
+  intermediate's, and the OCSP responder's key (`ocsp-signing-key-v1`),
+  which signs status responses and nothing else. They share the
+  intermediate's token because a token of their own would be a second
+  login held by the same process, which separates nothing
+  ([`threat-model.md`](threat-model.md) §6.1).
 - **Every signing key lives under a versioned label and a published,
   signed key inventory**, so rotation is a lifecycle state change verifiers
   already understand. The planned audit chain adds a fifth purpose,
@@ -600,11 +609,11 @@ licensing would be inconsistent. Full reasoning:
   in-memory implementation alongside it is for tests only, and nothing in
   `cmd/` constructs it.
 - **Single instance until two things change.** The store is single-writer,
-  and the generated CRL is cached per process, so a revocation on one
-  instance would leave another serving a CRL that omits it until
-  `nextUpdate`. Running more than one replica needs shared state and
-  cross-instance cache invalidation. The manifest pins `replicas: 1` and
-  says why.
+  and the generated CRL and the OCSP responses are cached per process, so
+  a revocation on one instance would leave another serving a CRL, and
+  OCSP answers, that omit it until `nextUpdate`. Running more than one
+  replica needs shared state and cross-instance cache invalidation. The
+  manifest pins `replicas: 1` and says why.
 - **Immutable artifacts.** The deployed unit is a scanned, versioned
   container image. Rollback is "deploy the previous image".
 - **Everything reproducible from code.** Infrastructure, deployment, and
