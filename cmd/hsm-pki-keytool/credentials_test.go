@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -683,5 +685,62 @@ func TestParseSANs(t *testing.T) {
 	}
 	if _, _, err := parseSANs("", "not-an-ip"); err == nil {
 		t.Fatal("an unparseable IP was accepted")
+	}
+}
+
+// TestRunProvisionOCSPKeyCmd_ProvisionsAKeyTheServiceCanSignWith: the
+// key lands on the intermediate's token under its label, sensitive and
+// not extractable, and a signer over it signs. A second run under the
+// same label is refused; the intermediate's label is refused before the
+// token is touched.
+func TestRunProvisionOCSPKeyCmd_ProvisionsAKeyTheServiceCanSignWith(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		env := bootstrapCA(t, b)
+		label := b.Label("ocsp-signing-key-v1")
+		args := []string{
+			"-adapter", b.AdapterName, "-module", b.ModulePath,
+			"-workspace", b.Primary.Label, "-pin-env", env.pinEnv,
+			"-intermediate-key-label", env.interKeyLabel, "-key-label", label,
+		}
+		if err := runProvisionOCSPKeyCmd(args); err != nil {
+			skipIfTheTokenRepeatedAKey(t, b, err, label, filepath.Join(env.dir, "never-written.pem"))
+			t.Fatalf("provision-ocsp-key: %v", err)
+		}
+		withToken(t, b, env, func(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace) {
+			signer, err := ca.NewSigner(ctx, adapter, ws, pk11.DefaultSessionOptions(), label, pk11.P256)
+			if err != nil {
+				t.Fatalf("NewSigner over the provisioned key: %v", err)
+			}
+			digest := sha256.Sum256([]byte("status"))
+			if _, err := signer.Sign(nil, digest[:], crypto.SHA256); err != nil {
+				t.Fatalf("Sign: %v", err)
+			}
+		})
+		if err := runProvisionOCSPKeyCmd(args); err == nil || !strings.Contains(err.Error(), "label already in use") {
+			t.Fatalf("second run = %v, want the taken label refused", err)
+		}
+	})
+}
+
+func TestRunProvisionOCSPKeyCmd_RefusesBeforeTouchingTheToken(t *testing.T) {
+	base := []string{"-module", "/nonexistent/module.so", "-workspace", "t", "-pin-env", "KEYTOOL_TEST_PIN_THAT_IS_NOT_SET", "-intermediate-key-label", "ca-intermediate-key-v1"}
+	for _, tc := range []struct{ name, label, want string }{
+		{"the intermediate's own label", "ca-intermediate-key-v1", "lie about status and nothing else"},
+		{"an unversioned label", "ocsp-signing-key", "versioned label"},
+		{"no label", "", "-key-label is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append(append([]string{}, base...), "-key-label", tc.label)
+			if tc.label == "" {
+				args = base
+			}
+			err := runProvisionOCSPKeyCmd(args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), "module") || strings.Contains(err.Error(), "PIN") {
+				t.Fatalf("reached for the token: %v", err)
+			}
+		})
 	}
 }

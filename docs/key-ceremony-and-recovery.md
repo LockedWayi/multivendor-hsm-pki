@@ -593,7 +593,31 @@ After the first one exists, further client certificates are issued over
 the API by a client already listed in `api.issuers`. This command is for
 the first, and for the day the last one is lost.
 
-### 8.3 Rotation and loss
+### 8.3 The OCSP responder key
+
+`hsm-pki-keytool provision-ocsp-key` generates the delegated responder's
+key pair on the intermediate's token, under its own versioned label. It
+provisions no certificate: the service issues the responder's
+certificate itself at startup under the `ocsp-responder` profile and
+renews it when half its seven days have passed, because
+`id-pkix-ocsp-nocheck` makes that certificate unrevocable in practice and
+its lifetime is the only limit on a compromised key.
+
+```sh
+hsm-pki-keytool provision-ocsp-key \
+    -module /usr/lib/softhsm/libsofthsm2.so \
+    -workspace hsm-pki-intermediate -pin-env HSM_PKI_PIN \
+    -intermediate-key-label ca-intermediate-key-v1 \
+    -key-label ocsp-signing-key-v1
+```
+
+Then `ca.ocsp.key_label: ocsp-signing-key-v1` in the service's
+configuration. The command refuses the intermediate's label, and the
+configuration refuses the TLS key's: a compromised responder key must be
+able to lie about status and nothing else. Rotation is the next label
+and a restart; the old key stays on the token until destroyed by hand.
+
+### 8.4 Rotation and loss
 
 Both certificates default to ninety days and **nothing renews either of
 them**. Both commands print the expiry; putting it in a calendar is the

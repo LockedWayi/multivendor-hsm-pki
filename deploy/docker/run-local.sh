@@ -11,11 +11,12 @@
 #   2. initializes two SoftHSM2 tokens, a root and an intermediate
 #   3. runs the offline root ceremony against them (cmd/hsm-pki-keytool)
 #   4. moves the root token out of the store the service can reach
-#   5. provisions the service's TLS identity on the intermediate's token and
-#      issues the first operator certificate, both recorded in the CA store
+#   5. provisions the service's TLS identity and its OCSP responder key on
+#      the intermediate's token and issues the first operator certificate,
+#      the certificates recorded in the CA store
 #   6. starts the service, read-only and non-root, against what is left:
-#      a public listener for the CRLs and probes, and a mutual-TLS listener
-#      for the write endpoints
+#      a public listener for the CRLs, the OCSP responder and the probes,
+#      and a mutual-TLS listener for the write endpoints
 #
 # Step 4 is the important one. The two-tier hierarchy's guarantee is that
 # a compromised service cannot reach the root. In production that is a
@@ -215,6 +216,11 @@ EOF
                 -cert-out /artifacts/tls.pem
             /tmp/keytool issue-client-cert \$issuer \
                 -csr /operator/operator.csr -cert-out /operator/operator.pem
+            /tmp/keytool provision-ocsp-key \
+                -module /pkcs11/libsofthsm2.so \
+                -workspace $INTERMEDIATE_TOKEN_LABEL -pin-env HSM_PKI_INTERMEDIATE_PIN \
+                -intermediate-key-label ca-intermediate-key-v1 \
+                -key-label ocsp-signing-key-v1
         "
     unset HSM_PKI_INTERMEDIATE_PIN
     # A TLS client presents its chain, not its leaf alone: the service
@@ -262,6 +268,8 @@ ca:
   base_url: "http://localhost:$PORT"
   crl_validity_hours: 24
   store_path: "/var/lib/hsm-pki/ca.db"
+  ocsp:
+    key_label: "ocsp-signing-key-v1"
 EOF
 
     log "handing the writable paths to the service's UID"
@@ -283,6 +291,11 @@ cat <<EOF
     curl -s localhost:$PORT/readyz
     curl -sI localhost:$PORT/root.crt
     curl -s localhost:$PORT/root.crl | openssl crl -inform DER -noout -text | head
+
+  Ask the OCSP responder about a certificate you issued (leaf.pem from below):
+    openssl ocsp -no_nonce -CAfile $STATE/etc/root.pem \\
+        -issuer $STATE/etc/intermediate.pem -verify_other $STATE/etc/intermediate.pem \\
+        -cert leaf.pem -url http://localhost:$PORT/ocsp
 
   Issue a certificate over mutual TLS, as the operator in $STATE/operator:
     openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \\

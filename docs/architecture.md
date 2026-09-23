@@ -158,7 +158,51 @@ surface is never large and untested at once.
    cannot be granted to any client, because that certificate is issued
    on the internal path only.
 
-   Planned next: the delegated OCSP responder.
+   Revocation has a second, query-shaped channel: a delegated OCSP
+   responder (RFC 6960) on the public listener, the signing core's third
+   consumer after certificates and CRLs. It answers from the same store
+   the CRL is built from, under the CRL's freshness window, and a
+   revocation drops both caches at once, so the two channels never
+   disagree for longer than one request. It signs with its own
+   HSM-held key under its own certificate — `ocspSigning` plus
+   `id-pkix-ocsp-nocheck`, issued by the intermediate on the internal
+   path — so the intermediate's key never signs a status response and a
+   compromised responder key can lie about status and nothing else.
+   `nocheck` tells relying parties not to check the responder
+   certificate's own revocation, which makes its lifetime the only
+   limit on a compromised key; so the certificate lives seven days, the
+   service renews it at half-life, checks it at the point of signing
+   rather than only at startup, and answers `tryLater` under an expired
+   one rather than signing. A serial this CA never issued is `unknown`,
+   never `good`. Certificates issued before the responder existed carry
+   no OCSP pointer and never will.
+
+   **Why build a channel the web is retiring.** OCSP is on its way out
+   of the public web PKI, and the reasons are structural, not fashion.
+   Privacy: a responder learns which certificates a client checks, which
+   for a browser means which sites a person visits. Availability: a
+   client that cannot reach the responder either blocks or, as every
+   browser chose, soft-fails and accepts the certificate, so a network
+   position that can block the responder can defeat revocation. The
+   CA/Browser Forum's ballot SC-063 (2023) made OCSP optional and CRLs
+   mandatory for publicly trusted CAs; Let's Encrypt stopped putting
+   OCSP URLs in certificates in May 2025 and shut its responders down in
+   August 2025; Chrome checks revocation against CRLSets, a curated
+   subset pushed with the browser, and Firefox 137 moved all desktop
+   users to CRLite, a compressed encoding of every revocation refreshed
+   daily. (Checked 2026-09-23: CA/Browser Forum, "Ballot SC063v4";
+   Mozilla Hacks, "CRLite: fast, private, and comprehensive certificate
+   revocation checking in Firefox", 2025.) A private PKI is a different
+   place: its relying parties are its own services, not browsers, they
+   ask about one certificate at a time, and a stapled or directly
+   fetched `good` with a stated `nextUpdate` is the freshness contract a
+   mutual-TLS peer wants. Building the responder here is still right
+   for that reader, and it is the signing core's third consumer. What a
+   reader gets from a maintainer who knows why the thing is on its way
+   out is the choice made with the reasons in view rather than by
+   habit.
+
+   Planned next: Vault custody.
 
 6. **Vault with HSM auto-unseal (planned capstone).** Key custody moves
    out of process memory into Vault, and Vault's own root of trust is

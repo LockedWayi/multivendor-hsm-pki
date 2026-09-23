@@ -233,8 +233,10 @@ first operator certificate minted by two operator-run commands
 certificate profiles, so every certificate is issued under a stated
 policy and none under a default; and a binding of each issuing identity
 to the profiles and names it may request, so no issuer can obtain a
-certificate it was not granted. Planned next: an OCSP responder, then
-Vault custody.
+certificate it was not granted; and a delegated OCSP responder, signing
+with its own HSM-held key under a short-lived, self-renewed certificate,
+answering from the same store the CRL is built from. Planned next: Vault
+custody.
 
 ## Running it
 
@@ -258,6 +260,8 @@ curl -s localhost:8080/readyz                       # the public surface
 curl -s --cacert .local/dev/etc/root.pem \
     --cert .local/dev/operator/operator-chain.pem --key .local/dev/operator/operator.key \
     --data-binary @leaf.csr "https://localhost:8443/certificates?profile=tls-server"
+openssl ocsp -no_nonce -CAfile .local/dev/etc/root.pem -issuer .local/dev/etc/intermediate.pem \
+    -verify_other .local/dev/etc/intermediate.pem -cert leaf.pem -url http://localhost:8080/ocsp
 ```
 
 Every write names a profile. Four are built in — `tls-server`,

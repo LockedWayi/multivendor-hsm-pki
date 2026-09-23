@@ -174,6 +174,13 @@ curl -s --cacert .local/dev/etc/root.pem \
     --data-binary @your.csr "https://localhost:18443/certificates?profile=tls-server"
 ```
 
+The responder answers on the public port:
+
+```sh
+openssl ocsp -no_nonce -CAfile .local/dev/etc/root.pem -issuer .local/dev/etc/intermediate.pem \
+    -verify_other .local/dev/etc/intermediate.pem -cert leaf.pem -url http://localhost:18080/ocsp
+```
+
 `POST /certificates` on port 8080 is a 404: the public surface routes no
 write endpoint. The same request on 8443 without `--cert` fails the
 handshake, and one naming no profile is a 400 that lists the profiles

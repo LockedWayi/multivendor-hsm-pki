@@ -16,16 +16,22 @@ spec:
   #  1. The store is single-writer. The connection pool is capped at one
   #     inside a process, which says nothing about two processes opening the
   #     same database file.
-  #  2. The generated CRL is cached per process. A revocation handled by pod
-  #     A invalidates A's cache; pod B keeps serving its cached CRL until
-  #     nextUpdate -- up to ca.crl_validity_hours, 24 by default. A relying
-  #     party that happens to reach B is told a revoked certificate is fine,
-  #     and nothing in the response says the answer is stale.
+  #  2. The generated CRL and the OCSP responses are cached per process. A
+  #     revocation handled by pod A invalidates A's caches; pod B keeps
+  #     serving its cached answers until nextUpdate -- up to
+  #     ca.crl_validity_hours, 24 by default. A relying party that happens
+  #     to reach B is told a revoked certificate is fine, and nothing in
+  #     the response says the answer is stale.
   #
-  # The second is the dangerous one: it produces a wrong security answer, not
-  # an error. Lifting this needs shared state AND cross-instance cache
-  # invalidation -- an external database plus a shared cache or none at all.
-  # That is a design change, not a manifest change.
+  # The second is the dangerous one: it produces a wrong security answer,
+  # not an error. This is a known, unfixed defect and not a settled design:
+  # the per-process cache is the mechanism that produces the wrong answer.
+  # What closes it, in order, because each step depends on the last: the
+  # store moves off single-writer SQLite; the CRL and the OCSP responses
+  # become stored artifacts produced by one signer and served by handlers
+  # that hold no key; then the replica count can rise, because a serving
+  # tier that computes no view of its own cannot disagree with another.
+  # Until then this number is a correctness constraint.
   replicas: 1
 
   # Recreate, not RollingUpdate. A rolling update runs the old and new pods

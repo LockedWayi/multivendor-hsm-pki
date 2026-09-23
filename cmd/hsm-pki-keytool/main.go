@@ -36,7 +36,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: hsm-pki-keytool <command> [flags]\n  commands: ceremony, reissue-intermediate, provision-signing-key, retire-signing-key, generate-inventory, provision-tls-identity, issue-client-cert")
+		return errors.New("usage: hsm-pki-keytool <command> [flags]\n  commands: ceremony, reissue-intermediate, provision-signing-key, retire-signing-key, generate-inventory, provision-tls-identity, issue-client-cert, provision-ocsp-key")
 	}
 	switch args[0] {
 	case "ceremony":
@@ -53,8 +53,10 @@ func run(args []string) error {
 		return runProvisionTLSIdentityCmd(args[1:])
 	case "issue-client-cert":
 		return runIssueClientCertCmd(args[1:])
+	case "provision-ocsp-key":
+		return runProvisionOCSPKeyCmd(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q (want: ceremony, reissue-intermediate, provision-signing-key, retire-signing-key, generate-inventory, provision-tls-identity, issue-client-cert)", args[0])
+		return fmt.Errorf("unknown command %q (want: ceremony, reissue-intermediate, provision-signing-key, retire-signing-key, generate-inventory, provision-tls-identity, issue-client-cert, provision-ocsp-key)", args[0])
 	}
 }
 

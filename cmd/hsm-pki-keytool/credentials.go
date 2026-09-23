@@ -321,7 +321,7 @@ func runProvisionTLSIdentityCmd(args []string) error {
 
 	// Generation is irreversible: after this the label is taken, whatever
 	// happens next. Everything checkable was checked above.
-	key, err := provisionTLSKey(ctx, adapter, ws, signingkey.Params{Label: *tlsKeyLabel, Curve: tlsCurve})
+	key, err := provisionServiceKey(ctx, adapter, ws, signingkey.Params{Label: *tlsKeyLabel, Curve: tlsCurve})
 	if err != nil {
 		return err
 	}
@@ -365,11 +365,91 @@ func builtinProfile(name string, validity time.Duration) *profile.Profile {
 	return p
 }
 
-// provisionTLSKey generates the TLS key pair on the token the
+// runProvisionOCSPKeyCmd generates the delegated OCSP responder's key
+// pair on the intermediate's token, under its own versioned label. No
+// certificate: the service issues the responder's certificate itself on
+// the internal path at startup and renews it, because that certificate
+// is short-lived by design and an operator-run renewal would be a
+// calendar entry with a seven-day fuse.
+//
+// The key is generated here and never leaves the token. It is a separate
+// key from the intermediate's and from the TLS key's: a compromised
+// responder key must be able to lie about status and nothing else.
+func runProvisionOCSPKeyCmd(args []string) error {
+	fs := flag.NewFlagSet("provision-ocsp-key", flag.ExitOnError)
+	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\" or \"protectserver\"")
+	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
+	workspaceLabel := fs.String("workspace", "", "token label the intermediate key lives on")
+	workspaceSerial := fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label")
+	pinEnv := fs.String("pin-env", "", "environment variable holding the token's PIN")
+	intermediateKeyLabel := fs.String("intermediate-key-label", "", "CKA_LABEL of the intermediate's key pair, which this label must not be")
+	keyLabel := fs.String("key-label", "", "versioned CKA_LABEL for the responder key pair (e.g. ocsp-signing-key-v1)")
+	curveName := fs.String("curve", "P-256", "EC curve for the key pair: P-256, P-384, or P-521")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	for name, v := range map[string]string{
+		"-module": *modulePath, "-workspace": *workspaceLabel, "-pin-env": *pinEnv,
+		"-intermediate-key-label": *intermediateKeyLabel, "-key-label": *keyLabel,
+	} {
+		if v == "" {
+			return fmt.Errorf("%s is required", name)
+		}
+	}
+	curve, err := config.ParseCurve(*curveName)
+	if err != nil {
+		return err
+	}
+	if err := signingkey.ValidateLabel(*keyLabel); err != nil {
+		return err
+	}
+	if *keyLabel == *intermediateKeyLabel {
+		return fmt.Errorf("-key-label is the intermediate's own label %q: the responder needs its own key, because a compromised responder key must be able to lie about status and nothing else", *keyLabel)
+	}
+
+	adapter, err := newVendorAdapter(*adapterName, *modulePath)
+	if err != nil {
+		return err
+	}
+	defer adapter.Close()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	ws, err := findWorkspace(ctx, adapter, *workspaceLabel, *workspaceSerial)
+	if err != nil {
+		return err
+	}
+	if adapter.TokenLoggedIn() {
+		return fmt.Errorf("a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
+	}
+	pin, err := pinResolver(*pinEnv)()
+	if err != nil {
+		return err
+	}
+	if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
+		return fmt.Errorf("logging into %q: %w", ws.Label, err)
+	}
+	defer func() { _ = adapter.LogoutToken(ctx) }()
+
+	key, err := provisionServiceKey(ctx, adapter, ws, signingkey.Params{Label: *keyLabel, Curve: curve})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("OCSP responder key provisioned:\n  token:     %s (serial %s)\n  key label: %s (%s)\n", ws.Label, ws.Serial, key.Label, *curveName)
+	fmt.Printf("token reports CKA_SENSITIVE=%t CKA_EXTRACTABLE=%t; the private key stays on the token\n", key.Sensitive, key.Extractable)
+	fmt.Printf("point the service at it:\n  ca.ocsp.key_label: %s\n", key.Label)
+	fmt.Println("the service issues and renews the responder certificate itself; nothing else to provision")
+	return nil
+}
+
+// provisionServiceKey generates a service key pair on the token the
 // intermediate already authenticated. Unlike provision-signing-key it
-// does not refuse a token holding a CA hierarchy key: this key belongs on
-// that token, beside the intermediate whose certificate chain it serves.
-func provisionTLSKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, params signingkey.Params) (key signingkey.Key, err error) {
+// does not refuse a token holding a CA hierarchy key: these keys belong
+// on that token, beside the intermediate whose certificate chain they
+// serve.
+func provisionServiceKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, params signingkey.Params) (key signingkey.Key, err error) {
 	s, err := adapter.OpenSession(ctx, ws, pk11.DefaultSessionOptions())
 	if err != nil {
 		return signingkey.Key{}, fmt.Errorf("opening a session on %q: %w", ws.Label, err)

@@ -92,3 +92,47 @@ func TestLoad_ProfilesRefusals(t *testing.T) {
 func sprintf(format string, args ...any) string {
 	return fmt.Sprintf(format, args...)
 }
+
+// withOCSP appends a ca.ocsp block to the valid configuration.
+func withOCSP(keyLabel string) string {
+	return validSoftHSM2Config + "  ocsp:\n    key_label: \"" + keyLabel + "\"\n"
+}
+
+// TestLoad_OCSP: the block is optional; when present the key is its own,
+// and the profile the responder is issued under must exist.
+func TestLoad_OCSP(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	cfg, err := Load(writeConfig(t, validSoftHSM2Config))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CA.OCSP != nil {
+		t.Fatalf("OCSP = %+v, want nil when absent", cfg.CA.OCSP)
+	}
+	cfg, err = Load(writeConfig(t, withOCSP("ocsp-signing-key-v1")))
+	if err != nil {
+		t.Fatalf("Load with ocsp: %v", err)
+	}
+	if cfg.CA.OCSP == nil || cfg.CA.OCSP.KeyLabel != "ocsp-signing-key-v1" {
+		t.Fatalf("OCSP = %+v", cfg.CA.OCSP)
+	}
+	for _, tc := range []struct{ name, body, want string }{
+		{"empty label", withOCSP(""), "ca.ocsp.key_label is empty"},
+		{"the intermediate's label", withOCSP("ca-intermediate-key-v1"), "is the intermediate's key label"},
+		{"no ocsp-responder profile", withProfiles(`
+    tls-client:
+      extended_key_usages: [clientAuth]
+      key_usages: [digitalSignature]
+      subject: [CN]
+      key_algorithms: [ec-p256]
+      validity_hours: 24
+`) + "  ocsp:\n    key_label: \"ocsp-signing-key-v1\"\n", "does not define \"ocsp-responder\""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(writeConfig(t, tc.body))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load = %v, want it to say %q", err, tc.want)
+			}
+		})
+	}
+}

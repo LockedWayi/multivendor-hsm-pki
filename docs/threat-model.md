@@ -13,8 +13,9 @@ that signs every build of `main` keyless, and **mutual TLS on the write
 endpoints**, with the clients authorised by name from certificates this
 CA issued, certificate profiles, so every certificate is issued under a
 stated policy, and a per-identity binding of profiles and names, so each
-issuer may obtain only what it was granted. It has no OCSP responder, no
-audit log, and no Vault custody. §8 says what planned work changes.
+issuer may obtain only what it was granted, and a delegated OCSP
+responder answering from the same store as the CRL. It has no audit log
+and no Vault custody. §8 says what planned work changes.
 
 ---
 
@@ -332,7 +333,8 @@ design, not something this repository has run.
 
 ### A8: Network position
 
-**Gets:** the ability to **block** CRL fetches. A relying party that
+**Gets:** the ability to **block** CRL fetches and OCSP queries. A
+relying party that
 cannot fetch a CRL typically treats revocation as unavailable and
 proceeds, so blocking the CDP is a cheap way to keep a revoked certificate
 working.

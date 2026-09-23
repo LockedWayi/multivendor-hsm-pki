@@ -21,12 +21,20 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
 	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/responder"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
 // shutdownGrace bounds how long the server waits for in-flight requests to
 // drain before forcing shutdown.
 const shutdownGrace = 10 * time.Second
+
+// ocspRenewalCheckInterval is how often the responder asks itself
+// whether half its certificate's life has passed. The built-in profile
+// gives seven days, so ten minutes is fine-grained enough and costs
+// nothing between renewals.
+const ocspRenewalCheckInterval = 10 * time.Minute
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to the service config file")
@@ -82,8 +90,12 @@ func run(configPath string, logger *slog.Logger) error {
 	)
 
 	// The paths belong to internal/api and the origin to the operator; the
-	// CA only sees finished URLs.
+	// CA only sees finished URLs. The OCSP pointer exists only when a
+	// responder will answer at it.
 	leafDist := api.LeafDistributionFor(cfg.CA.BaseURL)
+	if cfg.CA.OCSP != nil {
+		leafDist = api.LeafDistributionWithOCSP(cfg.CA.BaseURL)
+	}
 
 	// The service loads a ceremony-produced intermediate and never creates
 	// a CA. A self-signed certificate fails here.
@@ -120,6 +132,35 @@ func run(configPath string, logger *slog.Logger) error {
 	}
 	defer records.Close()
 
+	// The delegated responder, when configured: its key is on the token
+	// beside the intermediate, its certificate is issued here, now, on
+	// the internal path, and renewed in the background.
+	var ocspResponder *responder.Responder
+	if cfg.CA.OCSP != nil {
+		ocspSigner, err := ca.NewSigner(ctx, adapter, ws, cfg.PKCS11.SessionOptions, cfg.CA.OCSP.KeyLabel, cfg.CA.Curve())
+		if err != nil {
+			return fmt.Errorf("loading the OCSP responder key %q: %w", cfg.CA.OCSP.KeyLabel, err)
+		}
+		ocspResponder, err = responder.New(ctx, responder.Config{
+			Issuer:   caInstance,
+			Records:  records,
+			Signer:   ocspSigner,
+			Profile:  cfg.CA.ProfileSet[profile.InternalOnlyProfile],
+			Subject:  cfg.CA.OCSP.Subject,
+			Validity: time.Duration(cfg.CA.CRLValidityHours) * time.Hour,
+			Logger:   logger,
+		})
+		if err != nil {
+			return err
+		}
+		go ocspResponder.RunRenewal(ctx, ocspRenewalCheckInterval)
+		logger.Info("OCSP responder ready",
+			"key_label", cfg.CA.OCSP.KeyLabel,
+			"responder_not_after", ocspResponder.Certificate().NotAfter,
+			"url", leafDist.OCSPURL,
+		)
+	}
+
 	handlers := api.NewServer(api.Config{
 		Issuer:      caInstance,
 		Adapter:     adapter,
@@ -129,6 +170,7 @@ func run(configPath string, logger *slog.Logger) error {
 		Root:        rootArtifacts,
 		Logger:      logger,
 		Profiles:    cfg.CA.ProfileSet,
+		Responder:   ocspResponder,
 		Authorization: api.Authorization{
 			Issuers:  cfg.API.Entitlements,
 			Revokers: cfg.API.Revokers,

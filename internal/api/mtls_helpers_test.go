@@ -22,6 +22,7 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/responder"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
@@ -67,6 +68,13 @@ func startServers(t *testing.T, c *ca.CA, adapter pk11.VendorAdapter, ws pk11.Wo
 // with an explicit authorisation.
 func startServersOn(t *testing.T, public *httptest.Server, c *ca.CA, adapter pk11.VendorAdapter, ws pk11.Workspace, records store.Store, crlValidity time.Duration, root api.RootArtifacts, authz api.Authorization) *testServers {
 	t.Helper()
+	return startServersFull(t, public, c, adapter, ws, records, crlValidity, root, authz, nil)
+}
+
+// startServersFull is startServersOn with an OCSP responder on the public
+// surface when resp is not nil.
+func startServersFull(t *testing.T, public *httptest.Server, c *ca.CA, adapter pk11.VendorAdapter, ws pk11.Workspace, records store.Store, crlValidity time.Duration, root api.RootArtifacts, authz api.Authorization, resp *responder.Responder) *testServers {
+	t.Helper()
 
 	rootCert, err := x509.ParseCertificate(root.CertDER)
 	if err != nil {
@@ -83,6 +91,7 @@ func startServersOn(t *testing.T, public *httptest.Server, c *ca.CA, adapter pk1
 		Root:          root,
 		Logger:        testLogger(),
 		Authorization: authz,
+		Responder:     resp,
 	})
 
 	public.Config.Handler = handlers.Public

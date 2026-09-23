@@ -129,6 +129,9 @@ type CAConfig struct {
 	Profiles map[string]profile.Spec `yaml:"profiles"`
 	// ProfileSet is derived from Profiles by Load.
 	ProfileSet profile.Set `yaml:"-"`
+	// OCSP configures the delegated responder. Absent means none: no
+	// route, no OCSP pointer in issued certificates.
+	OCSP *OCSPConfig `yaml:"ocsp"`
 	// IntermediateKeyLabel is the CKA_LABEL of the intermediate key pair the
 	// ceremony created, on the token this service authenticates.
 	IntermediateKeyLabel string `yaml:"intermediate_key_label"`
@@ -163,6 +166,21 @@ type CAConfig struct {
 	// later CRL. An operator who knows the last number sets it here. An
 	// existing counter is never affected.
 	CRLNumberFloor string `yaml:"crl_number_floor"`
+}
+
+// OCSPConfig configures the delegated OCSP responder. The responder key
+// lives on the token this service authenticates, beside the intermediate,
+// under its own versioned label, provisioned by hsm-pki-keytool
+// provision-ocsp-key. Its certificate is issued by the service itself on
+// the internal path under the ocsp-responder profile and renewed
+// automatically; nothing here names a certificate file.
+type OCSPConfig struct {
+	// KeyLabel is the CKA_LABEL of the responder key pair. Never the
+	// intermediate's label, and never the TLS key's: Load refuses both.
+	KeyLabel string `yaml:"key_label"`
+	// Subject is the responder certificate's common name. Defaulted from
+	// the intermediate's when empty.
+	Subject string `yaml:"subject"`
 }
 
 // defaultCRLValidityHours applies when ca.crl_validity_hours is zero.
@@ -257,8 +275,34 @@ func Load(path string) (*Config, error) {
 	if err := c.validateAuthenticatedSurface(); err != nil {
 		return nil, err
 	}
+	if err := c.validateOCSP(); err != nil {
+		return nil, err
+	}
 
 	return &c, nil
+}
+
+// validateOCSP checks the responder block. The responder key signs
+// status responses and nothing else, so it is neither the intermediate's
+// key nor the TLS key, and the profile it is issued under must exist.
+func (c *Config) validateOCSP() error {
+	o := c.CA.OCSP
+	if o == nil {
+		return nil
+	}
+	if o.KeyLabel == "" {
+		return fmt.Errorf("config: ca.ocsp.key_label is empty")
+	}
+	if o.KeyLabel == c.CA.IntermediateKeyLabel {
+		return fmt.Errorf("config: ca.ocsp.key_label %q is the intermediate's key label; the responder needs its own key, because a compromised responder key must be able to lie about status and nothing else", o.KeyLabel)
+	}
+	if c.Server.TLS != nil && o.KeyLabel == c.Server.TLS.KeyLabel {
+		return fmt.Errorf("config: ca.ocsp.key_label %q is the TLS key's label; one key, one purpose", o.KeyLabel)
+	}
+	if _, err := c.CA.ProfileSet.Lookup(profile.InternalOnlyProfile); err != nil {
+		return fmt.Errorf("config: ca.ocsp is set but ca.profiles does not define %q, which the responder's certificate is issued under", profile.InternalOnlyProfile)
+	}
+	return nil
 }
 
 // loadProfiles compiles ca.profiles, or takes the built-ins when the
