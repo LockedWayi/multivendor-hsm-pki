@@ -35,6 +35,15 @@ import (
 // ErrUnknownProfile reports a name no profile in the set carries.
 var ErrUnknownProfile = errors.New("profile: unknown profile")
 
+// InternalOnlyProfile is the one profile no client identity may be
+// granted: the delegated OCSP responder's certificate is issued on the
+// internal path, never over the API. Whatever the configuration says, an
+// entitlement naming it is refused at load and again at the point of use.
+const InternalOnlyProfile = "ocsp-responder"
+
+// InternalOnly reports whether name is a profile no client may obtain.
+func InternalOnly(name string) bool { return name == InternalOnlyProfile }
+
 // SANType is one subject-alternative-name type a profile may allow.
 type SANType string
 

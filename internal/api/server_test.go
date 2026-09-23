@@ -563,7 +563,7 @@ func TestIssuedLeafDistributionPointsResolve(t *testing.T) {
 
 		c, adapter, ws, rootArtifacts := newTestCAAt(t, b, baseURL)
 		ts := startServersOn(t, public, c, adapter, ws, store.NewMemory(), 24*time.Hour, rootArtifacts,
-			api.Authorization{Issuers: []string{testIssuer}, Revokers: []string{testIssuer}})
+			api.Authorization{Issuers: entitled(testIssuer), Revokers: []string{testIssuer}})
 		defer ts.Close()
 
 		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

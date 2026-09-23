@@ -233,7 +233,13 @@ server:
     cert_path: "/etc/hsm-pki/tls.pem"
 
 api:
-  issuers: ["$OPERATOR_ID"]
+  # The local operator may issue under every client profile and name
+  # anything. A deployment narrows both: which profiles an identity may
+  # request, and which names, as patterns.
+  issuers:
+    "$OPERATOR_ID":
+      profiles: [tls-server, tls-client, code-signing]
+      names: ["cn:*", "dns:*", "ip:*", "uri:*", "email:*"]
   revokers: ["$OPERATOR_ID"]
 
 pkcs11:

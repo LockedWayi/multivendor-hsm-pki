@@ -447,7 +447,10 @@ server:
     key_label: "ca-tls-key-v1"
     cert_path: "tls.pem"
 api:
-  issuers: ["urn:hsm-pki:operator:alice"]
+  issuers:
+    "urn:hsm-pki:operator:alice":
+      profiles: [tls-server, tls-client]
+      names: ["dns:*.example.test", "cn:*.example.test", "uri:urn:hsm-pki:operator:*"]
   revokers: ["urn:hsm-pki:operator:alice", "urn:hsm-pki:operator:bob"]
 ` + validSoftHSM2Config[len("\nserver:\n  listen_addr: \"0.0.0.0:8080\"\n"):]
 	cfg, err := Load(writeConfig(t, body))
@@ -463,6 +466,9 @@ api:
 	if len(cfg.API.Issuers) != 1 || len(cfg.API.Revokers) != 2 {
 		t.Fatalf("API = %+v, want one issuer and two revokers", cfg.API)
 	}
+	if got := cfg.API.Entitlements.Identities(); len(got) != 1 || got[0] != "urn:hsm-pki:operator:alice" {
+		t.Fatalf("Entitlements.Identities() = %v", got)
+	}
 }
 
 func TestLoad_WithoutTLSTheWriteEndpointsAreUnreachable(t *testing.T) {
@@ -474,8 +480,8 @@ func TestLoad_WithoutTLSTheWriteEndpointsAreUnreachable(t *testing.T) {
 	if cfg.Server.TLS != nil {
 		t.Fatalf("Server.TLS = %+v, want nil when no tls block is present", *cfg.Server.TLS)
 	}
-	if len(cfg.API.Issuers) != 0 || len(cfg.API.Revokers) != 0 {
-		t.Fatalf("API = %+v, want empty lists", cfg.API)
+	if len(cfg.API.Issuers) != 0 || len(cfg.API.Revokers) != 0 || len(cfg.API.Entitlements) != 0 {
+		t.Fatalf("API = %+v, want nothing configured", cfg.API)
 	}
 }
 
@@ -490,7 +496,7 @@ func TestLoad_AuthenticatedSurfaceRefusals(t *testing.T) {
 		{
 			"api lists without a tls listener",
 			"server:\n  listen_addr: \"0.0.0.0:8080\"\n",
-			"api:\n  issuers: [\"urn:a\"]\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-client], names: [\"cn:*\"]}\n",
 			"server.tls is not",
 		},
 		{
@@ -502,38 +508,68 @@ func TestLoad_AuthenticatedSurfaceRefusals(t *testing.T) {
 		{
 			"tls without revokers",
 			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
-			"api:\n  issuers: [\"urn:a\"]\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-client], names: [\"cn:*\"]}\n",
 			"api.revokers is empty",
 		},
 		{
 			"tls missing its key label",
 			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    cert_path: \"tls.pem\"\n",
-			"api:\n  issuers: [\"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-client], names: [\"cn:*\"]}\n  revokers: [\"urn:a\"]\n",
 			"server.tls.key_label is empty",
 		},
 		{
 			"tls on the public listener's address",
 			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8080\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
-			"api:\n  issuers: [\"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-client], names: [\"cn:*\"]}\n  revokers: [\"urn:a\"]\n",
 			"same as server.listen_addr",
 		},
 		{
 			"the intermediate's key as the TLS key",
 			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-intermediate-key-v1\"\n    cert_path: \"tls.pem\"\n",
-			"api:\n  issuers: [\"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-client], names: [\"cn:*\"]}\n  revokers: [\"urn:a\"]\n",
 			"is the intermediate's key label",
 		},
 		{
-			"an identity listed twice",
+			"a revoker listed twice",
 			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
-			"api:\n  issuers: [\"urn:a\", \"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-client], names: [\"cn:*\"]}\n  revokers: [\"urn:a\", \"urn:a\"]\n",
 			"lists \"urn:a\" twice",
 		},
 		{
-			"an empty identity",
+			"an empty revoker identity",
 			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
-			"api:\n  issuers: [\"\"]\n  revokers: [\"urn:a\"]\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-client], names: [\"cn:*\"]}\n  revokers: [\"\"]\n",
 			"contains an empty identity",
+		},
+		{
+			"the old list form of issuers",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers: [\"urn:a\"]\n  revokers: [\"urn:a\"]\n",
+			"parsing",
+		},
+		{
+			"an issuer granted nothing",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [], names: [\"cn:*\"]}\n  revokers: [\"urn:a\"]\n",
+			"lists no profile",
+		},
+		{
+			"an issuer granted a profile that does not exist",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-clinet], names: [\"cn:*\"]}\n  revokers: [\"urn:a\"]\n",
+			"which ca.profiles does not define",
+		},
+		{
+			"an issuer granted the internal-only profile",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [ocsp-responder], names: [\"cn:*\"]}\n  revokers: [\"urn:a\"]\n",
+			"no client may obtain",
+		},
+		{
+			"an issuer with a pattern that does not parse",
+			"server:\n  listen_addr: \"0.0.0.0:8080\"\n  tls:\n    listen_addr: \"0.0.0.0:8443\"\n    key_label: \"ca-tls-key-v1\"\n    cert_path: \"tls.pem\"\n",
+			"api:\n  issuers:\n    \"urn:a\": {profiles: [tls-client], names: [\"host:*\"]}\n  revokers: [\"urn:a\"]\n",
+			"unknown name type",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

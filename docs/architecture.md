@@ -137,10 +137,28 @@ surface is never large and untested at once.
    at startup on an unknown name. `ca.cert_ttl_hours` is the ceiling no
    profile may exceed.
 
-   Planned next: binding each authenticated identity to the profiles and
-   name patterns it may request, and a delegated OCSP responder. Profiles
-   say what a certificate may be; the binding says who may ask for it.
-   Together they separate a CA from a signing oracle.
+   Each issuing identity is bound to the profiles it may request and the
+   names it may put in a certificate, as patterns over the common name
+   and the four subject-alternative-name types. A request outside the
+   binding — a profile not granted, or one name of one type that no
+   pattern of that type matches — is refused whole with a 403 that says
+   nothing more; the reason is in the server's log. An identity absent
+   from the binding issues nothing. Profiles say what a certificate may
+   be; the binding says who may ask for it. Together they separate a CA
+   from a signing oracle.
+
+   The policy model is a static mapping in the configuration, and its
+   limits are deliberate: there is no request queue and no approval
+   step, so what an identity may obtain is decided when the file is
+   written, not per request; patterns are globs, which express "under
+   this zone" and "this prefix" and nothing subtler; revocation is not
+   bound to who issued a certificate, because the store does not record
+   that and during an incident the ability to withdraw any certificate
+   is the one that matters; and the delegated OCSP responder's profile
+   cannot be granted to any client, because that certificate is issued
+   on the internal path only.
+
+   Planned next: the delegated OCSP responder.
 
 6. **Vault with HSM auto-unseal (planned capstone).** Key custody moves
    out of process memory into Vault, and Vault's own root of trust is

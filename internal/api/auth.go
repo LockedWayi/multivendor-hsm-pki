@@ -8,26 +8,36 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/entitlement"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
 )
 
-// Authorization names the clients that may write. A client is identified
-// by its certificate, and the certificate must have been issued by this
-// CA: it has to chain to the ceremony root at the TLS layer, and its
-// serial has to be in the store as issued and not revoked. Chaining alone
-// is not enough, because this CA copies the subject and the SANs from
-// whatever CSR an issuer sends it, so any leaf it issued could otherwise
-// carry an issuer's name.
+// Authorization names the clients that may write, and for issuers what
+// they may write. A client is identified by its certificate, and the
+// certificate must have been issued by this CA: it has to chain to the
+// ceremony root at the TLS layer, and its serial has to be in the store
+// as issued and not revoked. Chaining alone is not enough, because this
+// CA copies the subject and the names an issuer asks for, so any leaf it
+// issued could otherwise carry an issuer's name.
 //
 // An identity is one of the strings ClientIdentities derives from the
-// certificate. The lists are exact-match, so a name that differs by a
-// trailing dot or a case is a different client.
+// certificate. Matching is exact, so a name that differs by a trailing
+// dot or a case is a different client.
 type Authorization struct {
-	// Issuers may POST /certificates.
-	Issuers []string
-	// Revokers may POST /certificates/{serial}/revoke.
+	// Issuers may POST /certificates, each for the profiles and the
+	// names its entitlement grants and nothing else. An identity absent
+	// here issues nothing.
+	Issuers entitlement.Map
+	// Revokers may POST /certificates/{serial}/revoke, for any serial.
+	// Revocation is not bound to who issued the certificate: the store
+	// does not record that, and during an incident the ability to
+	// withdraw any certificate is the one that matters.
 	Revokers []string
 }
+
+// issuerIdentities lists who may reach the issuance endpoint at all;
+// what each may issue is decided by the entitlement in the handler.
+func (a Authorization) issuerIdentities() []string { return a.Issuers.Identities() }
 
 // ClientIdentities returns every name a client certificate can be
 // authorised by: each URI SAN as written, then the subject common name

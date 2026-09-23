@@ -236,7 +236,7 @@ func TestWrite_IdentityDecidesTheOperation(t *testing.T) {
 		c, adapter, ws, rootArtifacts := newTestCA(t, b)
 		records := store.NewMemory()
 		ts := startServersOn(t, httptest.NewUnstartedServer(nil), c, adapter, ws, records, 24*time.Hour, rootArtifacts,
-			api.Authorization{Issuers: []string{testIssuer}, Revokers: []string{testRevoker}})
+			api.Authorization{Issuers: entitled(testIssuer), Revokers: []string{testRevoker}})
 		defer ts.Close()
 		revoker := ts.clientWith(t, issueClientCertificate(t, c, records, testRevoker))
 
@@ -297,7 +297,7 @@ func TestWrite_CommonNameIsAnIdentityToo(t *testing.T) {
 		// issueClientLeaf names the subject "client <identity>".
 		cn := "client " + testIssuer
 		ts := startServersOn(t, httptest.NewUnstartedServer(nil), c, adapter, ws, records, 24*time.Hour, rootArtifacts,
-			api.Authorization{Issuers: []string{cn}, Revokers: []string{cn}})
+			api.Authorization{Issuers: entitled(cn), Revokers: []string{cn}})
 		defer ts.Close()
 
 		resp, err := postCSR(t, ts.client, ts.tls.URL, "by-common-name.example.test")
@@ -386,7 +386,7 @@ func TestAuthenticatedListener_ServesAnHSMHeldIdentity(t *testing.T) {
 			Profiles: testProfiles(),
 			Issuer:   c, Adapter: adapter, Workspace: ws, Records: records, CRLValidity: 24 * time.Hour,
 			Root: rootArtifacts, Logger: testLogger(),
-			Authorization: api.Authorization{Issuers: []string{testIssuer}, Revokers: []string{testIssuer}},
+			Authorization: api.Authorization{Issuers: entitled(testIssuer), Revokers: []string{testIssuer}},
 		})
 		srv := httptest.NewUnstartedServer(handlers.Authenticated)
 		srv.TLS = api.TLSConfig(identity, root)

@@ -583,8 +583,9 @@ and the identity it provisions is a `tls-server` one; both profiles are
 built in and the commands choose them, never the operator.
 
 The command prints the identities the certificate carries: each URI SAN
-as written, then the common name. One of them goes in `api.issuers` or
-`api.revokers`, which are exact-match lists. A request with neither a URI
+as written, then the common name. One of them goes in `api.issuers`,
+bound to the profiles and name patterns the operator may request, or in
+`api.revokers`; identities are matched exactly. A request with neither a URI
 SAN nor a common name is refused before it is signed, because no entry in
 either list could ever match the certificate it would produce.
 

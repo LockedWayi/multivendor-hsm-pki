@@ -59,7 +59,7 @@ func (ts *testServers) Close() {
 func startServers(t *testing.T, c *ca.CA, adapter pk11.VendorAdapter, ws pk11.Workspace, records store.Store, crlValidity time.Duration, root api.RootArtifacts) *testServers {
 	t.Helper()
 	return startServersOn(t, httptest.NewUnstartedServer(nil), c, adapter, ws, records, crlValidity, root,
-		api.Authorization{Issuers: []string{testIssuer}, Revokers: []string{testIssuer}})
+		api.Authorization{Issuers: entitled(testIssuer), Revokers: []string{testIssuer}})
 }
 
 // startServersOn is startServers over a public listener the test created

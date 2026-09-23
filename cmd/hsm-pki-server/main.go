@@ -130,7 +130,7 @@ func run(configPath string, logger *slog.Logger) error {
 		Logger:      logger,
 		Profiles:    cfg.CA.ProfileSet,
 		Authorization: api.Authorization{
-			Issuers:  cfg.API.Issuers,
+			Issuers:  cfg.API.Entitlements,
 			Revokers: cfg.API.Revokers,
 		},
 	})
@@ -158,7 +158,7 @@ func run(configPath string, logger *slog.Logger) error {
 			"tls_subject", identity.Leaf.Subject.String(),
 			"tls_key_label", cfg.Server.TLS.KeyLabel,
 			"tls_not_after", identity.Leaf.NotAfter,
-			"issuers", len(cfg.API.Issuers),
+			"issuers", cfg.API.Entitlements.Identities(),
 			"revokers", len(cfg.API.Revokers),
 		)
 		tlsServer := newHTTPServer(cfg.Server.TLS.ListenAddr, handlers.Authenticated)
