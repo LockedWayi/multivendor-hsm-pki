@@ -235,8 +235,11 @@ policy and none under a default; and a binding of each issuing identity
 to the profiles and names it may request, so no issuer can obtain a
 certificate it was not granted; and a delegated OCSP responder, signing
 with its own HSM-held key under a short-lived, self-renewed certificate,
-answering from the same store the CRL is built from. Planned next: Vault
-custody.
+answering from the same store the CRL is built from. Planned next: the
+third and fourth backends, Luna and nShield, under the maintainer's own
+access, so "the abstraction generalizes" becomes a measurement rather than
+an argument. Vault custody is designed and optional, not scheduled
+([docs/architecture.md](docs/architecture.md), layer 6).
 
 ## Running it
 
