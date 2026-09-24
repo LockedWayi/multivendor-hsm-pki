@@ -17,8 +17,12 @@
 #
 # HANG_ENV, when set, is passed to docker run as extra flags, for example
 # HANG_ENV="-e HSM_PKI_MODULE_THREAD=1" to measure a branch's experiment
-# switch. Written for the open 6.1 item; the tally so far is in
-# docs/test-matrix.md section 6.
+# switch. Every summary line names the commit the run was built from,
+# because the suite is compiled from the working tree at the start of each
+# run: a branch switched underneath the loop measures the new branch from
+# that run on, and thirty-two runs of one evening's tally were lost to
+# exactly that. Run it from a clone nothing else touches. Written for the
+# open 6.1 item; the tally so far is in docs/test-matrix.md section 6.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -54,7 +58,7 @@ for i in $(seq 1 "$N"); do
     hung=$(grep -c '^panic: test timed out' "$L")
     where=$(grep -oE '^\s*=== RUN\s+TestConformance/ProtectServer/[A-Za-z0-9_]+' "$L" | tail -1 | awk '{print $3}')
     position=$(grep -cE '^\s*=== RUN\s+TestConformance/ProtectServer/[A-Za-z0-9_]+' "$L")
-    echo "$TAG run $i: rc=$rc hung=$hung seconds=$((SECONDS - start)) packages_ok=$(grep -c '^ok' "$L") cached=$(grep -c '(cached)' "$L") last_case=$position:${where:-none}"
+    echo "$TAG run $i: commit=$(git rev-parse --short HEAD)$(git diff --quiet || echo '+dirty') rc=$rc hung=$hung seconds=$((SECONDS - start)) packages_ok=$(grep -c '^ok' "$L") cached=$(grep -c '(cached)' "$L") last_case=$position:${where:-none}"
     if [ "$hung" -gt 0 ]; then
         hangs=$((hangs + 1))
         grep -oE 'pkcs11\.\(\*Ctx\)\.[A-Za-z]+' "$L" | sort | uniq -c | sort -rn | head -2 | sed 's/^/    in module: /'
