@@ -37,4 +37,25 @@ func NewLunaAdapter(modulePath string) (*LunaAdapter, error) {
 	return &LunaAdapter{pkcs11Adapter: base}, nil
 }
 
+// Capabilities declares what a Luna Network HSM 7 (firmware 7.8.7) was
+// measured to do through client 10.9.4, on partitions in their default
+// policy.
+func (a *LunaAdapter) Capabilities() Capabilities {
+	return Capabilities{
+		ConcurrentSlotEnumeration:  false, // not measured under concurrent callers; the shared lock stays
+		SecondInitializeInProcess:  false,
+		HandlesSpanSessions:        true,
+		HandlesSurviveSessionClose: true,
+		ZeroDigest:                 ZeroDigestSignRefused, // C_Sign answers CKR_DATA_INVALID
+		// Not measurable while PrivateKeyWrapRefused is set: the wrap that
+		// would produce the ciphertext to restore is refused first.
+		UnwrapHonoursExtractable: false,
+		// Partition policy 1, "Allow private key wrapping", defaults to 0
+		// even when the capability is present; the partitions this was
+		// measured on keep the default.
+		PrivateKeyWrapRefused: "Luna partition policy 1 (Allow private key wrapping) is off",
+		UnwrapNeedsValueLen:   true,
+	}
+}
+
 var _ VendorAdapter = (*LunaAdapter)(nil)

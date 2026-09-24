@@ -38,11 +38,15 @@ type PINResolver func() ([]byte, error)
 // The private key object is looked up by CKA_LABEL in every session,
 // rather than caching the handle GenerateKeyPair returned. SoftHSM2 2.6.1
 // returned CKR_OBJECT_HANDLE_INVALID for a handle used after the session
-// that obtained it was closed. PKCS#11 v2.40 scopes object handles to the
-// application, not to one session, and guarantees a handle only for as
-// long as the session that obtained it exists. So the SoftHSM2 behaviour
-// may be implementation behaviour. A lookup per session works on every
-// implementation, which is why the code does that.
+// that obtained it was closed, when this was written. PKCS#11 v2.40
+// scopes object handles to the application, not to one session, and
+// guarantees a handle only for as long as the session that obtained it
+// exists. The conformance suite now measures both (Capabilities
+// .HandlesSpanSessions and .HandlesSurviveSessionClose) and every backend,
+// SoftHSM2 included, accepted the handle in both cases on 2026-09-24; the
+// earlier observation was not reproduced under the suite's conditions. A
+// lookup per session works whatever a module does, which is why the code
+// still does that.
 type Signer struct {
 	adapter     pk11.VendorAdapter
 	workspace   pk11.Workspace
