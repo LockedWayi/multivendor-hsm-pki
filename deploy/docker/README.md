@@ -42,7 +42,7 @@ dependencies must resolve inside the service's filesystem:
 |---|---|
 | `libsofthsm2.so` | `libcrypto.so.3`, **`libstdc++.so.6`**, **`libgcc_s.so.1`**, libc, libm |
 | `libctsw.so` (ProtectToolkit) | libdl, libpthread, libc, all glibc |
-| `libCryptoki2.so` (Luna HSM Client 10.9.4) | Resolved with nothing missing in the dev image (`ldd`); not yet started inside this image, see "What has been run" |
+| `libCryptoki2.so` (Luna HSM Client 10.9.4) | libdl, libpthread, librt, libm, **`libstdc++.so.6`**, **`libgcc_s.so.1`**, libc. Loads and connects in this image (2026-09-24, "What has been run") |
 
 `distroless/base` carries glibc and libcrypto but neither `libstdc++.so.6`
 nor `libgcc_s.so.1`. `distroless/cc` adds exactly those two, and neither has
@@ -127,11 +127,8 @@ absent because the shell, the package manager and the toolchain are absent.
 
 ## What has been run
 
-The two software backends, in this image, with only `config.yaml`
-changing between them. The Luna adapter has run the whole test suite and
-the operator commands from the dev image; the service itself has not yet
-been started against a partition from this image, and until it has, the
-Luna row of the backend table describes the adapter, not this packaging:
+All three backends, in this image, with only `config.yaml` changing
+between them:
 
 - **SoftHSM2**: full startup, `connected to HSM`, a certificate issued
   (`201`; over plain HTTP at the time, over mutual TLS since the write
@@ -143,6 +140,28 @@ Luna row of the backend table describes the adapter, not this packaging:
   module loaded, the token resolved by label, the user login was
   established. Then a clean stop at the missing intermediate certificate,
   since no ceremony has been run against those tokens.
+- **Luna Network HSM 7** (client 10.9.4, firmware 7.8.7, two partitions
+  of the maintainer's appliance, 2026-09-24): the whole path. A ceremony
+  on the two partitions, the TLS identity, the OCSP key and the first
+  operator certificate from the dev image; then this image, read-only
+  root filesystem, every capability dropped, the client directory mounted
+  at its own absolute path (the paths in `Chrystoki.conf` are absolute)
+  and `ChrystokiConfigurationPath` in the environment: `connected to
+  HSM`, `intermediate CA ready`, `OCSP responder ready` with its key on
+  the partition, both listeners up. Over mutual TLS a certificate was
+  issued (`201`) and verified against the ceremony root by openssl, the
+  OCSP responder said `good`, a revocation (`204`) turned that into
+  `revoked` with the reason, and the leaf CRL served as DER carried the
+  one entry; the same request without a client certificate was refused at
+  the handshake. Afterwards `ci/token-cleanup -adapter luna` returned both
+  partitions to zero objects. Two notes on the mounts: the client
+  directory is mounted read-write, because the module keeps a lock file
+  under `MutexFolder`, and a read-only root filesystem was otherwise
+  enough; and the container ran as **UID 1000**, the owner of the client's
+  key file, not the image's 65532, because that key is `0400` and a copy
+  of a client identity was not going to be made for a test. UID 1000 is
+  not in the image's passwd database and the Luna module did not mind,
+  which is a point of contrast with the constraint below.
 
 ### An open constraint on the vendor path, measured but not explained
 
@@ -158,4 +177,8 @@ is a hypothesis. It has not been tested, because the test needs a token
 store readable by a UID that is in passwd.
 
 It matters because the pod runs as 65532. It does not affect SoftHSM2,
-which runs as 65532, and SoftHSM2 is what CI runs.
+which runs as 65532, and SoftHSM2 is what CI runs. Nor does it affect
+Luna: the run above was UID 1000, absent from the image's passwd, and
+`libCryptoki2.so` initialized and connected regardless, so whatever
+ProtectToolkit-C resolves through the passwd database, the Luna client
+does not need it.
