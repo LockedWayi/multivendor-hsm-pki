@@ -39,7 +39,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
   Measured: `openssl ocsp` verifies the response chain and reads good,
   then revoked after a revocation over the API, then unknown for a serial
-  this CA never issued, on both backends. Adds `golang.org/x/crypto`,
+  this CA never issued, on both backends of the time, SoftHSM2 and the
+  ProtectToolkit-C emulator. Adds `golang.org/x/crypto`,
   the standard library's extension family, for `ocsp`.
 - **Issuance entitlements.** Each issuer in `api.issuers` is bound to the
   profiles it may request and to name patterns over the common name and
@@ -110,7 +111,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   ceremony-minted certificate as bringing the root out to sign a leaf.
   Operator procedure in `docs/key-ceremony-and-recovery.md` §8.
 
-  Measured, both backends: the service's own loader accepts the
+  Measured on both backends of the time, SoftHSM2 and the ProtectToolkit-C
+  emulator: the service's own loader accepts the
   provisioned identity and a TLS 1.3 mutual handshake completes between
   it and the issued client certificate, with the server's
   CertificateVerify signed by the HSM, and fails when the client presents
@@ -186,14 +188,36 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   registry entry in `internal/hsmtest` and in the conformance suite. The
   whole suite runs against it with the `LUNA_*` variables and
   `ChrystokiConfigurationPath`; `LUNA_ROLE` runs the conformance suite as
-  the Crypto Officer or the Limited Crypto Officer
-  (`pkcs11.LunaRoleLimitedCryptoOfficer`, the vendor user type
-  `0x80000003`). Two measured refusals are declared per backend in the
-  suite and asserted, not skipped: Luna does not wrap a private key under
-  its default partition policy, and it needs `CKA_VALUE_LEN` in a
-  secret-key unwrap template that SoftHSM2 refuses as read-only.
+  the Crypto Officer (`co`, the default), the Limited Crypto Officer
+  (`lco`, `pkcs11.LunaRoleLimitedCryptoOfficer`, the vendor user type
+  `0x80000003`) or the Crypto User (`cu`, `pkcs11.LunaRoleCryptoUser`,
+  `0x80000001`). Two measured refusals are declared per backend in the
+  suite and asserted: Luna does not wrap a private key under its default
+  partition policy (the backup round trip asserts the refusal and then
+  skips, so it fails the day the wrap succeeds), and it needs
+  `CKA_VALUE_LEN` in a secret-key unwrap template that SoftHSM2 refuses as
+  read-only.
 
 ### Changed
+- **Every document and comment now describes three backends.** README's
+  backend table, the architecture diagram and its decision record,
+  CONTRIBUTING, the test matrix, the threat model's §8, the ceremony
+  document, the container image's mount contract and the package comments
+  said "two backends", "both adapters" or "Luna planned" after Luna had
+  merged; each now says what the code does, with Luna labelled hardware
+  and maintainer-verified and nShield still planned and untested. The
+  test matrix states the skip-or-fail rule as the code has it (module
+  variable unset skips; set with the rest missing fails, for Luna and
+  for the conformance suite), lists every variable per vendor including
+  the ones the module itself reads, and its whole-suite command carries
+  the Luna mounts. `tools/bootstrap-workstation.sh` gains `--with-luna`
+  and reports every registered backend in its summary, so a backend that
+  did not run shows zeros rather than nothing. `ci/coverage-exclude.txt`
+  lists `luna.go`, as its own comment asked. The ceremony's closing line,
+  the flag's help and the field comment no longer promise a wrap-based
+  backup from `CKA_EXTRACTABLE` alone: a Luna partition in its default
+  policy refuses to wrap a private key whatever the attribute says, and
+  the ceremony document's §5 says so.
 - **Every secret key is created with `CKA_SENSITIVE` true**, as private
   keys already were, and `SecretKeyRequest` has no `Sensitive` field any
   more. Luna refuses to create a non-sensitive secret key at all, while

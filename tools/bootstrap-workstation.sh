@@ -3,7 +3,7 @@
 # Bring a fresh workstation to the state every script in this repository
 # assumes, and prove it got there:
 #
-#   tools/bootstrap-workstation.sh [--no-smoke] [--with-protectserver]
+#   tools/bootstrap-workstation.sh [--no-smoke] [--with-protectserver] [--with-luna]
 #
 # Four steps. Check the tools. Build the dev image. Run the whole suite
 # against SoftHSM2 inside it. Bring the local deployment up once, query its
@@ -13,19 +13,24 @@
 #
 # --with-protectserver also runs the suite against a ProtectToolkit-C
 # emulator on this host, which needs the seven PROTECTSERVER_* variables
-# docs/test-matrix.md section 6 lists. With any of them unset the flag is
-# refused rather than quietly reduced to SoftHSM2: a run that silently
-# skipped the vendor backend is the run this repository's own history warns
-# about.
+# docs/test-matrix.md section 6 lists. --with-luna adds a Luna client and
+# its two partitions, which needs the eight LUNA_* variables and
+# ChrystokiConfigurationPath from the same section (LUNA_ROLE is optional),
+# with the client directory (LUNA_CLIENT_DIR, default $HOME/luna) mounted
+# at the same path inside the image, because the paths in Chrystoki.conf
+# are absolute. With any variable unset either flag is refused rather than
+# quietly reduced to SoftHSM2: a run that silently skipped the vendor
+# backend is the run this repository's own history warns about.
 #
 # What this does not do: install a vendor client or SDK. Those come from
 # the operator's own entitlement, and docs/test-matrix.md section 5 says
 # what each backend must provide before it can join the rotation.
 #
 # Every step's full output lands under .local/bootstrap/, and the summary
-# at the end reports the per-backend subtest counts the test matrix
-# measures, with the same anchored pattern, so the number here and the
-# number there are the same number.
+# at the end reports the top-level per-backend subtest counts for every
+# registered backend, the number docs/test-matrix.md section 3 anchors
+# (133 per backend on 2026-09-24), so the number here and the number there
+# are the same number.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,14 +38,17 @@ LOG_DIR="$REPO_ROOT/.local/bootstrap"
 DEV_IMAGE="hsm-pki-dev"
 PORT="${HSM_PKI_LOCAL_PORT:-8080}"
 PROTECTSERVER_SDK_DIR="${PROTECTSERVER_SDK_DIR:-/opt/safenet}"
+LUNA_CLIENT_DIR="${LUNA_CLIENT_DIR:-$HOME/luna}"
 
 SMOKE=1
 WITH_PROTECTSERVER=0
+WITH_LUNA=0
 for arg in "$@"; do
     case "$arg" in
         --no-smoke) SMOKE=0 ;;
         --with-protectserver) WITH_PROTECTSERVER=1 ;;
-        -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --with-luna) WITH_LUNA=1 ;;
+        -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "bootstrap-workstation: unknown argument $arg" >&2; exit 2 ;;
     esac
 done
@@ -96,6 +104,16 @@ if [ "$WITH_PROTECTSERVER" -eq 1 ]; then
     [ -d "$HOME/.cryptoki" ] || fail "$HOME/.cryptoki (the emulator's token store) does not exist"
     echo "    ProtectServer: module $PROTECTSERVER_MODULE, SDK $PROTECTSERVER_SDK_DIR, store $HOME/.cryptoki"
 fi
+if [ "$WITH_LUNA" -eq 1 ]; then
+    for v in LUNA_MODULE ChrystokiConfigurationPath LUNA_WORKSPACE LUNA_PIN \
+             LUNA_ROOT_WORKSPACE LUNA_INTERMEDIATE_WORKSPACE LUNA_ROOT_PIN LUNA_INTERMEDIATE_PIN; do
+        [ -n "${!v:-}" ] || fail "--with-luna needs $v set (docs/test-matrix.md, section 6, lists them)"
+    done
+    [ -d "$LUNA_CLIENT_DIR" ] || fail "LUNA_CLIENT_DIR=$LUNA_CLIENT_DIR does not exist"
+    case "$LUNA_MODULE" in "$LUNA_CLIENT_DIR"/*) ;; *) fail "LUNA_MODULE=$LUNA_MODULE is not under LUNA_CLIENT_DIR=$LUNA_CLIENT_DIR, so the image cannot see it" ;; esac
+    case "${ChrystokiConfigurationPath:-}" in "$LUNA_CLIENT_DIR"/*) ;; *) fail "ChrystokiConfigurationPath=${ChrystokiConfigurationPath:-} is not under LUNA_CLIENT_DIR=$LUNA_CLIENT_DIR, so the image cannot see it" ;; esac
+    echo "    Luna: module $LUNA_MODULE, client $LUNA_CLIENT_DIR, role ${LUNA_ROLE:-co}"
+fi
 
 # ---------------------------------------------------------------------------
 log "2/4  the dev image"
@@ -122,20 +140,32 @@ if [ "$WITH_PROTECTSERVER" -eq 1 ]; then
                -e PROTECTSERVER_ROOT_WORKSPACE -e PROTECTSERVER_INTERMEDIATE_WORKSPACE
                -e PROTECTSERVER_ROOT_PIN -e PROTECTSERVER_INTERMEDIATE_PIN)
 fi
+if [ "$WITH_LUNA" -eq 1 ]; then
+    # Same path inside and outside: Chrystoki.conf names its certificates
+    # by absolute path. Read-write, because the client keeps a lock file
+    # and its STC state under the configuration directory.
+    run_args+=(-v "$LUNA_CLIENT_DIR":"$LUNA_CLIENT_DIR"
+               -e ChrystokiConfigurationPath -e LUNA_MODULE -e LUNA_ROLE
+               -e LUNA_WORKSPACE -e LUNA_PIN
+               -e LUNA_ROOT_WORKSPACE -e LUNA_INTERMEDIATE_WORKSPACE
+               -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN)
+fi
 suite_status=0
 docker run "${run_args[@]}" "$DEV_IMAGE" sh -c '
     git config --global --add safe.directory /repo
     go test -race -p 1 -timeout 180s -v -buildvcs=false ./...
 ' > "$LOG_DIR/suite.log" 2>&1 || suite_status=$?
 
-# The anchored pattern from docs/test-matrix.md section 3: a top-level
-# per-backend subtest, never a nested one and never a PASS line with its
-# timing suffix.
+# Top-level per-backend subtests, the number docs/test-matrix.md section 3
+# anchors: four spaces of indent is a subtest directly under a Test
+# function, so a nested case (the conformance suite's, the ceremony
+# suite's) is not counted twice. Every registered backend is listed, so a
+# backend that did not run shows as zeros rather than as absent.
 count_backend() {
     local backend="$1" kind="$2"
     grep -cE "^    --- $kind: Test[A-Za-z0-9_]+/$backend " "$LOG_DIR/suite.log" || true
 }
-for backend in SoftHSM2 ProtectServer; do
+for backend in SoftHSM2 ProtectServer Luna; do
     printf '    %-14s passed %3s  skipped %3s  failed %3s\n' "$backend" \
         "$(count_backend "$backend" PASS)" "$(count_backend "$backend" SKIP)" "$(count_backend "$backend" FAIL)"
 done
@@ -160,6 +190,9 @@ if [ "$suite_status" -ne 0 ]; then
 fi
 if [ "$WITH_PROTECTSERVER" -eq 1 ] && [ "$(count_backend ProtectServer PASS)" -eq 0 ]; then
     fail "--with-protectserver was given but no ProtectServer subtest ran; check the variables against docs/test-matrix.md"
+fi
+if [ "$WITH_LUNA" -eq 1 ] && [ "$(count_backend Luna PASS)" -eq 0 ]; then
+    fail "--with-luna was given but no Luna subtest ran; check the variables against docs/test-matrix.md"
 fi
 
 # ---------------------------------------------------------------------------

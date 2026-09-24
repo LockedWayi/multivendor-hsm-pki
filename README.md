@@ -10,25 +10,35 @@ the HSM. The design reasoning is in
 
 ## Why this is unusual
 
-Most HSM integrations hard-code one vendor. This one drives two PKCS#11
-implementations through one interface with no vendor-specific code.
+Most HSM integrations hard-code one vendor. This one drives three PKCS#11
+implementations, two of them software and one a network appliance, through
+one interface with no vendor-specific code.
 
 | Backend | Status |
 |---|---|
 | **SoftHSM2** | Runs in CI on every push. No hardware, no SDK, reproducible by anyone. |
-| **Thales ProtectServer** | Thales ProtectToolkit-C 7.3.3 software emulation (`libctsw.so`, token model `SW:SWEMUL`), on the maintainer's own installation. Not an appliance. |
+| **Thales ProtectServer** | Thales ProtectToolkit-C 7.3.3 software emulation (`libctsw.so`, token model `SW:SWEMUL`), on the maintainer's own installation. Not an appliance. Maintainer-verified. |
+| **Thales Luna Network HSM 7** | Luna HSM Client 10.9.4 against two password-authenticated partitions (firmware 7.8.7) on the maintainer's own appliance. Hardware. Maintainer-verified. |
 
-Two spec-conformant implementations needed no vendor-specific code. That is
-not proof the abstraction is complete. nShield and Luna are untested, and
-differences are expected in the login and key protection model, `CKA_ID`
-and label handling, EC point encoding, session limits and error codes.
+Three implementations needed no vendor-specific code in the adapters, and
+the third was hardware. What Luna did differently was measured and either
+made the shared path stricter for everyone or became a declaration the
+conformance suite asserts per backend: it refuses a non-sensitive secret
+key, it refuses to wrap a private key under its default partition policy,
+and it needs `CKA_VALUE_LEN` in an unwrap template that SoftHSM2 refuses
+as read-only ([docs/test-matrix.md](docs/test-matrix.md), "Expected
+divergences to look for"). That is still not proof the abstraction is
+complete: nShield is untested, and its Security World is where the login
+and key-protection model is expected to differ most.
 
-- **One interface, one shared core.** Both adapters wrap a common
+- **One interface, one shared core.** All three adapters wrap a common
   implementation (`base.go`) with no overrides.
 - **One conformance suite, run per backend.** Every test that touches a
   token runs as its own subtest against every backend the environment
-  provides. A backend the environment lacks skips. Adding a vendor is a
-  registry entry and an adapter.
+  provides. A backend the environment lacks skips; a backend half
+  configured fails rather than skipping. Adding a vendor is an adapter, a
+  registry entry and an entry in the conformance suite's own list, and a
+  test fails when the two lists disagree.
 - **PINs live in C-heap memory.** `SecurePIN` holds the PIN in memory the
   Go garbage collector does not move or copy. One copy is outside this
   code: [docs/threat-model.md](docs/threat-model.md) §6.3.
@@ -219,7 +229,10 @@ HSM_PKI_TRUST_ANCHOR_REPO=... HSM_PKI_TRUST_ANCHOR_COMMIT=... HSM_PKI_TRUST_ANCH
   SoftHSM2; SAST; full-history secret scan; dependency, reachability and
   image scanning; infrastructure scanning. Reproducible with Docker.
 - **Maintainer-verified.** Everything involving the ProtectServer backend,
-  run against Thales ProtectToolkit-C 7.3.3 software emulation.
+  run against Thales ProtectToolkit-C 7.3.3 software emulation, and
+  everything involving the Luna backend, run against two partitions of a
+  Luna Network HSM 7 under the maintainer's own access. Neither path runs
+  in CI, and no claim about them is reported as CI-verified.
 
 Built and running: the PKCS#11 core, the two-tier CA, the container and its
 Kubernetes deployment with a generated admission policy, the
@@ -235,10 +248,13 @@ policy and none under a default; and a binding of each issuing identity
 to the profiles and names it may request, so no issuer can obtain a
 certificate it was not granted; and a delegated OCSP responder, signing
 with its own HSM-held key under a short-lived, self-renewed certificate,
-answering from the same store the CRL is built from. Planned next: the
-third and fourth backends, Luna and nShield, under the maintainer's own
-access, so "the abstraction generalizes" becomes a measurement rather than
-an argument. Vault custody is designed and optional, not scheduled
+answering from the same store the CRL is built from; and the third
+backend, Luna, with every token-touching test run against two partitions
+of a real appliance and every divergence recorded. Planned next: the
+fourth backend, nShield, under the maintainer's own access, and a
+capability descriptor per adapter so the per-backend declarations the
+conformance suite carries today move into the core. Vault custody is
+designed and optional, not scheduled
 ([docs/architecture.md](docs/architecture.md), layer 6).
 
 ## Running it

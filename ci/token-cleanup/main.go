@@ -15,8 +15,13 @@
 //
 // Usage:
 //
-//	go run ./ci/token-cleanup -module <path> -workspace <label> -pin-env VAR
-//	go run ./ci/token-cleanup -module <path> -workspace <label> -pin-env VAR -confirm
+//	go run ./ci/token-cleanup -adapter <softhsm2|protectserver|luna> -module <path> -workspace <label> -pin-env VAR
+//	go run ./ci/token-cleanup -adapter <...> -module <path> -workspace <label> -pin-env VAR -confirm
+//
+// -adapter defaults to softhsm2. The three adapters share one implementation
+// today, so the wrong name still opens the module, but name the vendor
+// whose token is being cleared: the day an adapter needs an override is the
+// day the default silently becomes the wrong one.
 package main
 
 import (

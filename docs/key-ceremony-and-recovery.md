@@ -25,15 +25,18 @@ log line or a plaintext file.
 
 ### 2.1 Who, and with what access
 
-One operator, run locally against SoftHSM2 or ProtectToolkit-C software
-emulation. This repository demonstrates a **single-operator** ceremony.
+One operator, run locally against SoftHSM2, ProtectToolkit-C software
+emulation or two Luna partitions. This repository demonstrates a
+**single-operator** ceremony.
 §7 of `threat-model.md` states the consequence: it provides no separation
 of duties. The operator needs:
 
 - PINs for **two** tokens, the root's and the intermediate's. Never the
   same token. `RunCeremony` refuses to run if the two workspaces resolve
   to the same serial.
-- The vendor module path and adapter name (`softhsm2` or `protectserver`).
+- The vendor module path and adapter name (`softhsm2`, `protectserver` or
+  `luna`). For Luna the process also needs `ChrystokiConfigurationPath`
+  in its environment before the module loads.
 - Every certificate parameter decided **before** the ceremony starts,
   because a ceremony is irreversible: subject names, the EC curve, and the
   root CRL and root certificate distribution URLs. Those two URLs are
@@ -95,8 +98,12 @@ the CLI's success output prints that:
 
 ```
 no private key material was written anywhere; both key pairs remain on their tokens
-root private key: CKA_EXTRACTABLE=true, eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)
+root private key: CKA_EXTRACTABLE=true, wrap-based backup possible where the token's policy allows it (docs/key-ceremony-and-recovery.md)
 ```
+
+The qualifier is there because the attribute is necessary and not
+sufficient: a Luna partition in its default policy refuses to wrap a
+private key whatever its `CKA_EXTRACTABLE` says (§5.1).
 
 The second line echoes the §5.2 decision. It is printed so it is part of
 the ceremony's own record.
@@ -315,8 +322,16 @@ mechanics: generate an EC key pair with `Extractable: true`, sign with it,
 wrap its private key under an AES wrapping key, **destroy the original
 object** (simulating the token it lived on being lost), unwrap the
 ciphertext back into a new object, and sign again. The second signature
-verifies against the same public key the first one did. It runs on both
-backends.
+verifies against the same public key the first one did. It runs on the
+two software backends. On Luna it does not: the wrap of the private key is
+refused with `CKR_KEY_NOT_WRAPPABLE`, because partition policy 1 ("Allow
+private key wrapping") is off by default and was left there. The suite
+declares the refusal for that backend, asserts it and then skips the round
+trip, so the test fails if the wrap ever succeeds without the declaration
+changing. Consequence: **this backup design has no path on a Luna partition
+until an operator enables that policy**, a decision with its own security
+weight, since it is the setting that lets private key material leave the
+partition under a wrapping key at all.
 
 **What this is not**: a working restore procedure by itself. It proves the
 primitive round-trips on one token. A real backup unwraps onto a different
@@ -356,7 +371,8 @@ make the case that matters, a real root meant to last years, the one an
 operator has to remember to opt into, at the one moment that choice can be
 made. `TestRunCeremony_RootKeyExtractableIsOperatorControlled` proves the
 flag reaches the token's `CKA_EXTRACTABLE` attribute in both directions,
-read back rather than assumed from the request, on both backends. The
+read back rather than assumed from the request, on every registered
+backend. The
 choice is echoed in the ceremony's own output so it becomes part of that
 run's record.
 
@@ -376,8 +392,9 @@ attributes the unwrap template asked for.
 |---|---|
 | SoftHSM2 2.6.1 | `false`. The template is honored |
 | ProtectToolkit-C 7.3.3 software emulation | **`true`**. The template's request is silently ignored |
+| Luna Network HSM 7, firmware 7.8.7 | Not measured: the wrap that would produce the ciphertext to restore is refused under the default partition policy (§5.1) |
 
-Both are conformant. This is the same class of finding as the
+Both measured results are conformant. This is the same class of finding as the
 `CKA_SENSITIVE` disclosure in `test-matrix.md`, a caller-requested
 restriction the standard does not obligate any vendor to honor. It cannot
 be closed the same way. `GenerateKeyPair` could force `CKA_SENSITIVE=true`
@@ -427,7 +444,8 @@ measured vendor behaviour directly, it is in
   archive restorable onto replacement hardware belonging to the same
   Security World. The quorum is the separation-of-duties mechanism this
   repository's own single-operator ceremony does not provide.
-- **Luna cloning domains (Thales/SafeNet, planned).** Partitions in the
+- **Luna cloning domains (Thales/SafeNet; the backend is built, this
+  mechanism is unrun).** Partitions in the
   same cloning domain can clone key material directly between HSMs sharing
   that domain, authenticated by a domain identifier known only to
   authorized partitions. That is a different mechanism from PKCS#11's
@@ -667,7 +685,7 @@ mechanism today.
 - Blast-radius reasoning behind the two-tier hierarchy:
   [`architecture.md`](architecture.md), "Two-tier hierarchy rather than a
   single online CA"
-- Vendor behaviour measured on both backends:
+- Vendor behaviour measured on every backend:
   [`test-matrix.md`](test-matrix.md), "Expected divergences to look for"
 - The ceremony as built: `internal/ca/ceremony.go` and
   `cmd/hsm-pki-keytool/main.go`

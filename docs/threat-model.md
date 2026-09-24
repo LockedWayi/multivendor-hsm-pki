@@ -267,7 +267,9 @@ operators.
   readable by any authenticated session, so an attacker at A3 could have
   taken the key and kept using it after eviction. SoftHSM2 refused to
   disclose it, so CI was green throughout. It is fixed and asserted
-  against both backends by reading the attributes back off the token
+  against every registered backend, Luna included, by reading the
+  attributes back off the token, for private keys and, since Luna refuses
+  a non-sensitive secret key outright, for secret keys as well
   ([`test-matrix.md`](test-matrix.md), "Expected divergences to look
   for").
 - **The ability to issue a CA certificate.** The intermediate carries
@@ -557,7 +559,7 @@ A threat model that claims everything is defended is not a threat model:
 
 | Work | Changes for this model |
 |---|---|
-| **Luna and nShield** | No boundary moves. The claims above that say "against a hardware HSM" (A4, A6) are measured on hardware for the first time; the model will say on which, and what was and was not confirmed. Vendor divergences become §6 findings where they change what an attacker can do. |
+| **Luna and nShield** | No boundary moves. Luna ran 2026-09-23 on a Luna Network HSM 7 (firmware 7.8.7), the first hardware in the rotation. Confirmed there for A4 and A6: `CKA_SENSITIVE` and `CKA_EXTRACTABLE` read back as generated on private keys, a non-sensitive secret key cannot be created at all, and under the default partition policy a private key cannot be wrapped, so the extractable root's wrap-based backup (§5 of the ceremony document) has no path off that partition until an operator changes the policy. Not confirmed on hardware: the unwrap path's attribute handling for private keys, which the policy made unreachable, and anything under concurrent callers. nShield is still unmeasured; its Security World is where the login and key-protection model is expected to differ. Vendor divergences become §6 findings where they change what an attacker can do. |
 | **A secrets manager for the PIN** (optional, not scheduled) | Would change the "Token user PINs" asset's row: the PIN would live in the secrets manager, be released only to the pod's own identity under a short-lived credential, and be read at the point of use. No key would move, so A3 is unchanged. The custody decision of 2026-09-23 was made against this model and is recorded in `architecture.md`, layer 6. |
 | **The audit chain** | Makes compromises evidenced. Its key must not be reachable by the process it audits (§6.1). A deleted webhook (B7) and an excluded-namespace bypass (A9) become visible. |
 

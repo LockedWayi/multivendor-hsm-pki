@@ -9,9 +9,10 @@ The image contains the service binary, glibc, libssl and the C++ runtime.
 It contains **no PKCS#11 module at all**. Not the proprietary vendor ones,
 and not SoftHSM2 either. Every module is mounted in at run time.
 
-The licensing constraint only forces half of that. ProtectToolkit may not
-be redistributed, so it could never have been baked in. SoftHSM2 is
-BSD-2-Clause and could have been. Mounting both buys three things:
+The licensing constraint only forces part of that. ProtectToolkit and the
+Luna client may not be redistributed, so they could never have been baked
+in. SoftHSM2 is BSD-2-Clause and could have been. Mounting every module
+buys three things:
 
 - **One delivery mechanism, so the backends cannot diverge in the image.**
   If SoftHSM2 were baked in and vendors mounted, the backend CI exercises
@@ -23,6 +24,10 @@ BSD-2-Clause and could have been. Mounting both buys three things:
   or emulate a private key is a smaller claim to defend and a smaller
   `trivy` surface.
 - **Adding a vendor changes a mount and a config value**, not a Dockerfile.
+  Luna added one more thing of the same kind: an environment variable,
+  `ChrystokiConfigurationPath`, because its module reads a configuration
+  directory of its own, and that directory (with the client's certificates)
+  is a second read-only mount beside the module.
 
 The cost is that the image cannot start on its own. A reader must be able
 to reproduce this repository with no hardware and no proprietary SDK, so
@@ -37,6 +42,7 @@ dependencies must resolve inside the service's filesystem:
 |---|---|
 | `libsofthsm2.so` | `libcrypto.so.3`, **`libstdc++.so.6`**, **`libgcc_s.so.1`**, libc, libm |
 | `libctsw.so` (ProtectToolkit) | libdl, libpthread, libc, all glibc |
+| `libCryptoki2.so` (Luna HSM Client 10.9.4) | Resolved with nothing missing in the dev image (`ldd`); not yet started inside this image, see "What has been run" |
 
 `distroless/base` carries glibc and libcrypto but neither `libstdc++.so.6`
 nor `libgcc_s.so.1`. `distroless/cc` adds exactly those two, and neither has
@@ -49,11 +55,11 @@ glibc. The base image is sized for what gets mounted into it.
 
 ## The mount contract
 
-Four mounts.
+Four mounts, five with Luna.
 
 | Path | Mode | What it is |
 |---|---|---|
-| `/pkcs11/<module>.so` | read-only | The PKCS#11 module. Code. |
+| `/pkcs11/<module>.so` | read-only | The PKCS#11 module. Code. For Luna, the client's configuration directory (`Chrystoki.conf`, the NTLS certificates) is mounted read-only beside it and named by `ChrystokiConfigurationPath` in the environment. |
 | `/etc/hsm-pki/` | read-only | `config.yaml`, the intermediate certificate, the root certificate and root CRL, and the service's TLS certificate (`tls.pem`, a public leaf; its key is on the token). No key material, no PIN. |
 | `/var/lib/softhsm/tokens/` | **writable** | SoftHSM2's token store. Only when using SoftHSM2. |
 | `/var/lib/hsm-pki/` | **writable** | The CA's SQLite store: issued and revoked records and the CRL number. |
@@ -99,7 +105,7 @@ docker run --rm --entrypoint /bin/sh hsm-pki-server:local -c 'echo reached'   # 
 
 # No PKCS#11 module in any layer, of any kind.
 cid=$(docker create hsm-pki-server:local)
-docker export "$cid" | tar -t | grep -icE 'softhsm|pkcs11|libctsw|cknfast'    # 0
+docker export "$cid" | tar -t | grep -icE 'softhsm|pkcs11|libctsw|cryptoki2|cknfast'    # 0
 docker rm -f "$cid"
 
 # The whole thing, on a machine with no HSM: two tokens, a root ceremony,
@@ -121,8 +127,11 @@ absent because the shell, the package manager and the toolchain are absent.
 
 ## What has been run
 
-Both backends, in this image, with only `config.yaml` changing between
-them:
+The two software backends, in this image, with only `config.yaml`
+changing between them. The Luna adapter has run the whole test suite and
+the operator commands from the dev image; the service itself has not yet
+been started against a partition from this image, and until it has, the
+Luna row of the backend table describes the adapter, not this packaging:
 
 - **SoftHSM2**: full startup, `connected to HSM`, a certificate issued
   (`201`; over plain HTTP at the time, over mutual TLS since the write
