@@ -37,13 +37,19 @@ const janitorInterval = 30 * time.Second
 //
 // Lock order: withStateLock (exclusive) for every multi-step sequence on a
 // session (FindObjectsInit/FindObjects/FindObjectsFinal, SignInit/Sign,
-// Login, GenerateKeyPair) and for C_GetSlotList. withReadLock (shared)
-// only for single-call operations: C_GetAttributeValue and
-// C_GenerateRandom.
+// Login, GenerateKeyPair), and for C_GetSlotList unless the adapter
+// declares ConcurrentSlotEnumeration. withReadLock (shared) only for
+// single-call operations: C_GetAttributeValue, C_GenerateRandom, and
+// C_GetSlotList on a module that declared it safe.
 type pkcs11Adapter struct {
 	mu     sync.RWMutex
 	ctx    *p11.Ctx
 	closed bool
+
+	// caps is the vendor's declaration, handed in by the named adapter's
+	// constructor. Read here wherever a declared difference changes how
+	// the module is driven; measured by the conformance suite.
+	caps Capabilities
 
 	sessMu   sync.Mutex
 	sessions map[p11.SessionHandle]*Session
@@ -61,7 +67,7 @@ type pkcs11Adapter struct {
 
 // newPKCS11Adapter loads and initializes the module at modulePath and
 // starts the session janitor. Every vendor constructor calls it.
-func newPKCS11Adapter(modulePath string) (*pkcs11Adapter, error) {
+func newPKCS11Adapter(modulePath string, caps Capabilities) (*pkcs11Adapter, error) {
 	ctx := p11.New(modulePath)
 	if ctx == nil {
 		return nil, fmt.Errorf("pkcs11: failed to load module %q", modulePath)
@@ -73,6 +79,7 @@ func newPKCS11Adapter(modulePath string) (*pkcs11Adapter, error) {
 
 	a := &pkcs11Adapter{
 		ctx:         ctx,
+		caps:        caps,
 		sessions:    make(map[p11.SessionHandle]*Session),
 		janitorStop: make(chan struct{}),
 		janitorDone: make(chan struct{}),
@@ -80,6 +87,9 @@ func newPKCS11Adapter(modulePath string) (*pkcs11Adapter, error) {
 	go a.janitor(janitorInterval)
 	return a, nil
 }
+
+// Capabilities returns the declaration the constructor was given.
+func (a *pkcs11Adapter) Capabilities() Capabilities { return a.caps }
 
 func (a *pkcs11Adapter) withStateLock(fn func() error) error {
 	a.mu.Lock()
@@ -117,20 +127,25 @@ func checkCtx(ctx context.Context) error {
 
 // ─── Workspaces ─────────────────────────────────────────────────────────
 
-// Workspaces enumerates the tokens the module can see. It takes the
-// exclusive lock. ProtectToolkit-C 7.3.3 software emulation deadlocked
-// inside C_GetSlotList with two concurrent callers under a read lock,
-// although the module is initialized with CKF_OS_LOCKING_OK. The cost is
-// that a module stalled in C_GetSlotList stalls every other operation.
-// The subtest that found this was removed: it destabilized the rest of
-// the ProtectServer run (see the note at the end of conformance_test.go).
-// Going back to withReadLock here reintroduces the hang.
+// Workspaces enumerates the tokens the module can see. The lock it takes
+// is the module's declaration: ProtectToolkit-C 7.3.3 software emulation
+// deadlocked inside C_GetSlotList with two concurrent callers under a read
+// lock, although the module is initialized with CKF_OS_LOCKING_OK, so a
+// module that does not declare ConcurrentSlotEnumeration gets the
+// exclusive lock, at the cost that a module stalled in C_GetSlotList
+// stalls every other operation. A module that declares it gets the shared
+// lock, and the conformance suite measures the declaration with eight
+// concurrent callers on every run. Nothing here reads a vendor's name.
 func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
 	}
+	lock := a.withStateLock
+	if a.caps.ConcurrentSlotEnumeration {
+		lock = a.withReadLock
+	}
 	var out []Workspace
-	err := a.withStateLock(func() error {
+	err := lock(func() error {
 		ids, err := a.ctx.GetSlotList(true)
 		if err != nil {
 			return fmt.Errorf("C_GetSlotList: %w", err)

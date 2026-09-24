@@ -232,7 +232,7 @@ as fact, which is the whole argument for measuring rather than recording.
 
 | Field | SoftHSM2 2.6.1 | ProtectToolkit-C 7.3.3 | Luna 7.8.7 |
 |---|---|---|---|
-| `ConcurrentSlotEnumeration` | false (not measured; the shared lock serializes) | false (deadlocked, 2026-08) | false (not measured) |
+| `ConcurrentSlotEnumeration` | **true** (2026-09-24: 20 rounds of eight concurrent callers under the shared lock, no failure) | false (deadlocked, 2026-08; keeps the exclusive lock) | **true** (same measurement, same day) |
 | `SecondInitializeInProcess` | **false** (`CKR_CRYPTOKI_ALREADY_INITIALIZED`; an earlier note said tolerated) | false | false |
 | `HandlesSpanSessions` (token object, another open session) | **true** (an earlier note said `CKR_OBJECT_HANDLE_INVALID`) | true | true |
 | `HandlesSurviveSessionClose` | true | true | true |
@@ -243,7 +243,13 @@ as fact, which is the whole argument for measuring rather than recording.
 
 A field that reads "not measured" is declared conservatively and the
 suite skips its measurement with that reason; declaring the permissive
-value is what turns the measurement on.
+value is what turns the measurement on. The core reads the descriptor
+where a field changes how the module is driven: since 2026-09-24
+`Workspaces` takes the shared lock on a module that declares
+`ConcurrentSlotEnumeration` and the exclusive lock on one that does not,
+so ProtectToolkit-C keeps the serialization its deadlock earned and the
+other two no longer pay for it. The declaration that lifts the lock is
+the one the suite exercises with eight goroutines on every run.
 
 `internal/signingkey` joined §3 without touching the harness, which is the
 property this section claims: a new suite reaches every backend by calling
