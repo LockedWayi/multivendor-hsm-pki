@@ -397,10 +397,12 @@ attributes the unwrap template asked for.
 | Backend | Restored private key's `CKA_EXTRACTABLE`, template asked for `false` |
 |---|---|
 | SoftHSM2 2.6.1 | `false`. The template is honored |
-| ProtectToolkit-C 7.3.3 software emulation | **`true`**. The template's request is silently ignored |
+| ProtectToolkit-C 7.3.3 software emulation | **`true`** when first measured (2026-08-31): the template's request was ignored. **`false`** on 2026-09-24, on the same emulator version, through the same test: the template was honoured. The difference is not explained; the adapter now declares what was measured last (`UnwrapHonoursExtractable`) and the suite fails the day it changes back |
 | Luna Network HSM 7, firmware 7.8.7 | Not measured: the wrap that would produce the ciphertext to restore is refused under the default partition policy (§5.1) |
 
-Both measured results are conformant. This is the same class of finding as the
+Both results, and both dates, are conformant, which is the point: an
+attribute a restore asks for is one the module may or may not apply, and
+only reading it back tells you which happened this time. This is the same class of finding as the
 `CKA_SENSITIVE` disclosure in `test-matrix.md`, a caller-requested
 restriction the standard does not obligate any vendor to honor. It cannot
 be closed the same way. `GenerateKeyPair` could force `CKA_SENSITIVE=true`

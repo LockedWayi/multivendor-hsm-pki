@@ -44,17 +44,13 @@ type conformanceBackend struct {
 	// role is the login identity every login in the suite uses. Set
 	// explicitly for every backend: Role's zero value is CKU_SO.
 	role pk11.Role
-	// privateKeyWrapRefused, when not empty, declares that this token
-	// refuses to wrap a private key, and says why. The backup test then
-	// asserts the refusal (CKR_KEY_NOT_WRAPPABLE) instead of the round
-	// trip, and fails if the wrap succeeds: a declaration that no longer
-	// matches the token is a failing test, not a silent skip.
-	privateKeyWrapRefused string
-	// unwrapNeedsValueLen declares that unwrapping a secret key needs
-	// CKA_VALUE_LEN in the template. No template works everywhere: Luna
-	// refuses the unwrap without it, SoftHSM2 refuses it as read-only.
-	unwrapNeedsValueLen bool
-	runID               string
+	// caps is the adapter's own declaration. Every field is measured by a
+	// subtest below; a declaration the token no longer matches is a
+	// failing test, not a silent skip.
+	caps        pk11.Capabilities
+	adapterName string
+	modulePath  string
+	runID       string
 	// reopen builds a second connection to the same module, for the case
 	// where cleanup cannot use the first one. See registerCleanup.
 	reopen func() (pk11.VendorAdapter, error)
@@ -72,37 +68,20 @@ func TestConformance(t *testing.T) {
 	})
 }
 
-// declarations are what a backend says about itself that the suite then
-// measures. They sit here, keyed by name, until the adapter carries a
-// capability descriptor the core reads; the suite asserts each one, so a
-// declaration the token no longer matches is a failing test.
-var declarations = map[string]struct {
-	privateKeyWrapRefused string
-	unwrapNeedsValueLen   bool
-}{
-	// Partition policy 1, "Allow private key wrapping", defaults to 0 on a
-	// Luna partition even when the capability is present, and the
-	// partitions this was measured on keep the default.
-	"Luna": {
-		privateKeyWrapRefused: "Luna partition policy 1 (Allow private key wrapping) is off",
-		unwrapNeedsValueLen:   true,
-	},
-}
-
 func newConformanceBackend(t *testing.T, s *hsmtest.Single) *conformanceBackend {
 	t.Helper()
-	d := declarations[s.Name]
 	b := &conformanceBackend{
-		name:                  s.Name,
-		adapter:               s.Adapter,
-		ws:                    s.Workspace,
-		userPIN:               s.PIN,
-		wrongPIN:              s.WrongPIN,
-		role:                  s.Role,
-		privateKeyWrapRefused: d.privateKeyWrapRefused,
-		unwrapNeedsValueLen:   d.unwrapNeedsValueLen,
-		runID:                 s.RunID,
-		reopen:                s.Reopen,
+		name:        s.Name,
+		adapter:     s.Adapter,
+		ws:          s.Workspace,
+		userPIN:     s.PIN,
+		wrongPIN:    s.WrongPIN,
+		role:        s.Role,
+		caps:        s.Adapter.Capabilities(),
+		adapterName: s.AdapterName,
+		modulePath:  s.ModulePath,
+		runID:       s.RunID,
+		reopen:      s.Reopen,
 	}
 	b.registerCleanup(t)
 	return b
@@ -754,12 +733,12 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		// (an attribute too many, where one is missing). SoftHSM2 2.6.1
 		// refuses the same attribute with CKR_ATTRIBUTE_READ_ONLY, and
 		// ProtectToolkit-C takes either. The token's declaration decides.
-		if b.unwrapNeedsValueLen {
+		if b.caps.UnwrapNeedsValueLen {
 			tmpl = append(tmpl, pk11.NumericAttribute(pk11.AttrValueLen, 16))
 		}
 		unwrapped, err := b.adapter.Unwrap(ctx, s, wrappingKey, mech, wrapped, tmpl)
 		if err != nil {
-			t.Fatalf("Unwrap: %v", err)
+			t.Fatalf("Unwrap with UnwrapNeedsValueLen=%v declared: %v", b.caps.UnwrapNeedsValueLen, err)
 		}
 		if unwrapped == 0 {
 			t.Fatal("Unwrap returned a zero handle")
@@ -802,15 +781,15 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 
 		mech := pk11.Mechanism{Type: pk11.MechAESKeyWrap}
 		wrapped, err := b.adapter.Wrap(ctx, s, wrappingKey, kp.Private, mech)
-		if b.privateKeyWrapRefused != "" {
+		if b.caps.PrivateKeyWrapRefused != "" {
 			var ckr p11.Error
 			switch {
 			case err == nil:
-				t.Fatalf("declared refused (%s), but C_WrapKey wrapped the private key: the declaration is wrong", b.privateKeyWrapRefused)
+				t.Fatalf("declared refused (%s), but C_WrapKey wrapped the private key: the declaration is wrong", b.caps.PrivateKeyWrapRefused)
 			case !errors.As(err, &ckr) || ckr != p11.CKR_KEY_NOT_WRAPPABLE:
-				t.Fatalf("declared refused with CKR_KEY_NOT_WRAPPABLE (%s), got %v", b.privateKeyWrapRefused, err)
+				t.Fatalf("declared refused with CKR_KEY_NOT_WRAPPABLE (%s), got %v", b.caps.PrivateKeyWrapRefused, err)
 			}
-			t.Skipf("refusal measured as declared: %s", b.privateKeyWrapRefused)
+			t.Skipf("refusal measured as declared: %s", b.caps.PrivateKeyWrapRefused)
 		}
 		if err != nil {
 			t.Fatalf("Wrap: %v", err)
@@ -855,18 +834,153 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 
 		// Unwrap is a generic primitive, so this platform cannot force
 		// CKA_EXTRACTABLE here the way GenerateKeyPair forces CKA_SENSITIVE.
-		// SoftHSM2 2.6.1 honours the template's CKA_EXTRACTABLE=false.
-		// ProtectToolkit 7.3.3 does not: the restored key comes back
-		// extractable. A real restore reads this attribute back before
+		// Whether the template's CKA_EXTRACTABLE=false reaches the restored
+		// key is the module's declaration, measured here in both
+		// directions. A real restore reads this attribute back before
 		// trusting the key.
 		attrs, err := b.adapter.GetAttributes(ctx, s, restored, []pk11.AttributeType{pk11.AttrExtractable})
 		if err != nil {
 			t.Fatalf("GetAttributes (restored): %v", err)
 		}
 		gotExtractable := len(attrs[0].Value) > 0 && attrs[0].Value[0] != 0
-		t.Logf("restored private key CKA_EXTRACTABLE=%v (template asked for false)", gotExtractable)
-		if b.name == "SoftHSM2" && gotExtractable {
-			t.Fatal("SoftHSM2 restored private key is CKA_EXTRACTABLE=true, contradicting the unwrap template; this backend was previously observed honoring it")
+		t.Logf("restored private key CKA_EXTRACTABLE=%v (template asked for false); declared UnwrapHonoursExtractable=%v", gotExtractable, b.caps.UnwrapHonoursExtractable)
+		if b.caps.UnwrapHonoursExtractable && gotExtractable {
+			t.Fatal("declared UnwrapHonoursExtractable, but the restored private key is CKA_EXTRACTABLE=true: the declaration is wrong")
+		}
+		if !b.caps.UnwrapHonoursExtractable && !gotExtractable {
+			t.Fatal("declared that unwrap ignores CKA_EXTRACTABLE, but the restored key honoured it: the declaration is wrong")
+		}
+	})
+
+	// The remaining declarations, each measured in both directions.
+
+	t.Run("Capability_HandlesSpanSessions", func(t *testing.T) {
+		s1 := b.openLoggedInSession(t, pk11.SessionOptions{})
+		s2, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
+		if err != nil {
+			t.Fatalf("OpenSession (second): %v", err)
+		}
+		t.Cleanup(func() { _ = b.adapter.CloseSession(context.Background(), s2) })
+		kp, err := b.adapter.GenerateKeyPair(ctx, s1, pk11.KeyPairRequest{
+			Curve: pk11.P256, Label: b.label("handle-scope"), Sign: true, Verify: true,
+		})
+		if err != nil {
+			t.Fatalf("GenerateKeyPair: %v", err)
+		}
+		_, err = b.adapter.GetAttributes(ctx, s2, kp.Public, []pk11.AttributeType{pk11.AttrLabel})
+		switch {
+		case b.caps.HandlesSpanSessions && err != nil:
+			t.Fatalf("declared HandlesSpanSessions, but a handle from one session was refused in another: %v", err)
+		case !b.caps.HandlesSpanSessions && err == nil:
+			t.Fatal("declared that handles are per session, but a handle from one session was accepted in another: the declaration is wrong")
+		case !b.caps.HandlesSpanSessions:
+			var ckr p11.Error
+			if !errors.As(err, &ckr) || ckr != p11.CKR_OBJECT_HANDLE_INVALID {
+				t.Fatalf("handle refused across sessions as declared, but with %v, want CKR_OBJECT_HANDLE_INVALID", err)
+			}
+		}
+
+		// The same handle after the session it came from is gone.
+		if err := b.adapter.CloseSession(ctx, s1); err != nil {
+			t.Fatalf("CloseSession (origin): %v", err)
+		}
+		_, err = b.adapter.GetAttributes(ctx, s2, kp.Public, []pk11.AttributeType{pk11.AttrLabel})
+		switch {
+		case b.caps.HandlesSurviveSessionClose && err != nil:
+			t.Fatalf("declared HandlesSurviveSessionClose, but the handle was refused after its session closed: %v", err)
+		case !b.caps.HandlesSurviveSessionClose && err == nil:
+			t.Fatal("declared that a handle dies with its session, but it was accepted afterwards: the declaration is wrong")
+		}
+	})
+
+	t.Run("Capability_ZeroDigest", func(t *testing.T) {
+		s := b.openLoggedInSession(t, pk11.SessionOptions{})
+		kp, err := b.adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
+			Curve: pk11.P256, Label: b.label("zero-digest"), Sign: true, Verify: true,
+		})
+		if err != nil {
+			t.Fatalf("GenerateKeyPair: %v", err)
+		}
+		// The one place a zero digest is allowed in this suite: it is the
+		// subject of the measurement, not a stand-in for data.
+		zero := make([]byte, 32)
+		var got pk11.ZeroDigestBehaviour
+		sig, err := b.adapter.Sign(ctx, s, kp.Private, pk11.Mechanism{Type: pk11.MechECDSA}, zero)
+		var ckr p11.Error
+		switch {
+		case err == nil:
+			if verr := b.adapter.Verify(ctx, s, kp.Public, pk11.Mechanism{Type: pk11.MechECDSA}, zero, sig); verr == nil {
+				got = pk11.ZeroDigestAccepted
+			} else if errors.As(verr, &ckr) && ckr == p11.CKR_SIGNATURE_INVALID {
+				got = pk11.ZeroDigestVerifyRefused
+			} else {
+				t.Fatalf("C_Verify over an all-zero digest failed with %v, which is none of the three measured answers", verr)
+			}
+		case errors.As(err, &ckr) && ckr == p11.CKR_DATA_INVALID:
+			got = pk11.ZeroDigestSignRefused
+		default:
+			t.Fatalf("C_Sign over an all-zero digest failed with %v, which is none of the three measured answers", err)
+		}
+		if got != b.caps.ZeroDigest {
+			t.Fatalf("declared ZeroDigest=%q, measured %q: the declaration is wrong", b.caps.ZeroDigest, got)
+		}
+	})
+
+	t.Run("Capability_SecondInitializeInProcess", func(t *testing.T) {
+		second, err := pk11.NewAdapterByName(b.adapterName, b.modulePath)
+		if err == nil {
+			defer second.Close()
+		}
+		switch {
+		case b.caps.SecondInitializeInProcess && err != nil:
+			t.Fatalf("declared SecondInitializeInProcess, but a second adapter over the same module failed: %v", err)
+		case !b.caps.SecondInitializeInProcess && err == nil:
+			t.Fatal("declared that a second C_Initialize is refused, but a second adapter opened: the declaration is wrong")
+		case !b.caps.SecondInitializeInProcess:
+			var ckr p11.Error
+			if !errors.As(err, &ckr) || ckr != p11.CKR_CRYPTOKI_ALREADY_INITIALIZED {
+				t.Fatalf("second adapter refused as declared, but with %v, want CKR_CRYPTOKI_ALREADY_INITIALIZED", err)
+			}
+		}
+		if err == nil {
+			// The second adapter must see the token too, or it initialized
+			// something other than the module the first one holds.
+			wss, err := second.Workspaces(ctx)
+			if err != nil {
+				t.Fatalf("Workspaces through the second adapter: %v", err)
+			}
+			found := false
+			for _, ws := range wss {
+				found = found || ws.Serial == b.ws.Serial
+			}
+			if !found {
+				t.Fatalf("the second adapter does not see token %q (serial %s)", b.ws.Label, b.ws.Serial)
+			}
+		}
+	})
+
+	t.Run("Capability_ConcurrentSlotEnumeration", func(t *testing.T) {
+		if !b.caps.ConcurrentSlotEnumeration {
+			t.Skip("declared serialized: the shared lock serializes Workspaces, so concurrent enumeration is not exercised on this module")
+		}
+		// Eight callers at once. A module that deadlocks here parks the
+		// test until -timeout, which is the evidence.
+		var wg sync.WaitGroup
+		errs := make(chan error, 8)
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := b.adapter.Workspaces(ctx)
+				errs <- err
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("declared ConcurrentSlotEnumeration, but a concurrent Workspaces call failed: %v", err)
+			}
 		}
 	})
 

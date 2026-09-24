@@ -23,7 +23,7 @@ one interface with no vendor-specific code.
 Three implementations needed no vendor-specific code in the adapters, and
 the third was hardware. What Luna did differently was measured and either
 made the shared path stricter for everyone or became a declaration the
-conformance suite asserts per backend: it refuses a non-sensitive secret
+adapter makes and the conformance suite asserts: it refuses a non-sensitive secret
 key, it refuses to wrap a private key under its default partition policy,
 and it needs `CKA_VALUE_LEN` in an unwrap template that SoftHSM2 refuses
 as read-only ([docs/test-matrix.md](docs/test-matrix.md), "Expected

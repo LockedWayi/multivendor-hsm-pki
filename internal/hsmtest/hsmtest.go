@@ -169,10 +169,11 @@ func (b *Backend) released() bool {
 }
 
 // Release closes the harness's adapter early, for tests that hand the
-// same module to code which opens its own connection. SoftHSM2 2.6.1
-// tolerates a second C_Initialize through a separate dlopen handle;
-// ProtectToolkit 7.3.3 rejects it with CKR_CRYPTOKI_ALREADY_INITIALIZED.
-// Safe to call more than once.
+// same module to code which opens its own connection. Every backend
+// measured so far answers a second C_Initialize in one process with
+// CKR_CRYPTOKI_ALREADY_INITIALIZED (Capabilities.SecondInitializeInProcess,
+// asserted by the conformance suite), so the first adapter has to go
+// before the second can open. Safe to call more than once.
 func (b *Backend) Release() {
 	b.closeOnce.Do(func() {
 		b.releaseMu.Lock()

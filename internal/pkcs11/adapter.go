@@ -13,6 +13,12 @@ import (
 // OpenSession. Implementations must reject the call once that session's
 // idle timeout or max TTL has passed.
 type VendorAdapter interface {
+	// Capabilities declares what this adapter's module does where
+	// conforming implementations differ. The conformance suite measures
+	// every declaration; the core reads the ones that change how it
+	// drives the module. See Capabilities.
+	Capabilities() Capabilities
+
 	// Workspaces lists the tokens this adapter can see. See Workspace for
 	// what a token maps to per vendor.
 	Workspaces(ctx context.Context) ([]Workspace, error)
