@@ -1,7 +1,8 @@
 // Command hsm-pki-keytool hosts the operator-run key operations: the root
 // and intermediate ceremony, intermediate re-issue, signing-key
-// provisioning and retirement, inventory generation, and the two
-// credentials that open the authenticated listener. It is a separate binary from
+// provisioning and retirement, inventory generation, the two credentials
+// that open the authenticated listener, and the OCSP responder's key. It
+// is a separate binary from
 // cmd/hsm-pki-server because these operations touch the root key, which
 // the service's configuration must never name. Both binaries share one
 // PIN-handling implementation, pkcs11.SecurePIN.
@@ -80,7 +81,7 @@ func runCeremonyCmd(args []string) error {
 	rootCRLOut := fs.String("root-crl-out", "", "path to write the root CRL PEM")
 	rootCRLURL := fs.String("root-crl-url", "", "URL the root CRL will be served from (becomes the intermediate's CRL distribution point)")
 	rootCertURL := fs.String("root-cert-url", "", "URL the root certificate will be served from (becomes the intermediate's AIA CA-Issuers pointer)")
-	rootKeyExtractable := fs.Bool("root-key-extractable", true, "set CKA_EXTRACTABLE on the root private key, enabling wrap-based backup (docs/key-ceremony-and-recovery.md); does not affect CKA_SENSITIVE, which is always forced true")
+	rootKeyExtractable := fs.Bool("root-key-extractable", true, "set CKA_EXTRACTABLE on the root private key, which makes a wrap-based backup possible where the token's policy allows wrapping a private key (docs/key-ceremony-and-recovery.md); does not affect CKA_SENSITIVE, which is always forced true")
 
 	interWorkspaceLabel := fs.String("intermediate-workspace", "", "token label the intermediate key pair is generated on")
 	interWorkspaceSerial := fs.String("intermediate-workspace-serial", "", "token serial number, to disambiguate when several tokens share the intermediate label")
@@ -168,7 +169,10 @@ func runCeremonyCmd(args []string) error {
 			*rootCertOut, *interCertOut, *rootCRLOut)
 		fmt.Println("no private key material was written anywhere; both key pairs remain on their tokens")
 		if *rootKeyExtractable {
-			fmt.Println("root private key: CKA_EXTRACTABLE=true, eligible for wrap-based backup (docs/key-ceremony-and-recovery.md)")
+			// Necessary, not sufficient: a Luna partition in its default
+			// policy refuses to wrap a private key whatever the attribute
+			// says, so the line does not promise a backup path.
+			fmt.Println("root private key: CKA_EXTRACTABLE=true, wrap-based backup possible where the token's policy allows it (docs/key-ceremony-and-recovery.md)")
 		} else {
 			fmt.Println("root private key: CKA_EXTRACTABLE=false, no wrap-based backup; recovery on loss is a fresh ceremony and cross-signing")
 		}

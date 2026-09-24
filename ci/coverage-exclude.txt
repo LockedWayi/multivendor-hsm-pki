@@ -8,13 +8,15 @@
 # that will never run in CI, or get quietly lowered until it protects
 # nothing. Excluding these files keeps the floor meaningful for the code CI
 # actually exercises. The adapters listed here are instead validated by the
-# conformance suite passing against ProtectToolkit-C software emulation in
-# the maintainer's own environment, and that claim is labelled maintainer-verified, not
-# CI-verified, everywhere it is made.
+# conformance suite passing against ProtectToolkit-C software emulation and
+# against a Luna Network HSM 7 in the maintainer's own environment, and that
+# claim is labelled maintainer-verified, not CI-verified, everywhere it is
+# made.
 #
-# When nShield and Luna adapters arrive with the same constraint, add their
-# files here. This list is the single place that decision lives.
+# When the nShield adapter arrives with the same constraint, add its file
+# here. This list is the single place that decision lives.
 internal/pkcs11/protectserver.go
+internal/pkcs11/luna.go
 #
 # internal/hsmtest is test scaffolding that has to be a package rather than a
 # _test.go file, because Go cannot share test helpers across packages. It is

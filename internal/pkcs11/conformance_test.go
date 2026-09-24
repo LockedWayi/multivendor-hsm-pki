@@ -3,7 +3,9 @@ package pkcs11_test
 // TestConformance is the cross-vendor suite: every subtest runs, unchanged,
 // against every backend the environment provides. SoftHSM2 is always
 // present in the dev container and carries CI. ProtectServer runs when
-// PROTECTSERVER_MODULE is set and skips otherwise.
+// PROTECTSERVER_MODULE is set and Luna when LUNA_MODULE is; each skips
+// with its module variable unset and fails with it set and the rest of its
+// variables missing.
 //
 // Every test vector is a real digest, a real plaintext, a real key, never
 // an all-zero stand-in. An all-zero digest is a case where conforming
@@ -1040,7 +1042,8 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 
 		// No CKA_EC_PARAMS in the template. SoftHSM2 2.6.1 rejects an
 		// explicit value with CKR_ATTRIBUTE_READ_ONLY; it derives the curve
-		// from the wrapped object. Both backends unwrap without it.
+		// from the wrapped object. The two software backends unwrap without
+		// it; Luna never reaches this line, its wrap having been refused.
 		restored, err := b.adapter.Unwrap(ctx, s, wrappingKey, mech, wrapped, []pk11.Attribute{
 			pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPrivateKey)),
 			pk11.NumericAttribute(pk11.AttrKeyType, uint64(pk11.KeyTypeEC)),

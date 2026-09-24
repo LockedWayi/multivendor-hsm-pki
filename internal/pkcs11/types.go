@@ -1,7 +1,7 @@
 // Package pkcs11 is the vendor-agnostic PKCS#11 layer. VendorAdapter is
 // written against the standard PKCS#11 surface only. A concrete adapter
-// (SoftHSM2Adapter, ProtectServerAdapter) handles its vendor's differences
-// and presents this one interface.
+// (SoftHSM2Adapter, ProtectServerAdapter, LunaAdapter) handles its
+// vendor's differences and presents this one interface.
 package pkcs11
 
 import (
@@ -20,8 +20,9 @@ import (
 // reboots. CK_TOKEN_INFO.serialNumber is the field meant for identity;
 // RFC 7512 carries token= and serial= as separate URI attributes.
 //
-// Serial is an opaque string. SoftHSM2 emits a hex-like serial and
-// ProtectToolkit forms such as "0000:57270". Only equality is used.
+// Serial is an opaque string. SoftHSM2 emits a hex-like serial,
+// ProtectToolkit forms such as "0000:57270", and Luna a decimal partition
+// serial such as "1396857871561". Only equality is used.
 type Workspace struct {
 	SlotID uint
 	Label  string

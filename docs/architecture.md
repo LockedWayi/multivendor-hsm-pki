@@ -8,8 +8,8 @@ the major choices. It answers "why is it built this way".
 ## What this is, in one paragraph
 
 A vendor-agnostic PKCS#11 abstraction layer sits at the core. It presents
-one interface over several HSM families: SoftHSM2 and ProtectServer today,
-nShield and Luna planned. A Certificate Authority is built on that core.
+one interface over several HSM families: SoftHSM2, ProtectServer and Luna
+today, nShield planned. A Certificate Authority is built on that core.
 It issues, revokes and reports X.509 certificates without caring which
 vendor's HSM holds its keys. The service is containerized, deployed to
 Kubernetes, and shipped by a CI/CD pipeline that scans code, dependencies
@@ -44,24 +44,61 @@ differences.
                      │
         one PKCS#11-shaped interface        ← VendorAdapter
     ┌─────────┬──────┴───────┬─────────┐
- SoftHSM2  ProtectServer  nShield    Luna   ← vendor implementations
-  token       slot        softcard  partition ← each vendor's isolated key space
- ✅ built     ✅ built     ○ planned ○ planned
- (CI runs)  (local only)
+ SoftHSM2  ProtectServer    Luna      nShield  ← vendor implementations
+  token       slot        partition   softcard ← each vendor's isolated key space
+ ✅ built     ✅ built     ✅ built    ○ planned
+ (CI runs)  (local only) (maintainer's
+                          appliance)
 ```
 
-Two of those four run. **SoftHSM2** is the baseline. It needs no hardware
+Three of those four run. **SoftHSM2** is the baseline. It needs no hardware
 and no proprietary SDK, so CI runs it and any reader can reproduce the
 whole suite. **ProtectServer** runs through Thales ProtectToolkit-C 7.3.3
-software emulation, on the maintainer's own installation. nShield and Luna
-are planned and untested.
+software emulation, on the maintainer's own installation. **Luna** runs
+against two password-authenticated partitions of a Luna Network HSM 7
+(client 10.9.4, firmware 7.8.7) under the maintainer's own access, the
+first hardware in the rotation. nShield is planned and untested.
 
-Both adapters wrap the shared implementation with no overrides. Two
-spec-conformant implementations needing no vendor-specific code is
-evidence that the interface is usable across vendors. It is not proof that
-the abstraction is complete. nShield and Luna are where differences are
-expected: the login and key protection model, `CKA_ID` and label handling,
-EC point encoding, session limits, and error codes.
+All three adapters wrap the shared implementation with no overrides. What
+Luna did differently was measured, and none of it became a branch on a
+vendor name: one difference made the shared path stricter for every
+backend (a secret key is always created sensitive, because Luna refuses
+anything else), and two are declarations the conformance suite carries
+per backend and asserts (the default partition policy refuses to wrap a
+private key; an AES unwrap needs `CKA_VALUE_LEN`, which SoftHSM2 refuses
+as read-only). Three implementations agreeing through one core is evidence
+that the interface is usable across vendors, and better evidence than two
+software modules were. It is still not proof that the abstraction is
+complete. nShield's Security World is where the login and key-protection
+model is expected to differ most.
+
+### Luna Network HSM 7, as measured
+
+Luna HSM Client 10.9.4 (minimal client), `libCryptoki2.so`, against two
+partitions of the maintainer's own appliance, one V0 and one V1, password
+authentication, firmware 7.8.7. The module resolves every dependency
+inside the dev image and reads its configuration from
+`ChrystokiConfigurationPath` at `C_Initialize`, so that variable has to be
+in the process environment before the module loads; the config layer
+neither sets nor checks it. The isolated key space is a partition, one
+PKCS#11 slot each; the module also exposes empty slots of its own, which
+resolution by label ignores.
+
+Four differences from the two software modules, each in the conformance
+suite: a non-sensitive secret key cannot be created at all
+(`CKR_ATTRIBUTE_VALUE_INVALID`); wrapping a private key is refused under
+the default partition policy (`CKR_KEY_NOT_WRAPPABLE`) while secret keys
+wrap; unwrapping an AES key requires `CKA_VALUE_LEN` in the template and
+reports its absence as `CKR_ATTRIBUTE_TYPE_INVALID`; and the partition has
+four roles, of which the Crypto Officer is the standard `CKU_USER` and the
+Limited Crypto Officer is the vendor user type `0x80000003`. The whole
+suite ran identically as either role. Two more facts an operator meets
+before a test does: a newly initialized role's password is born expired,
+so `C_Login` succeeds and the next call fails `CKR_PIN_EXPIRED`; and the
+minimum password length is 8, so a shorter wrong PIN tests the length
+check rather than authentication. The full table, with what was not
+measured, is in [`test-matrix.md`](test-matrix.md), "Expected divergences
+to look for".
 
 ### ProtectToolkit-C software emulation, as measured
 
@@ -91,9 +128,10 @@ Each layer is proven before the next is added, so the security-critical
 surface is never large and untested at once.
 
 1. **PKCS#11 abstraction and vendor adapters (Go).** The core. One
-   interface, run against two backends: SoftHSM2 in CI, and ProtectServer
-   through ProtectToolkit-C software emulation, run locally. If this layer
-   is wrong, nothing on top matters.
+   interface, run against three backends: SoftHSM2 in CI, ProtectServer
+   through ProtectToolkit-C software emulation and a Luna Network HSM 7,
+   both run locally under the maintainer's own access. If this layer is
+   wrong, nothing on top matters.
 
 2. **CA core (Go).** Certificate issue, revoke and CRL, built on the
    abstraction so it is HSM-agnostic from the start. Standard-library
@@ -204,17 +242,23 @@ surface is never large and untested at once.
    out is the choice made with the reasons in view rather than by
    habit.
 
-   Planned next: the third and fourth backends.
+   Built next: the third backend. Planned: the fourth.
 
-6. **Luna and nShield (planned next, the capstone).** Every token-touching
-   test runs against a Luna partition and an nShield softcard under the
-   maintainer's own access, joining SoftHSM2 and ProtectServer in one
-   registry. This is where the login and key-protection models, `CKA_ID`
-   and label handling, EC point encoding, session limits and error codes
-   are expected to differ, and where the core gains a declared capability
-   per adapter that the conformance suite measures, so a difference is
-   absorbed as a declaration rather than a branch on a vendor name. Both
-   paths are maintainer-verified, never CI-verified, and labelled so.
+6. **Luna and nShield (the capstone; Luna built, nShield planned).** Every
+   token-touching test runs against two Luna partitions under the
+   maintainer's own access, in the same registry as SoftHSM2 and
+   ProtectServer, and the differences that were expected here were
+   measured: the login model has four roles and two vendor user types, a
+   non-sensitive secret key is refused, private-key wrapping is a
+   partition policy, an unwrap template needs an attribute another vendor
+   refuses. Each became either a stricter shared path or a declaration the
+   conformance suite asserts per backend; the core never learned a vendor
+   name. Those declarations live in the suite today. The next step is a
+   capability descriptor on the adapter itself, so the same declarations
+   are read by the core and measured by the suite, and then nShield, whose
+   Security World is where the most is still expected to differ. Both
+   vendor paths are maintainer-verified, never CI-verified, and labelled
+   so.
 
    **Optional, not scheduled: a secrets manager for the PIN.** Decided and
    set aside on 2026-09-23. If built, no key would move:
@@ -449,31 +493,34 @@ Java provider). Chosen: PKCS#11 as the common denominator via
 the shared standard every HSM implements.
 
 ### SoftHSM2 as the development and CI target
-Rejected: developing against a vendor module. Chosen: SoftHSM2 first, and
-the maintainer's own ProtectToolkit-C software emulation for validation of
-the vendor path. Reason: it keeps development hardware-free, so CI can run
-the whole suite, and it keeps this work independent of any employer's HSM.
+Rejected: developing against a vendor module. Chosen: SoftHSM2 first, then
+the maintainer's own ProtectToolkit-C software emulation and the
+maintainer's own Luna appliance for validation of the vendor path. Reason:
+it keeps development hardware-free, so CI can run the whole suite, and it
+keeps this work independent of any employer's HSM.
 
-### Why both SoftHSM2 and ProtectServer, rather than either alone
+### Why SoftHSM2, ProtectServer and Luna, rather than any one alone
 Rejected: SoftHSM2 only. An abstraction implemented once is a guess. Its
 shape is free to encode one implementation's assumptions, and nothing
-would catch that. Rejected too: ProtectServer only. It would make the
-repository unreproducible for anyone without a Thales entitlement.
+would catch that. Rejected too: a vendor module only. It would make the
+repository unreproducible for anyone without that vendor's entitlement.
 
-Chosen: both, behind one interface. SoftHSM2 carries CI and
+Chosen: all three, behind one interface. SoftHSM2 carries CI and
 reproducibility. ProtectToolkit-C software emulation is the second
-implementation. Both adapters wrap the shared implementation with no
-overrides. Two spec-conformant implementations needing no vendor-specific
-code is evidence that the interface is usable across vendors. It is not
-proof that the abstraction is complete. nShield and Luna are untested, and
-that is where differences are expected: the login and key protection
-model, `CKA_ID` and label handling, EC point encoding, session limits,
-error codes.
+implementation, and Luna the third and the first hardware. All three
+adapters wrap the shared implementation with no overrides. Two
+spec-conformant software modules agreeing was evidence that the interface
+is usable across vendors; a hardware module agreeing through the same
+core, with its differences measured and absorbed as declarations rather
+than branches, is stronger evidence. It is still not proof that the
+abstraction is complete. nShield is untested, and its Security World is
+where the login and key protection model is expected to differ.
 
-The cost: the ProtectServer path cannot run in public CI, because the SDK
-is proprietary and is never vendored here. Acceptance criteria are split
-into CI-verifiable and maintainer-verified halves, so a reader can tell
-which claims an automated run backs.
+The cost: neither vendor path can run in public CI, because the SDK and
+the client are proprietary and never vendored here, and the appliance is
+the maintainer's. Acceptance criteria are split into CI-verifiable and
+maintainer-verified halves, so a reader can tell which claims an
+automated run backs.
 
 ### Standard-library crypto only
 Rejected: third-party crypto convenience libraries. Chosen: `crypto/x509`,

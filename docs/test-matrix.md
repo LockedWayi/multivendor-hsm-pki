@@ -76,6 +76,15 @@ container from the run that produced the per-suite numbers above, with:
 go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
 ```
 
+The same command with `ProtectServer` or `Luna` in place of `SoftHSM2`
+gives 133 for each (2026-09-24): every top-level per-backend subtest runs
+on every registered backend. This is the top-level count, the one
+`tools/bootstrap-workstation.sh` reports. Counting every nested subtest
+under a backend as well (`--- PASS`/`SKIP` lines at any depth, the
+conformance suite's 26 cases and the ceremony suite's inner cases
+included) gives 196 per backend on the same run, which is what the
+"passed" figure of a whole-run summary in §4 counts.
+
 The count was 96 on 2026-09-10; the difference is the retirement
 command, the credential commands, mutual TLS, profiles, the binding and
 the responder.
@@ -137,7 +146,9 @@ the refusal wrote nothing and freed the label, then skips with the
 reason in the log, because what it exists to measure cannot be measured
 on a token that is not a key source. The last full run on that backend,
 before public #51 on 2026-09-23, reported 192 passed, 3 skipped, 0
-failed, and those three are the skips.
+failed, and those three are the skips; that figure counts subtests at
+every depth, not the 133 top-level ones of §3 (196 at every depth on
+2026-09-24, with the tests added since).
 
 ---
 
@@ -158,11 +169,26 @@ What a vendor must provide before it can join `hsmtest`'s registry:
    compares serials, not labels. A backend that reports no serial cannot
    run the two-token tests, and the harness says so.
 4. **Environment variables** following the existing shape, so nothing is
-   hard-coded: `<VENDOR>_MODULE`, `<VENDOR>_ROOT_WORKSPACE`,
-   `<VENDOR>_INTERMEDIATE_WORKSPACE`, `<VENDOR>_ROOT_PIN`,
-   `<VENDOR>_INTERMEDIATE_PIN`. Unset means skip, never fail.
-5. **A setup document** in `docs/`: installation, token initialization,
-   how to verify the module loads, and how to run the suite against it.
+   hard-coded. For the harness: `<VENDOR>_MODULE`,
+   `<VENDOR>_ROOT_WORKSPACE`, `<VENDOR>_INTERMEDIATE_WORKSPACE`,
+   `<VENDOR>_ROOT_PIN`, `<VENDOR>_INTERMEDIATE_PIN`. For the conformance
+   suite, which needs one token and a wrong PIN: `<VENDOR>_WORKSPACE` and
+   `<VENDOR>_PIN`. Plus whatever the module itself reads from the process
+   environment: `ET_PTKC_SW_DATAPATH` for the ProtectToolkit emulator,
+   `ChrystokiConfigurationPath` for Luna, and `LUNA_ROLE` (`co`, `lco`,
+   `cu`) for the role the conformance suite logs in as. **`<VENDOR>_MODULE`
+   unset means skip.** Set, with any of the others missing, means fail:
+   a half-configured backend is a configuration error, not an absent
+   backend, and a run that quietly dropped the vendor is the run this
+   file exists to prevent. Luna's harness and both conformance backends
+   do this today; the ProtectServer harness still skips on a missing
+   workspace or PIN, a gap recorded in the backlog.
+5. **A setup document** the maintainer keeps outside this repository:
+   installation, token or partition initialization, how to verify the
+   module loads, and how to run the suite against it. It stays out of the
+   public tree because it names the maintainer's own installation; the
+   measurements it produces come here, into §5's table and the vendor
+   notes.
 6. **Provenance confirmed** before a single test runs: the entitlement is
    the maintainer's own, never an employer's. This is the reason this
    repository can be shown to anyone.
@@ -222,7 +248,7 @@ maintainer; "not measured" means exactly that.
 | Unwrap template for a secret key | Unwrap an AES key with and without `CKA_VALUE_LEN` | **Requires** it, and reports its absence as `CKR_ATTRIBUTE_TYPE_INVALID`. SoftHSM2 refuses the same attribute as `CKR_ATTRIBUTE_READ_ONLY`; ProtectToolkit-C takes either. No single template serves all three; the suite declares it per backend |
 | Login identity | Which user type the credential logs in as | The Crypto Officer is `CKU_USER`; the Limited Crypto Officer is the vendor type `0x80000003` (`pkcs11.LunaRoleLimitedCryptoOfficer`). The conformance suite ran identically as either. A newly initialized role's password is expired: `C_Login` succeeds and the *next* call fails `CKR_PIN_EXPIRED` |
 | RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times. The RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included, so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend before trusting it with a key | Reseeds (`TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt` passes, and the three tests that skip on the emulator for this reason run) |
-| Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups, `hsmtest.Backend.Cleanup` and the conformance suite's, destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. With that retry, a full two-backend run leaves zero objects, measured. Litter from before is not the suite's to delete. `ci/token-cleanup` is the operator's tool for that, dry by default | Zero objects on both partitions after a full run, checked with `ci/token-cleanup -adapter luna` |
+| Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups, `hsmtest.Backend.Cleanup` and the conformance suite's, destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. With that retry, a full run on every backend leaves zero objects, measured on both software backends. Litter from before is not the suite's to delete. `ci/token-cleanup` is the operator's tool for that, dry by default | Zero objects on both partitions after a full run, checked with `ci/token-cleanup -adapter luna` |
 
 ---
 
@@ -252,18 +278,33 @@ for a reason that has nothing to do with the code it is measuring.
 
 Every configured backend. `-p 1` is required: the package test binaries
 would otherwise open the same vendor token store in parallel. All seven
-variables, not the four the ceremony suite reads: with
+ProtectServer variables, not the five the ceremony harness reads: with
 `PROTECTSERVER_MODULE` set and `PROTECTSERVER_PIN` unset, the conformance
-suite fails closed on a half-configured backend rather than skipping.
+suite fails closed on a half-configured backend rather than skipping. For
+Luna, all of `LUNA_MODULE`, `ChrystokiConfigurationPath`,
+`LUNA_ROOT_WORKSPACE`, `LUNA_INTERMEDIATE_WORKSPACE`, `LUNA_ROOT_PIN`,
+`LUNA_INTERMEDIATE_PIN`, `LUNA_WORKSPACE` and `LUNA_PIN`; `LUNA_ROLE` is
+optional and defaults to the Crypto Officer. The Luna client directory is
+mounted at the same path inside the container as outside, because
+`ChrystokiConfigurationPath` and the certificate paths in `Chrystoki.conf`
+are absolute; the container reaches the appliance through the host's
+address, so the client registered for the host covers it.
 
 ```sh
 docker run --rm -v "$PWD":/repo -w /repo \
   -v /opt/safenet:/opt/safenet:ro -v "$HOME/.cryptoki:/root/.cryptoki" \
+  -v "$HOME/luna:$HOME/luna" \
   -e PROTECTSERVER_MODULE=... -e PROTECTSERVER_WORKSPACE=... -e PROTECTSERVER_PIN \
   -e PROTECTSERVER_ROOT_WORKSPACE=... -e PROTECTSERVER_INTERMEDIATE_WORKSPACE=... \
   -e PROTECTSERVER_ROOT_PIN -e PROTECTSERVER_INTERMEDIATE_PIN \
+  -e ChrystokiConfigurationPath -e LUNA_MODULE -e LUNA_ROLE \
+  -e LUNA_ROOT_WORKSPACE -e LUNA_INTERMEDIATE_WORKSPACE -e LUNA_WORKSPACE \
+  -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN -e LUNA_PIN \
   hsm-pki-dev go test -race -p 1 -timeout 180s ./...
 ```
+
+`tools/bootstrap-workstation.sh --with-protectserver --with-luna` runs
+the same command with the same mounts, refusing when a variable is unset.
 
 `-timeout 180s` because the ProtectToolkit-C software emulator blocks
 forever inside `C_OpenSession` in some runs: three of six measured on
@@ -289,5 +330,10 @@ inside the dev image, with the same mounts and variables as the suite.
 To see which backends ran, since a missing variable skips silently:
 
 ```sh
-go test -race -p 1 -v ./... | grep -oE '/(SoftHSM2|ProtectServer)$' | sort | uniq -c
+go test -race -p 1 -v ./... | grep -oE '/(SoftHSM2|ProtectServer|Luna)$' | sort | uniq -c
 ```
+
+On 2026-09-24, on the tree that added Luna, that gave 133 for each of the
+three, with 20 packages ok; ProtectServer's 133 include the three named
+emulator skips, and Luna's conformance run has one skip whose refusal is
+measured (the private-key wrap under the default partition policy).

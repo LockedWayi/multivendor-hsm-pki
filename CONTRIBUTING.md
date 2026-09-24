@@ -100,12 +100,16 @@ tools/bootstrap-workstation.sh --no-smoke      # the same without bringing the s
 ```
 
 It installs nothing: a missing tool is named with what it is for. The
-summary reports the per-backend subtest counts with the same anchored
-pattern `docs/test-matrix.md` measures. `--with-protectserver` adds the
-maintainer's ProtectToolkit-C emulator when the seven `PROTECTSERVER_*`
-variables are set, and refuses when any is missing rather than quietly
-running SoftHSM2 alone. Vendor clients are never installed by it; what a
-backend must provide is in `docs/test-matrix.md`, section 5.
+summary reports the per-backend top-level subtest counts for every
+registered backend, SoftHSM2, ProtectServer and Luna, counted from the
+`--- PASS`/`SKIP`/`FAIL` lines the way `docs/test-matrix.md` section 6
+does. `--with-protectserver` adds the maintainer's ProtectToolkit-C
+emulator when the seven `PROTECTSERVER_*` variables are set;
+`--with-luna` adds a Luna client and its partitions when the `LUNA_*`
+variables and `ChrystokiConfigurationPath` are set. Either flag refuses
+when a variable is missing rather than quietly running SoftHSM2 alone.
+Vendor clients are never installed by it; what a backend must provide is
+in `docs/test-matrix.md`, section 5.
 
 ## Running tests locally
 
@@ -131,11 +135,17 @@ environment can reach:
 go test ./internal/pkcs11 -run TestConformance -race -v
 ```
 
-With only SoftHSM2 available, its subtests run and ProtectServer's skip. If
-you have your own ProtectToolkit-C entitlement, set `PROTECTSERVER_MODULE`
-and the workspace and PIN variables listed below to run that backend as
-well. Never in CI, always locally, against your own SDK. The maintainer runs
-ProtectToolkit-C 7.3.3 in software emulation.
+With only SoftHSM2 available, its subtests run and ProtectServer's and
+Luna's skip. If you have your own ProtectToolkit-C entitlement, set
+`PROTECTSERVER_MODULE`, `PROTECTSERVER_WORKSPACE` and `PROTECTSERVER_PIN`
+to run that backend as well; with the module set and the PIN unset the
+suite fails rather than skips, because a half-configured backend is not
+an absent one. For a Luna partition, set `LUNA_MODULE`,
+`ChrystokiConfigurationPath`, `LUNA_WORKSPACE` and `LUNA_PIN`, and
+optionally `LUNA_ROLE` (`co`, the default, `lco` or `cu`) for the role the
+suite logs in as. Never in CI, always locally, against your own SDK or
+appliance. The maintainer runs ProtectToolkit-C 7.3.3 in software
+emulation and a Luna Network HSM 7 with the 10.9.4 minimal client.
 
 `internal/ca`'s **ceremony** suite follows the same pattern but needs two
 tokens. The root and the intermediate live on separate tokens:
@@ -146,15 +156,25 @@ go test ./internal/ca -run TestRunCeremony -race -v
 
 For ProtectServer it takes `PROTECTSERVER_MODULE`,
 `PROTECTSERVER_ROOT_WORKSPACE`, `PROTECTSERVER_INTERMEDIATE_WORKSPACE`,
-`PROTECTSERVER_ROOT_PIN` and `PROTECTSERVER_INTERMEDIATE_PIN`. With any of
-them unset those subtests skip. Provisioning the two tokens is a one-time
-manual step with the ProtectToolkit tools (`ctconf`, `ctkmu`).
+`PROTECTSERVER_ROOT_PIN` and `PROTECTSERVER_INTERMEDIATE_PIN`. With the
+module unset those subtests skip; with the module set and any of the
+other four unset they skip too, a gap the Luna harness does not share.
+Provisioning the two tokens is a one-time manual step with the
+ProtectToolkit tools (`ctconf`, `ctkmu`).
 
-Both backends can run in one invocation by mounting the ProtectToolkit
-module and its token store into the dev container. `docs/test-matrix.md` §6
-has the command. Run it before opening a PR that touches `internal/pkcs11`
-or `internal/ca`. The two backends have disagreed before, and a green
-SoftHSM2-only run does not show they still agree.
+For Luna it takes `LUNA_MODULE`, `ChrystokiConfigurationPath`,
+`LUNA_ROOT_WORKSPACE`, `LUNA_INTERMEDIATE_WORKSPACE`, `LUNA_ROOT_PIN` and
+`LUNA_INTERMEDIATE_PIN`. With `LUNA_MODULE` unset those subtests skip;
+with it set and anything else missing they fail. The two partitions are
+created and their Crypto Officer roles initialized on the appliance by
+its owner; the harness never does that.
+
+All configured backends run in one invocation by mounting the vendor
+module and its token store or client directory into the dev container.
+`docs/test-matrix.md` §6 has the command. Run it before opening a PR that
+touches `internal/pkcs11` or `internal/ca`. The backends have disagreed
+before, in both directions, and a green SoftHSM2-only run does not show
+they still agree.
 
 ## Running the service locally
 
@@ -193,7 +213,8 @@ docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev bash ci/coverage.sh -race
 A vendor adapter that needs a proprietary SDK this pipeline does not have
 goes in `ci/coverage-exclude.txt`. Its correctness is checked by
 `TestConformance` passing against that vendor's module in the maintainer's
-own environment (ProtectToolkit-C software emulation today). A bare
+own environment (ProtectToolkit-C software emulation and a Luna Network
+HSM 7 today). A bare
 `go test -cover` works for a quick local read. The floor is
 `ci/coverage.sh`'s number.
 

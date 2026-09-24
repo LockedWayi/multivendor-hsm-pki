@@ -1,7 +1,8 @@
 // Package hsmtest is the backend harness every token-touching test runs
 // through. Go cannot share test helpers across packages, so the registry
-// below is the one place a backend is declared. Adding a vendor is one
-// entry plus an adapter.
+// below is where a backend is declared for every suite but one. Adding a
+// vendor is an adapter, one entry here and one in the conformance suite's
+// own list (see Vendors); a test fails when the two disagree.
 //
 // Every test that touches a token runs against every backend the
 // environment provides. One backend cannot find a class of defect:
@@ -10,8 +11,12 @@
 // disclose a key it is permitted to disclose.
 //
 // SoftHSM2 needs no hardware and no SDK, so it is always present and
-// carries CI. Every other backend runs when its environment variables are
-// set, and skips otherwise. Nothing vendor-only is reported as CI-verified.
+// carries CI. Every other backend skips when its <VENDOR>_MODULE variable
+// is unset. With the module set and another of its variables missing, the
+// Luna setup fails rather than skips: a half-configured backend is a
+// configuration error, not an absent backend. The ProtectServer setup
+// still skips in that case. Nothing vendor-only is reported as
+// CI-verified.
 package hsmtest
 
 import (
@@ -201,7 +206,8 @@ func (b *Backend) SecondaryPINFunc() func() ([]byte, error) {
 }
 
 // descriptor declares one vendor to the harness. Adding a backend means
-// one of these plus the adapter it constructs.
+// one of these, one entry in the conformance suite's list, and the adapter
+// they both construct.
 type descriptor struct {
 	name string
 	// setup returns a live Backend, or calls t.Skip when the environment

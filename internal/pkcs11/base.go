@@ -21,13 +21,16 @@ const janitorInterval = 30 * time.Second
 
 // pkcs11Adapter is the PKCS#11 implementation shared by every
 // VendorAdapter in this package. It is unexported: callers see
-// SoftHSM2Adapter or ProtectServerAdapter, each a named type embedding it.
-// Neither adds an override. SoftHSM2 and ProtectToolkit-C software
-// emulation both pass the conformance suite with this code. That is two
-// spec-conformant implementations. It is not proof that the abstraction is
-// complete. nShield and Luna are untested, and that is where differences
-// are expected: login and key protection model, CKA_ID and label
-// handling, EC point encoding, session limits, error codes.
+// SoftHSM2Adapter, ProtectServerAdapter or LunaAdapter, each a named type
+// embedding it. None adds an override. SoftHSM2, ProtectToolkit-C software
+// emulation and a Luna Network HSM 7 all pass the conformance suite with
+// this code. What Luna did differently was absorbed here for everyone
+// (a secret key is always sensitive) or declared per backend in the suite
+// (private-key wrapping is a partition policy; an unwrap needs
+// CKA_VALUE_LEN), never as a branch on a vendor name. Three
+// implementations, one of them hardware, is not proof that the
+// abstraction is complete. nShield is untested, and its Security World is
+// where the login and key protection model is expected to differ.
 //
 // Each pkcs11Adapter owns its own *p11.Ctx and its own lock. A process can
 // hold one adapter per module.

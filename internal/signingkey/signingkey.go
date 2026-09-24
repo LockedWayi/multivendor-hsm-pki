@@ -162,7 +162,7 @@ var ErrDuplicateKey = errors.New("signingkey: the token generated a key it had a
 
 // FindDuplicateKey reports the label of a key on the token carrying the
 // same public point as pub, ignoring ownLabel, or "" when there is none.
-// Exported so the check can be tested on both backends; a test cannot make
+// Exported so the check can be tested on every backend; a test cannot make
 // a working RNG collide.
 func FindDuplicateKey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, ownLabel string, pub *ecdsa.PublicKey, curve pk11.ECCurve) (string, error) {
 	return findDuplicatePoint(ctx, adapter, s, ownLabel, pub, curve)

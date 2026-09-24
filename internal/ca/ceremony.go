@@ -61,9 +61,11 @@ type CeremonyParams struct {
 
 	// RootKeyExtractable sets CKA_EXTRACTABLE on the root private key. It
 	// is an operator choice per ceremony. true makes a wrap-based backup of
-	// the root possible; false leaves a lost root token with no recovery
-	// but a fresh ceremony. CKA_SENSITIVE stays true either way. C_WrapKey
-	// and C_GetAttributeValue are different doors.
+	// the root possible where the token's policy allows a private key to be
+	// wrapped at all (a Luna partition refuses it by default, whatever the
+	// attribute says); false leaves a lost root token with no recovery but
+	// a fresh ceremony. CKA_SENSITIVE stays true either way. C_WrapKey and
+	// C_GetAttributeValue are different doors.
 	RootKeyExtractable bool
 }
 
