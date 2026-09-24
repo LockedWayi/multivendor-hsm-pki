@@ -139,11 +139,15 @@ that keeps per-thread state sees one logical caller arrive from one
 thread rather than from whichever thread Go scheduled. The cost is that
 the shared lock's concurrency collapses to one module call at a time. It
 is built, behind an environment variable, on the `exp/module-thread`
-branch, and measured on 2026-09-24: 0 hangs in 40 whole-suite runs with
-it against 3 in 48 without, on the same evening and tree. That is
-consistent with the hypothesis and is not proof; the unpinned rate that
-evening was far below the day before's, which nothing explains. It stays
-an experiment, and a documented design, until the numbers are decisive;
+branch, and measured on 2026-09-24: 0 hangs in 72 whole-suite runs with
+it against 6 in 112 without, on the same evening and tree, a result with
+about a two-percent chance of arising if the thread made no difference.
+That is consistent with the hypothesis and is not proof; the unpinned
+rate that evening was far below the day before's, which nothing
+explains, and one of the six unpinned hangs parked in `C_GenerateKey`
+rather than `C_OpenSession`, so the call is not the constant either. It
+stays an experiment, and a documented design, until the numbers are
+decisive;
 `runtime.LockOSThread` scattered through the core was rejected as the
 shape, because a pinned goroutine still has to be the one that made every
 call, which is what the channel provides.
