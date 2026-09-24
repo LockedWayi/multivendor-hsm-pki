@@ -78,6 +78,9 @@ func (p *ReissueIntermediateParams) validate() error {
 	if p.RootKeyLabel == p.IntermediateKeyLabel {
 		return fmt.Errorf("ca: reissue-intermediate refuses to use one key label (%q) for both tiers", p.RootKeyLabel)
 	}
+	if err := pk11.ValidateVersionedLabel(p.IntermediateKeyLabel); err != nil {
+		return fmt.Errorf("ca: reissue-intermediate: IntermediateKeyLabel: %w", err)
+	}
 	if err := ValidateDistributionURL("RootCRLURL", p.RootCRLURL); err != nil {
 		return fmt.Errorf("ca: reissue-intermediate: %w (ReissueIntermediateParams documents why this is required)", err)
 	}

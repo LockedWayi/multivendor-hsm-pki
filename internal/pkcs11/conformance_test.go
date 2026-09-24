@@ -21,10 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -34,19 +30,6 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
-)
-
-const (
-	softhsm2SOPIN    = "000000"
-	softhsm2UserPIN  = "123456"
-	softhsm2WrongPIN = "000001"
-
-	protectServerDefaultWorkspace = "hsm-pki-dev"
-	protectServerWrongPIN         = "0000"
-
-	// Long enough for Luna's minimum PIN length, so the login fails as a
-	// wrong PIN and not as CKR_PIN_LEN_RANGE.
-	lunaWrongPIN = "00000000"
 )
 
 // conformanceBackend is one vendor's adapter plus the credentials the
@@ -81,113 +64,45 @@ func (b *conformanceBackend) label(suffix string) string {
 	return fmt.Sprintf("conf-%s-%s", b.runID, suffix)
 }
 
-// conformanceBackends is this suite's own vendor list, separate from
-// internal/hsmtest's registry. This suite needs a wrong PIN and tolerance
-// for the adapter being closed part-way through, which the shared harness
-// does not provide. TestConformanceCoversEveryRegisteredVendor keeps the
-// two lists equal.
-var conformanceBackends = []struct {
-	name  string
-	setup func(t *testing.T) *conformanceBackend
-}{
-	{"SoftHSM2", setupSoftHSM2Backend},
-	{"ProtectServer", setupProtectServerBackend},
-	{"Luna", setupLunaBackend},
-}
-
-// TestConformanceCoversEveryRegisteredVendor fails when a vendor is in
-// internal/hsmtest's registry and not in this suite. Without it the new
-// vendor would run in every suite except the one that finds vendor
-// divergence. Names and order are compared.
-func TestConformanceCoversEveryRegisteredVendor(t *testing.T) {
-	var covered []string
-	for _, be := range conformanceBackends {
-		covered = append(covered, be.name)
-	}
-	registered := hsmtest.Vendors()
-	if !slices.Equal(covered, registered) {
-		t.Fatalf("conformance suite covers %v but internal/hsmtest registers %v.\n"+
-			"Adding a vendor means an entry in BOTH lists until they are unified "+
-			"(docs/test-matrix.md, backlog item 9). A vendor missing here runs "+
-			"everywhere except the suite that exists to find its divergence.",
-			covered, registered)
-	}
-}
-
-// TestConformance runs the full suite against every available backend.
+// TestConformance runs the full suite against every backend the
+// internal/hsmtest registry provides, in its single-token shape.
 func TestConformance(t *testing.T) {
-	for _, be := range conformanceBackends {
-		be := be
-		t.Run(be.name, func(t *testing.T) {
-			b := be.setup(t)
-			runConformanceSuite(t, b)
-		})
-	}
+	hsmtest.ForEachSingle(t, func(t *testing.T, s *hsmtest.Single) {
+		runConformanceSuite(t, newConformanceBackend(t, s))
+	})
 }
 
-// ─── SoftHSM2 backend setup ──────────────────────────────────────────────
+// declarations are what a backend says about itself that the suite then
+// measures. They sit here, keyed by name, until the adapter carries a
+// capability descriptor the core reads; the suite asserts each one, so a
+// declaration the token no longer matches is a failing test.
+var declarations = map[string]struct {
+	privateKeyWrapRefused string
+	unwrapNeedsValueLen   bool
+}{
+	// Partition policy 1, "Allow private key wrapping", defaults to 0 on a
+	// Luna partition even when the capability is present, and the
+	// partitions this was measured on keep the default.
+	"Luna": {
+		privateKeyWrapRefused: "Luna partition policy 1 (Allow private key wrapping) is off",
+		unwrapNeedsValueLen:   true,
+	},
+}
 
-func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
+func newConformanceBackend(t *testing.T, s *hsmtest.Single) *conformanceBackend {
 	t.Helper()
-	modulePath := os.Getenv("SOFTHSM2_MODULE")
-	explicit := modulePath != ""
-	if modulePath == "" {
-		modulePath = "/usr/lib/softhsm/libsofthsm2.so"
-	}
-	if _, err := os.Stat(modulePath); err != nil {
-		if explicit {
-			t.Fatalf("SOFTHSM2_MODULE=%s not found: %v", modulePath, err)
-		}
-		t.Skip("SoftHSM2 module not found at " + modulePath +
-			"; run inside the dev container (see CONTRIBUTING.md)")
-	}
-
-	runID := fmt.Sprintf("%d", time.Now().UnixNano())
-	label := "phase1-test-" + runID
-
-	dir := t.TempDir()
-	tokenDir := filepath.Join(dir, "tokens")
-	if err := os.MkdirAll(tokenDir, 0700); err != nil {
-		t.Fatalf("MkdirAll(tokenDir): %v", err)
-	}
-	confPath := filepath.Join(dir, "softhsm2.conf")
-	conf := "directories.tokendir = " + tokenDir + "\n" +
-		"objectstore.backend = file\n" +
-		"log.level = ERROR\n"
-	if err := os.WriteFile(confPath, []byte(conf), 0600); err != nil {
-		t.Fatalf("WriteFile(softhsm2.conf): %v", err)
-	}
-	// SOFTHSM2_CONF is process-wide. The backends run sequentially.
-	if err := os.Setenv("SOFTHSM2_CONF", confPath); err != nil {
-		t.Fatalf("Setenv(SOFTHSM2_CONF): %v", err)
-	}
-
-	cmd := exec.Command("softhsm2-util", "--init-token", "--free",
-		"--label", label, "--so-pin", softhsm2SOPIN, "--pin", softhsm2UserPIN)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("softhsm2-util --init-token: %v: %s", err, out)
-	}
-
-	adapter, err := pk11.NewSoftHSM2Adapter(modulePath)
-	if err != nil {
-		t.Fatalf("NewSoftHSM2Adapter: %v", err)
-	}
-	t.Cleanup(func() { adapter.Close() })
-
-	ws, err := findWorkspace(adapter, label)
-	if err != nil {
-		t.Fatalf("Workspaces: %v", err)
-	}
-
+	d := declarations[s.Name]
 	b := &conformanceBackend{
-		name:     "SoftHSM2",
-		adapter:  adapter,
-		ws:       ws,
-		userPIN:  []byte(softhsm2UserPIN),
-		wrongPIN: []byte(softhsm2WrongPIN),
-		role:     pk11.RoleUser,
-		runID:    runID,
-		reopen:   func() (pk11.VendorAdapter, error) { return pk11.NewSoftHSM2Adapter(modulePath) },
+		name:                  s.Name,
+		adapter:               s.Adapter,
+		ws:                    s.Workspace,
+		userPIN:               s.PIN,
+		wrongPIN:              s.WrongPIN,
+		role:                  s.Role,
+		privateKeyWrapRefused: d.privateKeyWrapRefused,
+		unwrapNeedsValueLen:   d.unwrapNeedsValueLen,
+		runID:                 s.RunID,
+		reopen:                s.Reopen,
 	}
 	b.registerCleanup(t)
 	return b
@@ -249,136 +164,6 @@ func (b *conformanceBackend) registerCleanup(t *testing.T) {
 			}
 		}
 	})
-}
-
-// ─── ProtectServer backend setup ─────────────────────────────────────────
-
-func setupProtectServerBackend(t *testing.T) *conformanceBackend {
-	t.Helper()
-	modulePath := os.Getenv("PROTECTSERVER_MODULE")
-	if modulePath == "" {
-		t.Skip("PROTECTSERVER_MODULE not set " +
-			"(this backend cannot run in public CI: proprietary SDK)")
-	}
-
-	label := os.Getenv("PROTECTSERVER_WORKSPACE")
-	if label == "" {
-		label = protectServerDefaultWorkspace
-	}
-	pin := os.Getenv("PROTECTSERVER_PIN")
-	if pin == "" {
-		t.Fatal("PROTECTSERVER_MODULE is set but PROTECTSERVER_PIN is not")
-	}
-
-	adapter, err := pk11.NewProtectServerAdapter(modulePath)
-	if err != nil {
-		t.Fatalf("NewProtectServerAdapter: %v", err)
-	}
-	t.Cleanup(func() { adapter.Close() })
-
-	ws, err := findWorkspace(adapter, label)
-	if err != nil {
-		t.Fatalf("Workspaces: %v", err)
-	}
-
-	b := &conformanceBackend{
-		name:     "ProtectServer",
-		adapter:  adapter,
-		ws:       ws,
-		userPIN:  []byte(pin),
-		wrongPIN: []byte(protectServerWrongPIN),
-		role:     pk11.RoleUser,
-		runID:    fmt.Sprintf("%d", time.Now().UnixNano()),
-		reopen:   func() (pk11.VendorAdapter, error) { return pk11.NewProtectServerAdapter(modulePath) },
-	}
-	b.registerCleanup(t)
-	return b
-}
-
-// ─── Luna backend setup ──────────────────────────────────────────────────
-
-// setupLunaBackend uses one partition on the maintainer's own Luna Network
-// HSM. LUNA_ROLE picks the identity the whole suite logs in as: co (the
-// Crypto Officer, CKU_USER, the default), lco (the Limited Crypto Officer)
-// or cu (the Crypto User). Running the suite once per role is how a
-// restricted role's refusals are measured rather than assumed.
-func setupLunaBackend(t *testing.T) *conformanceBackend {
-	t.Helper()
-	modulePath := os.Getenv("LUNA_MODULE")
-	if modulePath == "" {
-		t.Skip("LUNA_MODULE not set " +
-			"(this backend cannot run in public CI: proprietary client, owned hardware)")
-	}
-	if os.Getenv("ChrystokiConfigurationPath") == "" {
-		t.Fatal("LUNA_MODULE is set but ChrystokiConfigurationPath is not")
-	}
-	label := os.Getenv("LUNA_WORKSPACE")
-	pin := os.Getenv("LUNA_PIN")
-	if label == "" || pin == "" {
-		t.Fatal("LUNA_MODULE is set but LUNA_WORKSPACE or LUNA_PIN is not")
-	}
-	role, err := lunaRole(os.Getenv("LUNA_ROLE"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	adapter, err := pk11.NewLunaAdapter(modulePath)
-	if err != nil {
-		t.Fatalf("NewLunaAdapter: %v", err)
-	}
-	t.Cleanup(func() { adapter.Close() })
-
-	ws, err := findWorkspace(adapter, label)
-	if err != nil {
-		t.Fatalf("Workspaces: %v", err)
-	}
-
-	b := &conformanceBackend{
-		name:     "Luna",
-		adapter:  adapter,
-		ws:       ws,
-		userPIN:  []byte(pin),
-		wrongPIN: []byte(lunaWrongPIN),
-		role:     role,
-		// Partition policy 1, "Allow private key wrapping", defaults to 0
-		// on a Luna partition even when the capability is present, and the
-		// partitions this was measured on keep the default.
-		privateKeyWrapRefused: "Luna partition policy 1 (Allow private key wrapping) is off",
-		unwrapNeedsValueLen:   true,
-		runID:                 fmt.Sprintf("%d", time.Now().UnixNano()),
-		reopen:                func() (pk11.VendorAdapter, error) { return pk11.NewLunaAdapter(modulePath) },
-	}
-	b.registerCleanup(t)
-	return b
-}
-
-// lunaRole maps LUNA_ROLE to a login identity. An unknown value fails
-// rather than falling back: a run that silently used another role would
-// report the wrong role's behaviour.
-func lunaRole(v string) (pk11.Role, error) {
-	switch v {
-	case "", "co":
-		return pk11.RoleUser, nil
-	case "lco":
-		return pk11.LunaRoleLimitedCryptoOfficer, nil
-	case "cu":
-		return pk11.LunaRoleCryptoUser, nil
-	default:
-		return 0, fmt.Errorf("LUNA_ROLE=%q: want co, lco or cu", v)
-	}
-}
-
-func findWorkspace(adapter pk11.VendorAdapter, label string) (pk11.Workspace, error) {
-	wss, err := adapter.Workspaces(context.Background())
-	if err != nil {
-		return pk11.Workspace{}, err
-	}
-	for _, ws := range wss {
-		if ws.Label == label {
-			return ws, nil
-		}
-	}
-	return pk11.Workspace{}, fmt.Errorf("workspace %q not found among %+v", label, wss)
 }
 
 // ─── The shared suite ─────────────────────────────────────────────────────

@@ -199,6 +199,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   read-only.
 
 ### Changed
+- **One adapter registry.** `pkcs11.AdapterNames()`,
+  `pkcs11.NewAdapterByName` and `pkcs11.AdapterFlagUsage` replace the
+  four switches that mapped an adapter name to a constructor (`config`,
+  `hsm-pki-keytool`, `ci/token-cleanup`, `hsmtest`) and the eight copies
+  of the `-adapter` help string. The conformance suite's own backend list
+  is folded into `internal/hsmtest` (`Single`, `ForEachSingle`), so a
+  vendor is one registry entry and one adapter, and the test that kept
+  the two lists equal is gone with the second list.
+- **The ceremony and the re-issue refuse a key label that is not
+  versioned**, before the first key exists: the same
+  `^[a-z0-9]+(-[a-z0-9]+)*-v[0-9]+$` the signing-key commands enforce,
+  now `pkcs11.ValidateVersionedLabel`. Found by running the ceremony by
+  hand under a prefix with an uppercase timestamp: both CA pairs were
+  created and the TLS and OCSP commands then refused their labels.
+- **The ProtectServer harness fails closed on a half-configured
+  backend**, as the Luna harness and the conformance suite already did:
+  `PROTECTSERVER_MODULE` set with a workspace or PIN variable missing is
+  an error, not a skip.
 - **Every document and comment now describes three backends.** README's
   backend table, the architecture diagram and its decision record,
   CONTRIBUTING, the test matrix, the threat model's §8, the ceremony

@@ -195,6 +195,13 @@ func TestRunCeremony_RejectsInvalidParams(t *testing.T) {
 			{"one key label for both tiers", func(p *ca.CeremonyParams) {
 				p.IntermediateKeyLabel = p.RootKeyLabel
 			}},
+			// The credential commands accept only versioned labels; a
+			// ceremony under one they refuse leaves a CA pair no credential
+			// can sit beside. Refused here, before the first key exists.
+			{"unversioned root key label", func(p *ca.CeremonyParams) { p.RootKeyLabel = b.label("root-key") }},
+			{"uppercase in the intermediate key label", func(p *ca.CeremonyParams) {
+				p.IntermediateKeyLabel = b.label("Inter-Key-v1")
+			}},
 			{"empty CRL URL", func(p *ca.CeremonyParams) { p.RootCRLURL = "" }},
 			{"empty cert URL", func(p *ca.CeremonyParams) { p.RootCertURL = "" }},
 			{"non-http CRL URL", func(p *ca.CeremonyParams) { p.RootCRLURL = "ldap://pki.example.test/root.crl" }},
@@ -375,8 +382,8 @@ func TestRunCeremony_RootKeyExtractableIsOperatorControlled(t *testing.T) {
 				params := testCeremonyParams(b)
 				// Distinct labels per iteration; the ceremony refuses a used
 				// label.
-				params.RootKeyLabel = b.label(fmt.Sprintf("root-key-ext-%v", extractable))
-				params.IntermediateKeyLabel = b.label(fmt.Sprintf("inter-key-ext-%v", extractable))
+				params.RootKeyLabel = b.label(fmt.Sprintf("root-key-ext-%v-v1", extractable))
+				params.IntermediateKeyLabel = b.label(fmt.Sprintf("inter-key-ext-%v-v1", extractable))
 				params.RootKeyExtractable = extractable
 
 				if _, err := ca.RunCeremony(ctx, b.adapter, pk11.SessionOptions{}, params); err != nil {

@@ -19,11 +19,13 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 )
 
-// Adapter names accepted by pkcs11.adapter in the config file.
+// Adapter names accepted by pkcs11.adapter in the config file: the one
+// list in internal/pkcs11, re-exported so config-reading code need not
+// import the PKCS#11 layer for a name.
 const (
-	AdapterSoftHSM2      = "softhsm2"
-	AdapterProtectServer = "protectserver"
-	AdapterLuna          = "luna"
+	AdapterSoftHSM2      = pkcs11.AdapterSoftHSM2
+	AdapterProtectServer = pkcs11.AdapterProtectServer
+	AdapterLuna          = pkcs11.AdapterLuna
 )
 
 // Config is the parsed form of config.yaml.
@@ -509,17 +511,7 @@ func (c *Config) NewVendorAdapter() (pkcs11.VendorAdapter, error) {
 	if err != nil {
 		return nil, err
 	}
-	switch c.PKCS11.Adapter {
-	case AdapterSoftHSM2:
-		return pkcs11.NewSoftHSM2Adapter(vendor.ModulePath)
-	case AdapterProtectServer:
-		return pkcs11.NewProtectServerAdapter(vendor.ModulePath)
-	case AdapterLuna:
-		return pkcs11.NewLunaAdapter(vendor.ModulePath)
-	default:
-		// Unreachable: selectedVendor already rejected any other value.
-		return nil, fmt.Errorf("config: unknown pkcs11.adapter %q", c.PKCS11.Adapter)
-	}
+	return pkcs11.NewAdapterByName(c.PKCS11.Adapter, vendor.ModulePath)
 }
 
 // ResolvePIN reads the PIN from the configured environment variable at the

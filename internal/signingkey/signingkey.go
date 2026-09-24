@@ -21,21 +21,18 @@ import (
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
-// labelPattern requires a versioned label: a purpose, then -v and a
-// version number, for example image-signing-key-v1. A key under a bare
-// label cannot rotate without every consumer changing on the same day.
-var labelPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*-v[0-9]+$`)
-
 // ErrLabelTaken reports that the token already holds an object under the
 // requested label. Two keys under one label is the ambiguity
 // pkcs11.FindKeyByLabel refuses.
 var ErrLabelTaken = errors.New("signingkey: label already in use on this token")
 
-// ValidateLabel reports whether label is a versioned signing-key label.
+// ValidateLabel reports whether label is a versioned signing-key label,
+// the one shape every key label on this platform has
+// (pkcs11.ValidateVersionedLabel; the ceremony applies the same rule).
 // Provision applies the same check first, so the CLI and the library
 // cannot disagree.
 func ValidateLabel(label string) error {
-	if !labelPattern.MatchString(label) {
+	if err := pk11.ValidateVersionedLabel(label); err != nil {
 		return fmt.Errorf("signingkey: label %q is not a versioned label (want e.g. image-signing-key-v1)", label)
 	}
 	return nil
