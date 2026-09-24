@@ -7,6 +7,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Every adapter-name list is checked against every other.**
+  `internal/config`, `hsm-pki-keytool` and `ci/token-cleanup` each map
+  an adapter name to a constructor. Tests now walk the closed list of
+  names through each switch with a module that does not exist, so the
+  failure has to be the module's and never the name's, and
+  `config.example.yaml` is parsed as a map so it must carry a block for
+  every accepted adapter and none for a name the code does not know.
+  That test found the example had no `luna` block; it has one now.
 - **A delegated OCSP responder.** `GET /ocsp/{request}` and `POST /ocsp`
   on the public listener answer `good`, `revoked` (with time and reason)
   or `unknown` from the same store the CRL is built from, with the CRL's

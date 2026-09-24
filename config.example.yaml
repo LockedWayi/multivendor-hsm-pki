@@ -65,8 +65,8 @@ api:
   revokers: ["urn:hsm-pki:operator:alice"]
 
 pkcs11:
-  # Which vendor adapter to use: "softhsm2" or "protectserver".
-  # Both implement the same VendorAdapter interface. See
+  # Which vendor adapter to use: "softhsm2", "protectserver" or "luna".
+  # All three implement the same VendorAdapter interface. See
   # docs/architecture.md, "One abstraction over several vendors".
   adapter: "softhsm2"
 
@@ -103,6 +103,22 @@ pkcs11:
     # maintainer's emulator setup uses a throwaway dev PIN; never reuse it
     # anywhere real.
     pin_env: "PROTECTSERVER_PIN"
+
+  # Thales Luna Network HSM 7, via the Luna HSM Client's PKCS#11 module.
+  # Requires your own appliance access and client registration; the module
+  # reads its configuration from ChrystokiConfigurationPath, which must be
+  # set in the service's environment before it starts. The isolated key
+  # space is a partition, one PKCS#11 slot each. Not in public CI: the
+  # client is proprietary and the appliance is the maintainer's.
+  luna:
+    # libCryptoki2.so from the Luna HSM Client (minimal client shown).
+    module_path: "/opt/luna/libs/64/libCryptoki2.so"
+    # The partition's label, as assigned on the appliance and shown by
+    # `lunacm:> slot list`. The service logs in as the Crypto Officer.
+    workspace_label: "CHANGE_ME"
+    # Environment variable holding the Crypto Officer's password, not the
+    # password itself. Luna enforces a minimum length of 8.
+    pin_env: "LUNA_PIN"
 
 ca:
   # ECDSA P-256 is the default curve; P-384 is available where a larger
