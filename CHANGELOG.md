@@ -24,6 +24,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   unwrap template's `CKA_EXTRACTABLE=false` where it had once ignored it;
   and Luna refuses to sign an all-zero digest at all (`CKR_DATA_INVALID`),
   the third answer to that input.
+- **The emulator's `C_OpenSession` hang, narrowed a step.** Uncached
+  whole-suite runs: 3 hangs in 48 with the module driven from whichever
+  OS thread Go scheduled, 0 in 40 with every module call funnelled to one
+  pinned thread (the `exp/module-thread` branch, an experiment behind an
+  environment variable, its design recorded in `docs/architecture.md`).
+  Consistent with a thread-affinity cause and not proof of one; the
+  numbers and the caveat are in the test matrix.
 - **`-count=1` in every documented whole-suite command and in the
   bootstrap.** Go replays a cached package result when the binary and
   the environment it read have not changed, and with a build cache that

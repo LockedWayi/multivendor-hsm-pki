@@ -127,6 +127,27 @@ as `CKU_USER`, `C_GenerateRandom`, EC P-256 key pairs, AES keys,
 SoftHSM2. The behaviours that differ outside the conformance suite are in
 [`test-matrix.md`](test-matrix.md), "Expected divergences to look for".
 
+One behaviour is not a divergence but a defect, and it is open: in some
+whole-suite runs the emulator blocks forever inside `C_OpenSession` under
+a single caller, with nothing else inside the module. Every run against
+it therefore carries `-timeout 180s`, and a hung run is followed by
+`ci/token-cleanup` before the next. The design kept in reserve for it is
+**a module-owning thread**: one goroutine pinned to one OS thread with
+`runtime.LockOSThread`, every call into the module sent to it over a
+channel and awaited, `C_Initialize` and `C_Finalize` included, so a module
+that keeps per-thread state sees one logical caller arrive from one
+thread rather than from whichever thread Go scheduled. The cost is that
+the shared lock's concurrency collapses to one module call at a time. It
+is built, behind an environment variable, on the `exp/module-thread`
+branch, and measured on 2026-09-24: 0 hangs in 40 whole-suite runs with
+it against 3 in 48 without, on the same evening and tree. That is
+consistent with the hypothesis and is not proof; the unpinned rate that
+evening was far below the day before's, which nothing explains. It stays
+an experiment, and a documented design, until the numbers are decisive;
+`runtime.LockOSThread` scattered through the core was rejected as the
+shape, because a pinned goroutine still has to be the one that made every
+call, which is what the channel provides.
+
 ---
 
 ## The layering, and why it is ordered this way
