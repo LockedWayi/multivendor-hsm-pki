@@ -24,6 +24,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   unwrap template's `CKA_EXTRACTABLE=false` where it had once ignored it;
   and Luna refuses to sign an all-zero digest at all (`CKR_DATA_INVALID`),
   the third answer to that input.
+- **The service image has run against a Luna partition.** The whole
+  path, recorded in `deploy/docker/README.md`: the ceremony and the
+  credentials on two partitions, then the image with a read-only root and
+  the client directory mounted at its own path, issuing over mutual TLS,
+  answering OCSP before and after a revocation, serving the CRL with the
+  entry, and refusing the unauthenticated request at the handshake. The
+  Luna row of the backend table now describes the packaging as well as
+  the adapter.
 - **The core reads the descriptor.** `Workspaces` takes the shared lock
   on a module that declares `ConcurrentSlotEnumeration` and the exclusive
   lock on one that does not, replacing the blanket exclusive lock that
