@@ -998,14 +998,16 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
-	// There is no concurrency subtest here. One was written, eight
-	// goroutines calling Workspaces at once, and it destabilized the
-	// ProtectServer run for the rest of the suite: a later C_OpenSession
-	// hung and the suite timed out. What it found is recorded on
-	// Workspaces in base.go. Anything added here that runs operations from
-	// several goroutines must be tested against ProtectServer with the full
-	// suite ahead of it; the deadlock does not reproduce in a fresh process
-	// that makes only the one call.
+	// The one concurrency subtest, Capability_ConcurrentSlotEnumeration
+	// above, runs only on a module that declares it safe. An earlier
+	// version ran unconditionally, eight goroutines calling Workspaces at
+	// once, and destabilized the ProtectServer run for the rest of the
+	// suite: a later C_OpenSession hung and the suite timed out. That
+	// module declares false, keeps the exclusive lock, and skips the
+	// measurement with that reason. Anything else added here that runs
+	// operations from several goroutines must be tested against
+	// ProtectServer with the full suite ahead of it; the deadlock does not
+	// reproduce in a fresh process that makes only the one call.
 
 	// AdapterClose must run last. A second Ctx over the same module while
 	// this one is live fails with CKR_CRYPTOKI_ALREADY_INITIALIZED, so

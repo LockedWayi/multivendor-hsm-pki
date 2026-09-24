@@ -266,11 +266,14 @@ surface is never large and untested at once.
    and the suite measures each field in both directions, so a wrong
    declaration is a failing test on the backend that contradicts it. The
    first run of that suite corrected four declarations the documents had
-   carried as fact, which is the argument for measuring them. Next: the
-   core reads the descriptor where it changes how the module is driven
-   (the lock around slot enumeration), and then nShield, whose Security
-   World is where the most is still expected to differ. Both vendor paths
-   are maintainer-verified, never CI-verified, and labelled so.
+   carried as fact, which is the argument for measuring them. The core
+   reads the descriptor where a field changes how the module is driven:
+   the lock around slot enumeration is shared on a module that declares
+   concurrent enumeration safe (SoftHSM2 and Luna, measured) and exclusive
+   on one that does not (ProtectToolkit-C, which deadlocked). Next:
+   nShield, whose Security World is where the most is still expected to
+   differ. Both vendor paths are maintainer-verified, never CI-verified,
+   and labelled so.
 
    **Optional, not scheduled: a secrets manager for the PIN.** Decided and
    set aside on 2026-09-23. If built, no key would move:

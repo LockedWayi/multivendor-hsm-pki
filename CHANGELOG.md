@@ -24,6 +24,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   unwrap template's `CKA_EXTRACTABLE=false` where it had once ignored it;
   and Luna refuses to sign an all-zero digest at all (`CKR_DATA_INVALID`),
   the third answer to that input.
+- **The core reads the descriptor.** `Workspaces` takes the shared lock
+  on a module that declares `ConcurrentSlotEnumeration` and the exclusive
+  lock on one that does not, replacing the blanket exclusive lock that
+  every module paid for after ProtectToolkit-C deadlocked in
+  `C_GetSlotList`. SoftHSM2 and Luna declare it after twenty rounds of
+  eight concurrent callers under the shared lock; ProtectToolkit-C keeps
+  the serialization, and the suite exercises the declaration with eight
+  goroutines on every run of a module that makes it.
 - **Every adapter-name list is checked against every other.**
   `internal/config`, `hsm-pki-keytool` and `ci/token-cleanup` each map
   an adapter name to a constructor. Tests now walk the closed list of
