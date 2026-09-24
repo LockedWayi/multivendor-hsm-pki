@@ -24,6 +24,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   unwrap template's `CKA_EXTRACTABLE=false` where it had once ignored it;
   and Luna refuses to sign an all-zero digest at all (`CKR_DATA_INVALID`),
   the third answer to that input.
+- **`-count=1` in every documented whole-suite command and in the
+  bootstrap.** Go replays a cached package result when the binary and
+  the environment it read have not changed, and with a build cache that
+  persists between runs a "whole-suite run" can execute nothing and
+  print last time's output; found when six runs meant to count emulator
+  hangs finished in seconds. A replayed result opens no session on any
+  token, so a run that is a measurement disables the cache.
 - **The service image has run against a Luna partition.** The whole
   path, recorded in `deploy/docker/README.md`: the ceremony and the
   credentials on two partitions, then the image with a read-only root and
