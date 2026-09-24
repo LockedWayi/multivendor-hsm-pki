@@ -123,6 +123,11 @@ docker run --rm -v "$PWD:/repo" -w /repo hsm-pki-dev \
   go test ./... -race -cover
 ```
 
+If you mount a Go build cache into that container, or reuse one, add
+`-count=1`: Go replays a cached package result when nothing it reads has
+changed, and a replayed result is not a run against a token
+(`docs/test-matrix.md` §6).
+
 Running `go test` on a host without SoftHSM2 still passes. The token
 tests skip themselves with a message. That skip means you have not run
 them.
