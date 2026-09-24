@@ -355,16 +355,22 @@ that happened.
 forever inside `C_OpenSession` in some runs: three of six measured on
 2026-09-23, under a single caller, at the 18th, 21st and 18th conformance
 subtest, so not one input. Narrowed a step on 2026-09-24 with uncached
-runs (`-count=1`): 3 hangs in 48 whole-suite runs with the module driven
-from whichever OS thread Go scheduled (at the 23rd, 27th and 29th
-ProtectServer conformance cases, the same `C_OpenSession` stack each
-time), and 0 in 40 with every module call funnelled to one OS thread
-(the `exp/module-thread` branch, switched on by an environment variable;
-the design is in `architecture.md`, "ProtectToolkit-C software emulation,
-as measured"). Consistent with a thread-affinity cause and not proof of
-one: the unpinned rate that night was a tenth of the day before's, which
-nothing explains, and forty clean runs at a six-percent rate have about
-an eight-percent chance of happening anyway. The slowest package takes
+runs (`-count=1`): **6 hangs in 112** whole-suite runs with the module
+driven from whichever OS thread Go scheduled (at the 17th, 20th, 23rd,
+26th, 27th and 29th ProtectServer conformance cases; five parked in
+`C_OpenSession`, one in `C_GenerateKey`, so not one call either), and
+**0 in 72** with every module call funnelled to one OS thread (the
+`exp/module-thread` branch, switched on by an environment variable; the
+design is in `architecture.md`, "ProtectToolkit-C software emulation, as
+measured"). At the unpinned rate of about five percent, seventy-two clean
+runs happen by chance about one time in fifty. Consistent with a
+thread-affinity cause, and still short of proof: the unpinned rate that
+night was a tenth of the day before's on the same machine, which nothing
+explains, and one arm ran while the other did not. Thirty-two further
+runs meant for the pinned arm measured the unpinned tree instead, because
+the checkout was moved under the loop; the goroutine dump's line numbers
+gave it away, those runs are counted on the unpinned side, and the tool
+now names the commit on every line. The slowest package takes
 seconds, so the limit costs nothing on a healthy run and turns a hang into
 three minutes and a goroutine dump. Keep the dump: it is the evidence, so
 do not stop a hung run by hand. A test binary killed by its timeout runs

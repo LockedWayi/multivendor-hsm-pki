@@ -25,8 +25,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and Luna refuses to sign an all-zero digest at all (`CKR_DATA_INVALID`),
   the third answer to that input.
 - **The emulator's `C_OpenSession` hang, narrowed a step.** Uncached
-  whole-suite runs: 3 hangs in 48 with the module driven from whichever
-  OS thread Go scheduled, 0 in 40 with every module call funnelled to one
+  whole-suite runs: 6 hangs in 112 with the module driven from whichever
+  OS thread Go scheduled, 0 in 72 with every module call funnelled to one
   pinned thread (the `exp/module-thread` branch, an experiment behind an
   environment variable, its design recorded in `docs/architecture.md`).
   Consistent with a thread-affinity cause and not proof of one; the
