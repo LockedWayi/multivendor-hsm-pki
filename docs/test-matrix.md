@@ -5,9 +5,12 @@ provides. This document is the inventory behind that rule: what is being
 proved, where it lives, and what a vendor has to supply before it can join
 the rotation.
 
-SoftHSM2 and ProtectServer run today. nShield and Luna are planned, making
-four. The cost of adding the third and fourth must be a registry entry and
-an adapter, and that only stays true if the inventory is written down.
+SoftHSM2, ProtectServer and, since 2026-09-23, Luna run today; nShield is
+planned, making four. The cost of adding the third and fourth must be a
+registry entry and an adapter, and that only stays true if the inventory
+is written down. For Luna it held: a constructor, one registry entry in
+each of the two lists below, and two findings absorbed without a branch on
+the vendor's name (§5).
 
 ---
 
@@ -144,10 +147,10 @@ What a vendor must provide before it can join `hsmtest`'s registry:
 
 1. **An adapter** implementing `pkcs11.VendorAdapter`. If the shared
    implementation suffices, as it did for SoftHSM2 and ProtectToolkit-C
-   software emulation, this is a constructor and a name. Expect nShield
-   and Luna to need more. Their login and key protection model, `CKA_ID`
-   and label handling, EC point encoding, session limits and error codes
-   are untested here.
+   software emulation, this is a constructor and a name. It was for Luna
+   too (2026-09-23): what differed was absorbed in the shared path or
+   declared per backend in the suite, not in the adapter. Expect nShield
+   to need more.
 2. **Two user tokens**, provisioned out of band by the maintainer, each
    with a label and a user PIN. Two, because the ceremony refuses to put
    root and intermediate on the same token.
@@ -187,9 +190,11 @@ This was verified by adding a third vendor to the registry alone and
 watching the test go red.
 
 The merge itself is not done. It is left for the vendor that makes it
-necessary. nShield and Luna will be the first time the two-entry cost is
-paid and the first time a unified harness could be validated against a
-backend it was not written around.
+necessary. Luna paid the two-entry cost first (2026-09-23): one entry in
+each list, and the conformance entry also carries what the harness has no
+shape for (a login identity per run, and two per-token declarations the
+suite measures). nShield will be the second, and the point to decide
+whether the merge is worth it.
 
 `internal/signingkey` joined §3 without touching the harness, which is the
 property this section claims: a new suite reaches every backend by calling
@@ -198,20 +203,26 @@ registry entry. Neither edits the other.
 
 ### Expected divergences to look for
 
-The two backends run so far disagreed in these ways. Check each on any new
-backend:
+The backends run so far disagreed in these ways. Check each on any new
+backend. The Luna column is Luna Network HSM 7 (firmware 7.8.7, Luna HSM
+Client 10.9.4, password authentication), measured 2026-09-23 by the
+maintainer; "not measured" means exactly that.
 
-| Behaviour | What to check |
-|---|---|
-| Disclosure of a non-sensitive private key | Generate with `CKA_SENSITIVE=false` and try to read `CKA_VALUE`. SoftHSM2 refuses, ProtectToolkit-C software emulation discloses. The platform now forces the attribute true. The check is whether the vendor honours it |
-| Second `C_Initialize` in one process | SoftHSM2 tolerates it through a separate dlopen handle. ProtectToolkit-C rejects it with `CKR_CRYPTOKI_ALREADY_INITIALIZED` |
-| Slot renumbering | Creating a slot renumbered existing ones on ProtectToolkit-C while serials held |
-| Concurrency | `C_GetSlotList` deadlocked under concurrent callers on ProtectToolkit-C despite `CKF_OS_LOCKING_OK` |
-| Digest handling | ProtectToolkit-C's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted |
-| Object handle scope | SoftHSM2 2.6.1 answers `CKR_OBJECT_HANDLE_INVALID` when a handle found in one session is used in another. The base specification scopes a handle to the application, so this is a lookup per session on every backend |
-| Protection attributes on generation | Ask the token, not the template. Generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Both current backends honour them on generation. ProtectToolkit-C ignores `CKA_EXTRACTABLE=false` on unwrap, so the two paths must be checked separately |
-| RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times. The RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included, so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend before trusting it with a key |
-| Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups, `hsmtest.Backend.Cleanup` and the conformance suite's, destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. With that retry, a full two-backend run leaves zero objects, measured. Litter from before is not the suite's to delete. `ci/token-cleanup` is the operator's tool for that, dry by default |
+| Behaviour | What to check | Luna, measured |
+|---|---|---|
+| Disclosure of a non-sensitive private key | Generate with `CKA_SENSITIVE=false` and try to read `CKA_VALUE`. SoftHSM2 refuses, ProtectToolkit-C software emulation discloses. The platform now forces the attribute true. The check is whether the vendor honours it | Honours the forced `CKA_SENSITIVE=true` (read back). A non-sensitive request was not tried for private keys |
+| Non-sensitive secret key | Generate an AES key with `CKA_SENSITIVE=false` | **Refused**, `CKR_ATTRIBUTE_VALUE_INVALID`, whatever `CKA_EXTRACTABLE` says. SoftHSM2 and ProtectToolkit-C create it. The platform now forces `CKA_SENSITIVE=true` on secret keys too, and the suite reads it back on every backend |
+| Second `C_Initialize` in one process | SoftHSM2 tolerates it through a separate dlopen handle. ProtectToolkit-C rejects it with `CKR_CRYPTOKI_ALREADY_INITIALIZED` | Not measured separately; the suite's release-then-reopen paths pass |
+| Slot renumbering | Creating a slot renumbered existing ones on ProtectToolkit-C while serials held | A partition deleted and another created: the new partition took the freed slot ID, under a new serial. The same slot ID named a different token before and after |
+| Concurrency | `C_GetSlotList` deadlocked under concurrent callers on ProtectToolkit-C despite `CKF_OS_LOCKING_OK` | Not measured under concurrent callers (the adapter holds the exclusive lock). No hang in any run |
+| Digest handling | ProtectToolkit-C's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted | Not measured |
+| Object handle scope | SoftHSM2 2.6.1 answers `CKR_OBJECT_HANDLE_INVALID` when a handle found in one session is used in another. The base specification scopes a handle to the application, so this is a lookup per session on every backend | The per-session lookup passes; cross-session handle reuse not measured |
+| Protection attributes on generation | Ask the token, not the template. Generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Both current backends honour them on generation. ProtectToolkit-C ignores `CKA_EXTRACTABLE=false` on unwrap, so the two paths must be checked separately | Honoured on generation. The unwrap path could not be measured for private keys (next row) |
+| Private-key wrapping | Wrap an extractable EC private key under an AES key | **Refused**, `CKR_KEY_NOT_WRAPPABLE`: partition policy "Allow private key wrapping" is off by default. Secret keys wrap. The suite declares the refusal and asserts it, failing if the wrap ever succeeds. The wrap-based backup in `key-ceremony-and-recovery.md` §5 needs that policy changed on Luna |
+| Unwrap template for a secret key | Unwrap an AES key with and without `CKA_VALUE_LEN` | **Requires** it, and reports its absence as `CKR_ATTRIBUTE_TYPE_INVALID`. SoftHSM2 refuses the same attribute as `CKR_ATTRIBUTE_READ_ONLY`; ProtectToolkit-C takes either. No single template serves all three; the suite declares it per backend |
+| Login identity | Which user type the credential logs in as | The Crypto Officer is `CKU_USER`; the Limited Crypto Officer is the vendor type `0x80000003` (`pkcs11.LunaRoleLimitedCryptoOfficer`). The conformance suite ran identically as either. A newly initialized role's password is expired: `C_Login` succeeds and the *next* call fails `CKR_PIN_EXPIRED` |
+| RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times. The RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included, so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend before trusting it with a key | Reseeds (`TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt` passes, and the three tests that skip on the emulator for this reason run) |
+| Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups, `hsmtest.Backend.Cleanup` and the conformance suite's, destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. With that retry, a full two-backend run leaves zero objects, measured. Litter from before is not the suite's to delete. `ci/token-cleanup` is the operator's tool for that, dry by default | Zero objects on both partitions after a full run, checked with `ci/token-cleanup -adapter luna` |
 
 ---
 

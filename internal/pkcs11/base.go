@@ -379,7 +379,13 @@ func (a *pkcs11Adapter) GenerateSecretKey(ctx context.Context, s *Session, req S
 		p11.NewAttribute(p11.CKA_DECRYPT, req.Decrypt),
 		p11.NewAttribute(p11.CKA_WRAP, req.Wrap),
 		p11.NewAttribute(p11.CKA_UNWRAP, req.Unwrap),
-		p11.NewAttribute(p11.CKA_SENSITIVE, req.Sensitive),
+		// CKA_SENSITIVE is forced true, as for private keys. Luna HSM
+		// firmware 7.8.7 refuses a non-sensitive secret key outright
+		// (CKR_ATTRIBUTE_VALUE_INVALID), while SoftHSM2 and ProtectToolkit-C
+		// create one whose CKA_VALUE any authenticated session can read.
+		// No key this platform creates has a use for a readable secret
+		// key, so the stricter behaviour becomes the only one.
+		p11.NewAttribute(p11.CKA_SENSITIVE, true),
 		p11.NewAttribute(p11.CKA_EXTRACTABLE, req.Extractable),
 	}
 

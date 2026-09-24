@@ -28,6 +28,8 @@ import (
 	"testing"
 	"time"
 
+	p11 "github.com/miekg/pkcs11"
+
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
@@ -39,6 +41,10 @@ const (
 
 	protectServerDefaultWorkspace = "hsm-pki-dev"
 	protectServerWrongPIN         = "0000"
+
+	// Long enough for Luna's minimum PIN length, so the login fails as a
+	// wrong PIN and not as CKR_PIN_LEN_RANGE.
+	lunaWrongPIN = "00000000"
 )
 
 // conformanceBackend is one vendor's adapter plus the credentials the
@@ -50,7 +56,20 @@ type conformanceBackend struct {
 	ws       pk11.Workspace
 	userPIN  []byte
 	wrongPIN []byte
-	runID    string
+	// role is the login identity every login in the suite uses. Set
+	// explicitly for every backend: Role's zero value is CKU_SO.
+	role pk11.Role
+	// privateKeyWrapRefused, when not empty, declares that this token
+	// refuses to wrap a private key, and says why. The backup test then
+	// asserts the refusal (CKR_KEY_NOT_WRAPPABLE) instead of the round
+	// trip, and fails if the wrap succeeds: a declaration that no longer
+	// matches the token is a failing test, not a silent skip.
+	privateKeyWrapRefused string
+	// unwrapNeedsValueLen declares that unwrapping a secret key needs
+	// CKA_VALUE_LEN in the template. No template works everywhere: Luna
+	// refuses the unwrap without it, SoftHSM2 refuses it as read-only.
+	unwrapNeedsValueLen bool
+	runID               string
 	// reopen builds a second connection to the same module, for the case
 	// where cleanup cannot use the first one. See registerCleanup.
 	reopen func() (pk11.VendorAdapter, error)
@@ -71,6 +90,7 @@ var conformanceBackends = []struct {
 }{
 	{"SoftHSM2", setupSoftHSM2Backend},
 	{"ProtectServer", setupProtectServerBackend},
+	{"Luna", setupLunaBackend},
 }
 
 // TestConformanceCoversEveryRegisteredVendor fails when a vendor is in
@@ -163,6 +183,7 @@ func setupSoftHSM2Backend(t *testing.T) *conformanceBackend {
 		ws:       ws,
 		userPIN:  []byte(softhsm2UserPIN),
 		wrongPIN: []byte(softhsm2WrongPIN),
+		role:     pk11.RoleUser,
 		runID:    runID,
 		reopen:   func() (pk11.VendorAdapter, error) { return pk11.NewSoftHSM2Adapter(modulePath) },
 	}
@@ -183,7 +204,7 @@ func (b *conformanceBackend) registerCleanup(t *testing.T) {
 		// A session opened while another token is authenticated cannot see
 		// this one's private objects.
 		_ = adapter.LogoutToken(ctx)
-		if err := adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+		if err := adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), b.role); err != nil {
 			// One C_Initialize per process.
 			adapter.Close()
 			fresh, reopenErr := b.reopen()
@@ -193,7 +214,7 @@ func (b *conformanceBackend) registerCleanup(t *testing.T) {
 			}
 			defer fresh.Close()
 			adapter = fresh
-			if err := adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+			if err := adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), b.role); err != nil {
 				t.Logf("conformance cleanup: login through a fresh connection: %v", err)
 				return
 			}
@@ -264,11 +285,85 @@ func setupProtectServerBackend(t *testing.T) *conformanceBackend {
 		ws:       ws,
 		userPIN:  []byte(pin),
 		wrongPIN: []byte(protectServerWrongPIN),
+		role:     pk11.RoleUser,
 		runID:    fmt.Sprintf("%d", time.Now().UnixNano()),
 		reopen:   func() (pk11.VendorAdapter, error) { return pk11.NewProtectServerAdapter(modulePath) },
 	}
 	b.registerCleanup(t)
 	return b
+}
+
+// ─── Luna backend setup ──────────────────────────────────────────────────
+
+// setupLunaBackend uses one partition on the maintainer's own Luna Network
+// HSM. LUNA_ROLE picks the identity the whole suite logs in as: co (the
+// Crypto Officer, CKU_USER, the default), lco (the Limited Crypto Officer)
+// or cu (the Crypto User). Running the suite once per role is how a
+// restricted role's refusals are measured rather than assumed.
+func setupLunaBackend(t *testing.T) *conformanceBackend {
+	t.Helper()
+	modulePath := os.Getenv("LUNA_MODULE")
+	if modulePath == "" {
+		t.Skip("LUNA_MODULE not set " +
+			"(this backend cannot run in public CI: proprietary client, owned hardware)")
+	}
+	if os.Getenv("ChrystokiConfigurationPath") == "" {
+		t.Fatal("LUNA_MODULE is set but ChrystokiConfigurationPath is not")
+	}
+	label := os.Getenv("LUNA_WORKSPACE")
+	pin := os.Getenv("LUNA_PIN")
+	if label == "" || pin == "" {
+		t.Fatal("LUNA_MODULE is set but LUNA_WORKSPACE or LUNA_PIN is not")
+	}
+	role, err := lunaRole(os.Getenv("LUNA_ROLE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adapter, err := pk11.NewLunaAdapter(modulePath)
+	if err != nil {
+		t.Fatalf("NewLunaAdapter: %v", err)
+	}
+	t.Cleanup(func() { adapter.Close() })
+
+	ws, err := findWorkspace(adapter, label)
+	if err != nil {
+		t.Fatalf("Workspaces: %v", err)
+	}
+
+	b := &conformanceBackend{
+		name:     "Luna",
+		adapter:  adapter,
+		ws:       ws,
+		userPIN:  []byte(pin),
+		wrongPIN: []byte(lunaWrongPIN),
+		role:     role,
+		// Partition policy 1, "Allow private key wrapping", defaults to 0
+		// on a Luna partition even when the capability is present, and the
+		// partitions this was measured on keep the default.
+		privateKeyWrapRefused: "Luna partition policy 1 (Allow private key wrapping) is off",
+		unwrapNeedsValueLen:   true,
+		runID:                 fmt.Sprintf("%d", time.Now().UnixNano()),
+		reopen:                func() (pk11.VendorAdapter, error) { return pk11.NewLunaAdapter(modulePath) },
+	}
+	b.registerCleanup(t)
+	return b
+}
+
+// lunaRole maps LUNA_ROLE to a login identity. An unknown value fails
+// rather than falling back: a run that silently used another role would
+// report the wrong role's behaviour.
+func lunaRole(v string) (pk11.Role, error) {
+	switch v {
+	case "", "co":
+		return pk11.RoleUser, nil
+	case "lco":
+		return pk11.LunaRoleLimitedCryptoOfficer, nil
+	case "cu":
+		return pk11.LunaRoleCryptoUser, nil
+	default:
+		return 0, fmt.Errorf("LUNA_ROLE=%q: want co, lco or cu", v)
+	}
 }
 
 func findWorkspace(adapter pk11.VendorAdapter, label string) (pk11.Workspace, error) {
@@ -287,7 +382,7 @@ func findWorkspace(adapter pk11.VendorAdapter, label string) (pk11.Workspace, er
 // ─── The shared suite ─────────────────────────────────────────────────────
 
 // openLoggedInSession opens a session on the backend's workspace, logs in
-// as CKU_USER, and registers cleanup.
+// as the backend's role, and registers cleanup.
 func (b *conformanceBackend) openLoggedInSession(t *testing.T, opts pk11.SessionOptions) *pk11.Session {
 	t.Helper()
 	ctx := context.Background()
@@ -297,7 +392,7 @@ func (b *conformanceBackend) openLoggedInSession(t *testing.T, opts pk11.Session
 	}
 	t.Cleanup(func() { _ = b.adapter.CloseSession(context.Background(), s) })
 
-	if err := b.adapter.Login(ctx, s, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+	if err := b.adapter.Login(ctx, s, append([]byte(nil), b.userPIN...), b.role); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	return s
@@ -346,7 +441,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 		defer b.adapter.CloseSession(ctx, s)
 
-		err = b.adapter.Login(ctx, s, append([]byte(nil), b.wrongPIN...), pk11.RoleUser)
+		err = b.adapter.Login(ctx, s, append([]byte(nil), b.wrongPIN...), b.role)
 		if err == nil {
 			t.Fatal("Login with wrong PIN succeeded, want an error")
 		}
@@ -362,7 +457,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 		defer b.adapter.CloseSession(ctx, s)
 
-		if err := b.adapter.Login(ctx, s, nil, pk11.RoleUser); err != pk11.ErrEmptyPIN {
+		if err := b.adapter.Login(ctx, s, nil, b.role); err != pk11.ErrEmptyPIN {
 			t.Fatalf("Login(nil pin) = %v, want ErrEmptyPIN", err)
 		}
 	})
@@ -380,7 +475,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
 
-		if err := b.adapter.Login(cancelled, s, pin, pk11.RoleUser); err == nil {
+		if err := b.adapter.Login(cancelled, s, pin, b.role); err == nil {
 			t.Fatal("Login with a cancelled context succeeded, want an error")
 		}
 		for i, c := range pin {
@@ -409,21 +504,21 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatal("TokenLoggedIn() = true before any LoginToken call")
 		}
 
-		if err := b.adapter.LoginToken(ctx, b.ws, nil, pk11.RoleUser); err != pk11.ErrEmptyPIN {
+		if err := b.adapter.LoginToken(ctx, b.ws, nil, b.role); err != pk11.ErrEmptyPIN {
 			t.Fatalf("LoginToken(nil pin) = %v, want ErrEmptyPIN", err)
 		}
 		if b.adapter.TokenLoggedIn() {
 			t.Fatal("TokenLoggedIn() = true after a rejected empty-PIN LoginToken")
 		}
 
-		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.wrongPIN...), pk11.RoleUser); err == nil {
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.wrongPIN...), b.role); err == nil {
 			t.Fatal("LoginToken with wrong PIN succeeded, want an error")
 		}
 		if b.adapter.TokenLoggedIn() {
 			t.Fatal("TokenLoggedIn() = true after a failed LoginToken")
 		}
 
-		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), b.role); err != nil {
 			t.Fatalf("LoginToken: %v", err)
 		}
 		if !b.adapter.TokenLoggedIn() {
@@ -457,7 +552,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		_ = b.adapter.CloseSession(ctx, signSess)
 
 		// A second LoginToken while logged in is an error.
-		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); !errors.Is(err, pk11.ErrTokenAlreadyLoggedIn) {
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), b.role); !errors.Is(err, pk11.ErrTokenAlreadyLoggedIn) {
 			t.Fatalf("second LoginToken = %v, want ErrTokenAlreadyLoggedIn", err)
 		}
 		if !b.adapter.TokenLoggedIn() {
@@ -477,7 +572,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 
 		// The token can be authenticated again after a logout.
-		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser); err != nil {
+		if err := b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), b.role); err != nil {
 			t.Fatalf("LoginToken after LogoutToken: %v", err)
 		}
 		if err := b.adapter.LogoutToken(ctx); err != nil {
@@ -499,7 +594,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
-				results[i] = b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), pk11.RoleUser)
+				results[i] = b.adapter.LoginToken(ctx, b.ws, append([]byte(nil), b.userPIN...), b.role)
 			}(i)
 		}
 		wg.Wait()
@@ -721,6 +816,27 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
+	t.Run("GenerateSecretKey_IsSensitive", func(t *testing.T) {
+		// The same rule for secret keys, asked of the token. Luna refuses
+		// to create a non-sensitive secret key at all; SoftHSM2 and
+		// ProtectToolkit-C create one and would disclose CKA_VALUE, so
+		// the platform never asks for one.
+		s := b.openLoggedInSession(t, pk11.SessionOptions{})
+		key, err := b.adapter.GenerateSecretKey(ctx, s, pk11.SecretKeyRequest{
+			KeyBits: 256, Label: b.label("secret-protection"), Encrypt: true, Decrypt: true, Extractable: true,
+		})
+		if err != nil {
+			t.Fatalf("GenerateSecretKey: %v", err)
+		}
+		attrs, err := b.adapter.GetAttributes(ctx, s, key, []pk11.AttributeType{pk11.AttrSensitive})
+		if err != nil {
+			t.Fatalf("GetAttributes: %v", err)
+		}
+		if len(attrs) != 1 || len(attrs[0].Value) == 0 || attrs[0].Value[0] == 0 {
+			t.Error("CKA_SENSITIVE is false: PKCS#11 permits the token to reveal this secret key in plaintext via C_GetAttributeValue")
+		}
+	})
+
 	t.Run("FindObjects_ReturnsMoreThanOneBatch", func(t *testing.T) {
 		// C_FindObjects is paginated. The loop once stopped after the first
 		// batch of 50, so every search returned at most 50 objects with no
@@ -840,12 +956,21 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatal("Wrap returned empty ciphertext")
 		}
 
-		unwrapped, err := b.adapter.Unwrap(ctx, s, wrappingKey, mech, wrapped, []pk11.Attribute{
+		tmpl := []pk11.Attribute{
 			pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassSecretKey)),
 			pk11.NumericAttribute(pk11.AttrKeyType, uint64(pk11.KeyTypeAES)),
 			{Type: pk11.AttrLabel, Value: []byte(b.label("payload-key-restored"))},
 			{Type: pk11.AttrDecrypt, Value: []byte{1}},
-		})
+		}
+		// AES key wrap carries the key length, yet Luna 7.8.7 refuses the
+		// unwrap without CKA_VALUE_LEN, reporting CKR_ATTRIBUTE_TYPE_INVALID
+		// (an attribute too many, where one is missing). SoftHSM2 2.6.1
+		// refuses the same attribute with CKR_ATTRIBUTE_READ_ONLY, and
+		// ProtectToolkit-C takes either. The token's declaration decides.
+		if b.unwrapNeedsValueLen {
+			tmpl = append(tmpl, pk11.NumericAttribute(pk11.AttrValueLen, 16))
+		}
+		unwrapped, err := b.adapter.Unwrap(ctx, s, wrappingKey, mech, wrapped, tmpl)
 		if err != nil {
 			t.Fatalf("Unwrap: %v", err)
 		}
@@ -865,7 +990,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		s := b.openLoggedInSession(t, pk11.SessionOptions{})
 
 		wrappingKey, err := b.adapter.GenerateSecretKey(ctx, s, pk11.SecretKeyRequest{
-			KeyBits: 256, Label: b.label("backup-wrap-key"), Wrap: true, Unwrap: true, Sensitive: true,
+			KeyBits: 256, Label: b.label("backup-wrap-key"), Wrap: true, Unwrap: true,
 		})
 		if err != nil {
 			t.Fatalf("GenerateSecretKey (wrapping key): %v", err)
@@ -890,6 +1015,16 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 
 		mech := pk11.Mechanism{Type: pk11.MechAESKeyWrap}
 		wrapped, err := b.adapter.Wrap(ctx, s, wrappingKey, kp.Private, mech)
+		if b.privateKeyWrapRefused != "" {
+			var ckr p11.Error
+			switch {
+			case err == nil:
+				t.Fatalf("declared refused (%s), but C_WrapKey wrapped the private key: the declaration is wrong", b.privateKeyWrapRefused)
+			case !errors.As(err, &ckr) || ckr != p11.CKR_KEY_NOT_WRAPPABLE:
+				t.Fatalf("declared refused with CKR_KEY_NOT_WRAPPABLE (%s), got %v", b.privateKeyWrapRefused, err)
+			}
+			t.Skipf("refusal measured as declared: %s", b.privateKeyWrapRefused)
+		}
 		if err != nil {
 			t.Fatalf("Wrap: %v", err)
 		}

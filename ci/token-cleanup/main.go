@@ -47,7 +47,7 @@ type object struct {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("token-cleanup", flag.ExitOnError)
-	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\" or \"protectserver\"")
+	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\", \"protectserver\" or \"luna\"")
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	workspaceLabel := fs.String("workspace", "", "token label to clean")
 	workspaceSerial := fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label")
@@ -189,6 +189,8 @@ func newAdapter(adapterName, modulePath string) (pk11.VendorAdapter, error) {
 		return pk11.NewSoftHSM2Adapter(modulePath)
 	case config.AdapterProtectServer:
 		return pk11.NewProtectServerAdapter(modulePath)
+	case config.AdapterLuna:
+		return pk11.NewLunaAdapter(modulePath)
 	default:
 		return nil, fmt.Errorf("unknown -adapter %q", adapterName)
 	}

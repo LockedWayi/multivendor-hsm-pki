@@ -111,6 +111,8 @@ func newAdapterByName(name, modulePath string) (pk11.VendorAdapter, error) {
 	switch name {
 	case "protectserver":
 		return pk11.NewProtectServerAdapter(modulePath)
+	case "luna":
+		return pk11.NewLunaAdapter(modulePath)
 	default:
 		return pk11.NewSoftHSM2Adapter(modulePath)
 	}
@@ -211,8 +213,9 @@ type descriptor struct {
 var registry = []descriptor{
 	{"SoftHSM2", setupSoftHSM2},
 	{"ProtectServer", setupProtectServer},
-	// nShield and Luna are added here when they are run. docs/test-matrix.md
-	// says what a vendor must provide first.
+	{"Luna", setupLuna},
+	// nShield is added here when it is run. docs/test-matrix.md says what
+	// a vendor must provide first.
 }
 
 // Vendors returns the registry's backend names, in order. The conformance
@@ -362,6 +365,58 @@ func setupProtectServer(t *testing.T) *Backend {
 		SecondaryPIN: secondaryPIN,
 		ModulePath:   modulePath,
 		AdapterName:  "protectserver",
+		RunID:        runID(),
+	}
+	t.Cleanup(b.Release)
+	t.Cleanup(func() { b.Cleanup(t) })
+	return b
+}
+
+// setupLuna uses two partitions on the maintainer's own Luna Network HSM,
+// assigned to this client and initialized by hand. It provisions nothing.
+// Every login here is the Crypto Officer (CKU_USER): the code under test
+// logs in as CKU_USER itself, so a different role in the harness would
+// mix two identities in one test. The conformance suite is where the
+// other Luna roles are measured.
+func setupLuna(t *testing.T) *Backend {
+	t.Helper()
+	modulePath := os.Getenv("LUNA_MODULE")
+	if modulePath == "" {
+		t.Skip("LUNA_MODULE not set: " +
+			"this backend is maintainer-verified, never CI-verified")
+	}
+	// The module reads its client configuration (appliance, certificates)
+	// from this variable at load time. Without it the module loads and
+	// finds no partitions, which would read as a missing token.
+	if os.Getenv("ChrystokiConfigurationPath") == "" {
+		t.Fatal("LUNA_MODULE is set but ChrystokiConfigurationPath is not")
+	}
+	primaryLabel := os.Getenv("LUNA_INTERMEDIATE_WORKSPACE")
+	secondaryLabel := os.Getenv("LUNA_ROOT_WORKSPACE")
+	primaryPIN := os.Getenv("LUNA_INTERMEDIATE_PIN")
+	secondaryPIN := os.Getenv("LUNA_ROOT_PIN")
+	if primaryLabel == "" || secondaryLabel == "" || primaryPIN == "" || secondaryPIN == "" {
+		t.Fatal("LUNA_MODULE is set but LUNA_INTERMEDIATE_WORKSPACE, LUNA_ROOT_WORKSPACE, " +
+			"LUNA_INTERMEDIATE_PIN or LUNA_ROOT_PIN is not")
+	}
+	if primaryLabel == secondaryLabel {
+		t.Fatal("LUNA_INTERMEDIATE_WORKSPACE and LUNA_ROOT_WORKSPACE " +
+			"name the same partition; the CA hierarchy requires two")
+	}
+
+	adapter, err := pk11.NewLunaAdapter(modulePath)
+	if err != nil {
+		t.Fatalf("NewLunaAdapter: %v", err)
+	}
+	b := &Backend{
+		Name:         "Luna",
+		Adapter:      adapter,
+		Primary:      MustFindWorkspace(t, adapter, primaryLabel),
+		Secondary:    MustFindWorkspace(t, adapter, secondaryLabel),
+		PrimaryPIN:   primaryPIN,
+		SecondaryPIN: secondaryPIN,
+		ModulePath:   modulePath,
+		AdapterName:  "luna",
 		RunID:        runID(),
 	}
 	t.Cleanup(b.Release)
