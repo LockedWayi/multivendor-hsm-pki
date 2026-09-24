@@ -4,11 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"gopkg.in/yaml.v3"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -581,5 +583,117 @@ func TestLoad_AuthenticatedSurfaceRefusals(t *testing.T) {
 				t.Fatalf("err = %v, want it to mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// everyAdapter is the closed list of names pkcs11.adapter accepts. The
+// tests below walk it so that a vendor added to the constants without a
+// block in PKCS11Config, a case in selectedVendor or a case in
+// NewVendorAdapter fails here, before a run against hardware finds it.
+var everyAdapter = []string{AdapterSoftHSM2, AdapterProtectServer, AdapterLuna}
+
+// validConfigFor is validSoftHSM2Config with the adapter and its block
+// renamed, so the rest of the file is the same known-good configuration.
+func validConfigFor(adapter string) string {
+	body := strings.Replace(validSoftHSM2Config, `adapter: "softhsm2"`, `adapter: "`+adapter+`"`, 1)
+	return strings.Replace(body, "\n  softhsm2:\n", "\n  "+adapter+":\n", 1)
+}
+
+func TestLoad_EveryAdapterHasABlockAndNeedsIt(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	for _, adapter := range everyAdapter {
+		t.Run(adapter, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, validConfigFor(adapter)))
+			if err != nil {
+				t.Fatalf("Load with adapter=%s and its block: %v", adapter, err)
+			}
+			if cfg.PKCS11.Adapter != adapter {
+				t.Fatalf("Adapter = %q, want %q", cfg.PKCS11.Adapter, adapter)
+			}
+			vendor, err := cfg.PKCS11.selectedVendor()
+			if err != nil {
+				t.Fatalf("selectedVendor: %v", err)
+			}
+			if vendor.PINEnv != "TEST_SOFTHSM2_PIN" {
+				t.Fatalf("selectedVendor returned another vendor's block: pin_env %q", vendor.PINEnv)
+			}
+
+			// The same adapter named with no block of its own is refused,
+			// whatever other blocks the file carries.
+			withoutBlock := strings.Replace(validSoftHSM2Config, `adapter: "softhsm2"`, `adapter: "`+adapter+`"`, 1)
+			if adapter == AdapterSoftHSM2 {
+				withoutBlock = strings.Replace(withoutBlock, "\n  softhsm2:\n", "\n  protectserver:\n", 1)
+			}
+			if _, err := Load(writeConfig(t, withoutBlock)); err == nil {
+				t.Fatalf("Load with adapter=%s and no %s block succeeded, want an error", adapter, adapter)
+			} else if !strings.Contains(err.Error(), "pkcs11."+adapter+" is not configured") {
+				t.Fatalf("Load with adapter=%s and no block: error = %v, want it to name the missing block", adapter, err)
+			}
+		})
+	}
+}
+
+// TestNewVendorAdapter_KnowsEveryAdapter: the module path does not exist,
+// so every constructor fails, but the failure must come from loading the
+// module and never from the adapter name. A name the constants accept and
+// the switch does not is a vendor that configures and then cannot start.
+func TestNewVendorAdapter_KnowsEveryAdapter(t *testing.T) {
+	for _, adapter := range everyAdapter {
+		t.Run(adapter, func(t *testing.T) {
+			vendor := &VendorConfig{ModulePath: "/nonexistent/module.so", WorkspaceLabel: "t", PINEnv: "TEST_PIN"}
+			cfg := &Config{PKCS11: PKCS11Config{Adapter: adapter}}
+			switch adapter {
+			case AdapterSoftHSM2:
+				cfg.PKCS11.SoftHSM2 = vendor
+			case AdapterProtectServer:
+				cfg.PKCS11.ProtectServer = vendor
+			case AdapterLuna:
+				cfg.PKCS11.Luna = vendor
+			default:
+				t.Fatalf("no field in PKCS11Config for adapter %q; add one to the struct and to this switch", adapter)
+			}
+			_, err := cfg.NewVendorAdapter()
+			if err == nil {
+				t.Fatal("NewVendorAdapter loaded a module that does not exist")
+			}
+			if strings.Contains(err.Error(), "unknown pkcs11.adapter") {
+				t.Fatalf("NewVendorAdapter does not know %q although Load accepts it: %v", adapter, err)
+			}
+		})
+	}
+}
+
+// TestExampleConfig_NamesEveryAdapter: config.example.yaml is the file an
+// operator copies, so it carries a block for every backend the code
+// accepts and no block for one it does not. Read as a map rather than as
+// Config, because an unknown key would otherwise be dropped silently by
+// the decoder, which is the drift this test exists to catch.
+func TestExampleConfig_NamesEveryAdapter(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("reading config.example.yaml: %v", err)
+	}
+	var doc struct {
+		PKCS11 map[string]any `yaml:"pkcs11"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parsing config.example.yaml: %v", err)
+	}
+	notAVendor := map[string]bool{"adapter": true, "session": true}
+	for key := range doc.PKCS11 {
+		if notAVendor[key] {
+			continue
+		}
+		if !slices.Contains(everyAdapter, key) {
+			t.Errorf("config.example.yaml has a pkcs11.%s block but no adapter of that name exists", key)
+		}
+	}
+	for _, adapter := range everyAdapter {
+		if _, ok := doc.PKCS11[adapter]; !ok {
+			t.Errorf("config.example.yaml has no pkcs11.%s block; every accepted adapter is shown there", adapter)
+		}
+	}
+	if selected, _ := doc.PKCS11["adapter"].(string); !slices.Contains(everyAdapter, selected) {
+		t.Errorf("config.example.yaml selects pkcs11.adapter %q, which is not an accepted name", selected)
 	}
 }
