@@ -7,6 +7,53 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **A capability descriptor on every adapter.** `VendorAdapter.Capabilities()`
+  returns a `pkcs11.Capabilities`: one field per behaviour on which two
+  conforming modules have been seen to differ (a second `C_Initialize` in
+  one process, object-handle scope across sessions and past a session's
+  close, an ECDSA signature over an all-zero digest, whether unwrap
+  honours `CKA_EXTRACTABLE`, whether a private key can be wrapped,
+  whether an unwrap template needs `CKA_VALUE_LEN`, concurrent slot
+  enumeration). The conformance suite measures every field in both
+  directions, so a declaration the module contradicts is a failing test
+  on that backend; the two Luna declarations the suite kept by name are
+  the adapter's now. The first run corrected four declarations the
+  documents had carried as fact: SoftHSM2 refuses a second
+  `C_Initialize` like every other module and accepts a token object's
+  handle across sessions; the ProtectToolkit-C emulator honoured the
+  unwrap template's `CKA_EXTRACTABLE=false` where it had once ignored it;
+  and Luna refuses to sign an all-zero digest at all (`CKR_DATA_INVALID`),
+  the third answer to that input.
+- **The emulator's `C_OpenSession` hang, narrowed a step.** Uncached
+  whole-suite runs: 6 hangs in 144 with the module driven from whichever
+  OS thread Go scheduled, 0 in 104 with every module call funnelled to one
+  pinned thread (the `exp/module-thread` branch, an experiment behind an
+  environment variable, its design recorded in `docs/architecture.md`).
+  Consistent with a thread-affinity cause and not proof of one; the
+  numbers and the caveat are in the test matrix.
+- **`-count=1` in every documented whole-suite command and in the
+  bootstrap.** Go replays a cached package result when the binary and
+  the environment it read have not changed, and with a build cache that
+  persists between runs a "whole-suite run" can execute nothing and
+  print last time's output; found when six runs meant to count emulator
+  hangs finished in seconds. A replayed result opens no session on any
+  token, so a run that is a measurement disables the cache.
+- **The service image has run against a Luna partition.** The whole
+  path, recorded in `deploy/docker/README.md`: the ceremony and the
+  credentials on two partitions, then the image with a read-only root and
+  the client directory mounted at its own path, issuing over mutual TLS,
+  answering OCSP before and after a revocation, serving the CRL with the
+  entry, and refusing the unauthenticated request at the handshake. The
+  Luna row of the backend table now describes the packaging as well as
+  the adapter.
+- **The core reads the descriptor.** `Workspaces` takes the shared lock
+  on a module that declares `ConcurrentSlotEnumeration` and the exclusive
+  lock on one that does not, replacing the blanket exclusive lock that
+  every module paid for after ProtectToolkit-C deadlocked in
+  `C_GetSlotList`. SoftHSM2 and Luna declare it after twenty rounds of
+  eight concurrent callers under the shared lock; ProtectToolkit-C keeps
+  the serialization, and the suite exercises the declaration with eight
+  goroutines on every run of a module that makes it.
 - **Every adapter-name list is checked against every other.**
   `internal/config`, `hsm-pki-keytool` and `ci/token-cleanup` each map
   an adapter name to a constructor. Tests now walk the closed list of

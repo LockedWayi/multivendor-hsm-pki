@@ -203,11 +203,9 @@ cases, the reopen hook and its single-token layout, and a test compared
 the two lists so a vendor added to one and not the other went red. The
 single-token shape now lives in `hsmtest` too (`Single`,
 `ForEachSingle`), each registry entry carries both setups, and the
-comparison test is gone because there is nothing left to compare. What
-the conformance suite still keeps of its own is the per-backend
-declarations it asserts (Luna's refused private-key wrap and required
-`CKA_VALUE_LEN`), keyed by name, until the adapter carries a capability
-descriptor the core reads.
+comparison test is gone because there is nothing left to compare. The
+per-backend declarations the suite used to keep of its own are the
+adapter's since the same day: `VendorAdapter.Capabilities()`, below.
 
 The adapter names are one list too: `pkcs11.AdapterNames()` and
 `pkcs11.NewAdapterByName` are what `config.yaml`, every command's
@@ -215,12 +213,43 @@ The adapter names are one list too: `pkcs11.AdapterNames()` and
 reachable from every entry point at once, and a test walks every name
 through the constructor.
 
-The merge itself is not done. It is left for the vendor that makes it
+~~The merge itself is not done. It is left for the vendor that makes it
 necessary. Luna paid the two-entry cost first (2026-09-23): one entry in
 each list, and the conformance entry also carries what the harness has no
 shape for (a login identity per run, and two per-token declarations the
 suite measures). nShield will be the second, and the point to decide
-whether the merge is worth it.
+whether the merge is worth it.~~ Done 2026-09-24, before nShield, above.
+
+### Declared capabilities
+
+Each adapter returns a `pkcs11.Capabilities`, one field per behaviour on
+which two conforming modules have been seen to differ, and the
+conformance suite measures every field in both directions: a module that
+declares a refusal and then complies fails, and one that declares
+compliance and then refuses fails. The first run of that suite, on
+2026-09-24, corrected four declarations the documents below had carried
+as fact, which is the whole argument for measuring rather than recording.
+
+| Field | SoftHSM2 2.6.1 | ProtectToolkit-C 7.3.3 | Luna 7.8.7 |
+|---|---|---|---|
+| `ConcurrentSlotEnumeration` | **true** (2026-09-24: 20 rounds of eight concurrent callers under the shared lock, no failure) | false (deadlocked, 2026-08; keeps the exclusive lock) | **true** (same measurement, same day) |
+| `SecondInitializeInProcess` | **false** (`CKR_CRYPTOKI_ALREADY_INITIALIZED`; an earlier note said tolerated) | false | false |
+| `HandlesSpanSessions` (token object, another open session) | **true** (an earlier note said `CKR_OBJECT_HANDLE_INVALID`) | true | true |
+| `HandlesSurviveSessionClose` | true | true | true |
+| `ZeroDigest` (ECDSA over 32 zero bytes) | accepted | signs, then `CKR_SIGNATURE_INVALID` | **`CKR_DATA_INVALID` at `C_Sign`** |
+| `UnwrapHonoursExtractable` | true | **true** (2026-08-31: false; see the ceremony document §5.3) | not measurable while the wrap is refused |
+| `PrivateKeyWrapRefused` | no | no | policy 1 off |
+| `UnwrapNeedsValueLen` | false (refuses it as read-only) | false (takes either) | true |
+
+A field that reads "not measured" is declared conservatively and the
+suite skips its measurement with that reason; declaring the permissive
+value is what turns the measurement on. The core reads the descriptor
+where a field changes how the module is driven: since 2026-09-24
+`Workspaces` takes the shared lock on a module that declares
+`ConcurrentSlotEnumeration` and the exclusive lock on one that does not,
+so ProtectToolkit-C keeps the serialization its deadlock earned and the
+other two no longer pay for it. The declaration that lifts the lock is
+the one the suite exercises with eight goroutines on every run.
 
 `internal/signingkey` joined §3 without touching the harness, which is the
 property this section claims: a new suite reaches every backend by calling
@@ -238,12 +267,12 @@ maintainer; "not measured" means exactly that.
 |---|---|---|
 | Disclosure of a non-sensitive private key | Generate with `CKA_SENSITIVE=false` and try to read `CKA_VALUE`. SoftHSM2 refuses, ProtectToolkit-C software emulation discloses. The platform now forces the attribute true. The check is whether the vendor honours it | Honours the forced `CKA_SENSITIVE=true` (read back). A non-sensitive request was not tried for private keys |
 | Non-sensitive secret key | Generate an AES key with `CKA_SENSITIVE=false` | **Refused**, `CKR_ATTRIBUTE_VALUE_INVALID`, whatever `CKA_EXTRACTABLE` says. SoftHSM2 and ProtectToolkit-C create it. The platform now forces `CKA_SENSITIVE=true` on secret keys too, and the suite reads it back on every backend |
-| Second `C_Initialize` in one process | SoftHSM2 tolerates it through a separate dlopen handle. ProtectToolkit-C rejects it with `CKR_CRYPTOKI_ALREADY_INITIALIZED` | Not measured separately; the suite's release-then-reopen paths pass |
+| Second `C_Initialize` in one process | ~~SoftHSM2 tolerates it through a separate dlopen handle.~~ Measured 2026-09-24: SoftHSM2 rejects it too, with the same `CKR_CRYPTOKI_ALREADY_INITIALIZED` as ProtectToolkit-C; the earlier claim contradicted this file's own SoftHSM2 section and was wrong | Rejected, `CKR_CRYPTOKI_ALREADY_INITIALIZED` (2026-09-24) |
 | Slot renumbering | Creating a slot renumbered existing ones on ProtectToolkit-C while serials held | A partition deleted and another created: the new partition took the freed slot ID, under a new serial. The same slot ID named a different token before and after |
 | Concurrency | `C_GetSlotList` deadlocked under concurrent callers on ProtectToolkit-C despite `CKF_OS_LOCKING_OK` | Not measured under concurrent callers (the adapter holds the exclusive lock). No hang in any run |
-| Digest handling | ProtectToolkit-C's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted | Not measured |
-| Object handle scope | SoftHSM2 2.6.1 answers `CKR_OBJECT_HANDLE_INVALID` when a handle found in one session is used in another. The base specification scopes a handle to the application, so this is a lookup per session on every backend | The per-session lookup passes; cross-session handle reuse not measured |
-| Protection attributes on generation | Ask the token, not the template. Generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Both current backends honour them on generation. ProtectToolkit-C ignores `CKA_EXTRACTABLE=false` on unwrap, so the two paths must be checked separately | Honoured on generation. The unwrap path could not be measured for private keys (next row) |
+| Digest handling | ProtectToolkit-C's `C_Verify` rejects an all-zero ECDSA digest its own `C_Sign` accepted; SoftHSM2 accepts both | **`C_Sign` refuses the digest**, `CKR_DATA_INVALID` (2026-09-24): the third answer to one input, now the three-valued `ZeroDigest` declaration |
+| Object handle scope | ~~SoftHSM2 2.6.1 answers `CKR_OBJECT_HANDLE_INVALID` when a handle found in one session is used in another.~~ Measured 2026-09-24: a token object's handle from one session is accepted in another open session and after its own session closes, on SoftHSM2 2.6.1 as on the others; the earlier observation was not reproduced under the suite's conditions. The base specification scopes a handle to the application, so the per-session lookup stays, correct either way | Accepted in another session and after the origin closed (2026-09-24) |
+| Protection attributes on generation | Ask the token, not the template. Generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Every backend honours them on generation. ProtectToolkit-C ignored `CKA_EXTRACTABLE=false` on unwrap when first measured (2026-08-31) and honoured it on 2026-09-24, same emulator version; the two paths are still checked separately and the unwrap one is a declaration the suite measures | Honoured on generation. The unwrap path could not be measured for private keys (next row) |
 | Private-key wrapping | Wrap an extractable EC private key under an AES key | **Refused**, `CKR_KEY_NOT_WRAPPABLE`: partition policy "Allow private key wrapping" is off by default. Secret keys wrap. The suite declares the refusal and asserts it, failing if the wrap ever succeeds. The wrap-based backup in `key-ceremony-and-recovery.md` §5 needs that policy changed on Luna |
 | Unwrap template for a secret key | Unwrap an AES key with and without `CKA_VALUE_LEN` | **Requires** it, and reports its absence as `CKR_ATTRIBUTE_TYPE_INVALID`. SoftHSM2 refuses the same attribute as `CKR_ATTRIBUTE_READ_ONLY`; ProtectToolkit-C takes either. No single template serves all three; the suite declares it per backend |
 | Login identity | Which user type the credential logs in as | The Crypto Officer is `CKU_USER`; the Limited Crypto Officer is the vendor type `0x80000003` (`pkcs11.LunaRoleLimitedCryptoOfficer`). The conformance suite ran identically as either. A newly initialized role's password is expired: `C_Login` succeeds and the *next* call fails `CKR_PIN_EXPIRED` |
@@ -300,16 +329,49 @@ docker run --rm -v "$PWD":/repo -w /repo \
   -e ChrystokiConfigurationPath -e LUNA_MODULE -e LUNA_ROLE \
   -e LUNA_ROOT_WORKSPACE -e LUNA_INTERMEDIATE_WORKSPACE -e LUNA_WORKSPACE \
   -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN -e LUNA_PIN \
-  hsm-pki-dev go test -race -p 1 -timeout 180s ./...
+  hsm-pki-dev go test -race -p 1 -count=1 -timeout 180s ./...
 ```
 
 `tools/bootstrap-workstation.sh --with-protectserver --with-luna` runs
 the same command with the same mounts, refusing when a variable is unset.
 
+**`-count=1` is there because a run against a token is a measurement,
+and Go caches test results.** With a build cache that survives between
+runs (a mounted `GOCACHE`, or the same container reused) `go test`
+replays the recorded result of any package whose binary and read
+environment variables have not changed, prints its `-v` output again and
+marks the package `(cached)`. Found 2026-09-24: six consecutive
+"whole-suite" runs meant to count emulator hangs finished in one to three
+seconds each, every package cached, and a documents-only change's
+"lateral test" executed nothing. A cached result is a true statement
+about that code, and it is not a run against the HSM: no session was
+opened, no hang could have happened, no object was created or cleaned.
+`-count=1` disables the cache for that invocation. The bootstrap runs in
+a fresh container with no persisted cache and was never affected; it
+passes the flag anyway, so the number it prints is always from a run
+that happened.
+
 `-timeout 180s` because the ProtectToolkit-C software emulator blocks
 forever inside `C_OpenSession` in some runs: three of six measured on
 2026-09-23, under a single caller, at the 18th, 21st and 18th conformance
-subtest, so not one input; not yet narrowed further. The slowest package takes
+subtest, so not one input. Narrowed a step on 2026-09-24 with uncached
+runs (`-count=1`): **6 hangs in 144** whole-suite runs with the module
+driven from whichever OS thread Go scheduled (at the 17th, 20th, 23rd,
+26th, 27th and 29th ProtectServer conformance cases; five parked in
+`C_OpenSession`, one in `C_GenerateKey`, so not one call either), and
+**0 in 104** with every module call funnelled to one OS thread (the
+`exp/module-thread` branch, switched on by an environment variable; the
+design is in `architecture.md`, "ProtectToolkit-C software emulation, as
+measured"). At the unpinned rate of about four percent, a hundred and four clean
+runs happen by chance about one time in ninety. Consistent with a
+thread-affinity cause, and still short of proof: the unpinned rate that
+night was a tenth of the day before's on the same machine, which nothing
+explains, and the rate moves by the hour: in the last hour both arms
+ran alternately from two clones, 32 runs each, and neither hung. Thirty-two further
+runs meant for the pinned arm measured the unpinned tree instead, because
+the checkout was moved under the loop; the goroutine dump's line numbers
+gave it away, those runs are counted on the unpinned side, and the tool
+now names the commit on every line. The slowest package takes
 seconds, so the limit costs nothing on a healthy run and turns a hang into
 three minutes and a goroutine dump. Keep the dump: it is the evidence, so
 do not stop a hung run by hand. A test binary killed by its timeout runs
