@@ -90,6 +90,15 @@ func (p *CeremonyParams) validate() error {
 	if p.RootKeyLabel == p.IntermediateKeyLabel {
 		return fmt.Errorf("ca: ceremony refuses to use one key label (%q) for both tiers", p.RootKeyLabel)
 	}
+	// The credential commands that follow a ceremony accept only versioned
+	// labels. A ceremony under a label they refuse leaves a CA pair on the
+	// token that no TLS or OCSP key can sit beside, found by running one;
+	// so the same rule applies here, before the first key exists.
+	for field, label := range map[string]string{"RootKeyLabel": p.RootKeyLabel, "IntermediateKeyLabel": p.IntermediateKeyLabel} {
+		if err := pk11.ValidateVersionedLabel(label); err != nil {
+			return fmt.Errorf("ca: ceremony: %s: %w", field, err)
+		}
+	}
 	if err := ValidateDistributionURL("RootCRLURL", p.RootCRLURL); err != nil {
 		return fmt.Errorf("ca: ceremony: %w (CeremonyParams documents why this is required)", err)
 	}

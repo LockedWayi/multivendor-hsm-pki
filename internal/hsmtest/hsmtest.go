@@ -1,8 +1,8 @@
 // Package hsmtest is the backend harness every token-touching test runs
 // through. Go cannot share test helpers across packages, so the registry
-// below is where a backend is declared for every suite but one. Adding a
-// vendor is an adapter, one entry here and one in the conformance suite's
-// own list (see Vendors); a test fails when the two disagree.
+// below is the one place a backend is declared: the two-token shape every
+// suite uses and the single-token shape the conformance suite uses are
+// two setups on one entry. Adding a vendor is an adapter and one entry.
 //
 // Every test that touches a token runs against every backend the
 // environment provides. One backend cannot find a class of defect:
@@ -13,10 +13,10 @@
 // SoftHSM2 needs no hardware and no SDK, so it is always present and
 // carries CI. Every other backend skips when its <VENDOR>_MODULE variable
 // is unset. With the module set and another of its variables missing, the
-// Luna setup fails rather than skips: a half-configured backend is a
-// configuration error, not an absent backend. The ProtectServer setup
-// still skips in that case. Nothing vendor-only is reported as
-// CI-verified.
+// setup fails rather than skips: a half-configured backend is a
+// configuration error, not an absent backend, and a run that quietly
+// dropped a vendor is the run this harness exists to prevent. Nothing
+// vendor-only is reported as CI-verified.
 package hsmtest
 
 import (
@@ -113,14 +113,7 @@ func (b *Backend) destroyAllRunObjects(adapter pk11.VendorAdapter) error {
 }
 
 func newAdapterByName(name, modulePath string) (pk11.VendorAdapter, error) {
-	switch name {
-	case "protectserver":
-		return pk11.NewProtectServerAdapter(modulePath)
-	case "luna":
-		return pk11.NewLunaAdapter(modulePath)
-	default:
-		return pk11.NewSoftHSM2Adapter(modulePath)
-	}
+	return pk11.NewAdapterByName(name, modulePath)
 }
 
 // destroyRunObjects lists every object on the token and destroys the ones
@@ -206,30 +199,27 @@ func (b *Backend) SecondaryPINFunc() func() ([]byte, error) {
 }
 
 // descriptor declares one vendor to the harness. Adding a backend means
-// one of these, one entry in the conformance suite's list, and the adapter
-// they both construct.
+// one of these and the adapter it constructs.
 type descriptor struct {
 	name string
 	// setup returns a live Backend, or calls t.Skip when the environment
 	// does not provide this vendor.
 	setup func(t *testing.T) *Backend
+	// single returns the one-token shape the conformance suite runs on,
+	// with a wrong PIN and a chosen role, or calls t.Skip as setup does.
+	single func(t *testing.T) *Single
 }
 
 // registry is the list every ForEach walks, in order.
 var registry = []descriptor{
-	{"SoftHSM2", setupSoftHSM2},
-	{"ProtectServer", setupProtectServer},
-	{"Luna", setupLuna},
+	{"SoftHSM2", setupSoftHSM2, singleSoftHSM2},
+	{"ProtectServer", setupProtectServer, singleProtectServer},
+	{"Luna", setupLuna, singleLuna},
 	// nShield is added here when it is run. docs/test-matrix.md says what
 	// a vendor must provide first.
 }
 
-// Vendors returns the registry's backend names, in order. The conformance
-// suite in internal/pkcs11 keeps its own backend list, because it needs a
-// shape this harness does not provide (a wrong PIN, and tolerance for the
-// adapter being closed mid-suite). A test compares the two lists, so a
-// vendor added to one and not the other fails instead of running in every
-// suite except the one that finds vendor divergence.
+// Vendors returns the registry's backend names, in order.
 func Vendors() []string {
 	names := make([]string, len(registry))
 	for i, d := range registry {
@@ -324,7 +314,7 @@ func setupSoftHSM2(t *testing.T) *Backend {
 		PrimaryPIN:   pins[0],
 		SecondaryPIN: pins[1],
 		ModulePath:   modulePath,
-		AdapterName:  "softhsm2",
+		AdapterName:  pk11.AdapterSoftHSM2,
 		RunID:        runID(),
 	}
 	// Cleanups run last in, first out: Cleanup needs a live adapter, so
@@ -349,9 +339,9 @@ func setupProtectServer(t *testing.T) *Backend {
 	primaryPIN := os.Getenv("PROTECTSERVER_INTERMEDIATE_PIN")
 	secondaryPIN := os.Getenv("PROTECTSERVER_ROOT_PIN")
 	if primaryLabel == "" || secondaryLabel == "" || primaryPIN == "" || secondaryPIN == "" {
-		t.Skip("ProtectServer needs PROTECTSERVER_INTERMEDIATE_WORKSPACE, " +
-			"PROTECTSERVER_ROOT_WORKSPACE, PROTECTSERVER_INTERMEDIATE_PIN and " +
-			"PROTECTSERVER_ROOT_PIN")
+		t.Fatal("PROTECTSERVER_MODULE is set but PROTECTSERVER_INTERMEDIATE_WORKSPACE, " +
+			"PROTECTSERVER_ROOT_WORKSPACE, PROTECTSERVER_INTERMEDIATE_PIN or " +
+			"PROTECTSERVER_ROOT_PIN is not")
 	}
 	if primaryLabel == secondaryLabel {
 		t.Fatal("PROTECTSERVER_INTERMEDIATE_WORKSPACE and PROTECTSERVER_ROOT_WORKSPACE " +
@@ -370,7 +360,7 @@ func setupProtectServer(t *testing.T) *Backend {
 		PrimaryPIN:   primaryPIN,
 		SecondaryPIN: secondaryPIN,
 		ModulePath:   modulePath,
-		AdapterName:  "protectserver",
+		AdapterName:  pk11.AdapterProtectServer,
 		RunID:        runID(),
 	}
 	t.Cleanup(b.Release)
@@ -422,7 +412,7 @@ func setupLuna(t *testing.T) *Backend {
 		PrimaryPIN:   primaryPIN,
 		SecondaryPIN: secondaryPIN,
 		ModulePath:   modulePath,
-		AdapterName:  "luna",
+		AdapterName:  pk11.AdapterLuna,
 		RunID:        runID(),
 	}
 	t.Cleanup(b.Release)
@@ -452,3 +442,146 @@ func MustFindWorkspace(t *testing.T, adapter pk11.VendorAdapter, label string) p
 }
 
 func runID() string { return fmt.Sprintf("%d", time.Now().UnixNano()) }
+
+// Single is one vendor's single token, the shape the conformance suite in
+// internal/pkcs11 runs on: one workspace, its PIN, a PIN that is wrong for
+// it, and the role every login uses. It carries what a test needs to open
+// a second connection to the same module, because that suite closes the
+// adapter on purpose and its cleanup has to get back in.
+type Single struct {
+	Name      string
+	Adapter   pk11.VendorAdapter
+	Workspace pk11.Workspace
+	PIN       []byte
+	// WrongPIN fails as a wrong PIN and not as a length error: Luna
+	// enforces a minimum of 8, so it is at least that long everywhere.
+	WrongPIN []byte
+	// Role is the login identity. Role's zero value is CKU_SO, so it is
+	// set explicitly for every backend.
+	Role        pk11.Role
+	ModulePath  string
+	AdapterName string
+	// RunID is folded into every object label the suite creates.
+	RunID string
+}
+
+// Reopen builds a second connection to the same module.
+func (s *Single) Reopen() (pk11.VendorAdapter, error) {
+	return pk11.NewAdapterByName(s.AdapterName, s.ModulePath)
+}
+
+// ForEachSingle runs fn against every backend the environment provides,
+// each as its own subtest, in the single-token shape. The skip rule is
+// ForEach's.
+func ForEachSingle(t *testing.T, fn func(t *testing.T, s *Single)) {
+	t.Helper()
+	for _, d := range registry {
+		d := d
+		t.Run(d.name, func(t *testing.T) {
+			fn(t, d.single(t))
+		})
+	}
+}
+
+// singleSoftHSM2 provisions a throwaway token. The wrong PIN is chosen
+// against the PIN NewSoftHSM2Tokens hands out.
+func singleSoftHSM2(t *testing.T) *Single {
+	t.Helper()
+	modulePath := RequireSoftHSM2(t)
+	id := runID()
+	label := "conformance-" + id
+	pins := NewSoftHSM2Tokens(t, label)
+	adapter, err := pk11.NewSoftHSM2Adapter(modulePath)
+	if err != nil {
+		t.Fatalf("NewSoftHSM2Adapter: %v", err)
+	}
+	t.Cleanup(func() { adapter.Close() })
+	wrong := "00000000"
+	if wrong == pins[0] {
+		wrong = "00000001"
+	}
+	return &Single{
+		Name: "SoftHSM2", Adapter: adapter, Workspace: MustFindWorkspace(t, adapter, label),
+		PIN: []byte(pins[0]), WrongPIN: []byte(wrong), Role: pk11.RoleUser,
+		ModulePath: modulePath, AdapterName: pk11.AdapterSoftHSM2, RunID: id,
+	}
+}
+
+// singleProtectServer uses the maintainer's emulator token named by
+// PROTECTSERVER_WORKSPACE, which the whole-suite command in the test
+// matrix sets alongside the two-token variables.
+func singleProtectServer(t *testing.T) *Single {
+	t.Helper()
+	modulePath := os.Getenv("PROTECTSERVER_MODULE")
+	if modulePath == "" {
+		t.Skip("PROTECTSERVER_MODULE not set: " +
+			"this backend is maintainer-verified, never CI-verified")
+	}
+	label := os.Getenv("PROTECTSERVER_WORKSPACE")
+	pin := os.Getenv("PROTECTSERVER_PIN")
+	if label == "" || pin == "" {
+		t.Fatal("PROTECTSERVER_MODULE is set but PROTECTSERVER_WORKSPACE or PROTECTSERVER_PIN is not")
+	}
+	adapter, err := pk11.NewProtectServerAdapter(modulePath)
+	if err != nil {
+		t.Fatalf("NewProtectServerAdapter: %v", err)
+	}
+	t.Cleanup(func() { adapter.Close() })
+	return &Single{
+		Name: "ProtectServer", Adapter: adapter, Workspace: MustFindWorkspace(t, adapter, label),
+		PIN: []byte(pin), WrongPIN: []byte("00000000"), Role: pk11.RoleUser,
+		ModulePath: modulePath, AdapterName: pk11.AdapterProtectServer, RunID: runID(),
+	}
+}
+
+// singleLuna uses the partition LUNA_WORKSPACE names. LUNA_ROLE picks the
+// identity the whole conformance suite logs in as: co (the Crypto
+// Officer, CKU_USER, the default), lco (the Limited Crypto Officer) or cu
+// (the Crypto User). Running the suite once per role is how a restricted
+// role's refusals are measured rather than assumed.
+func singleLuna(t *testing.T) *Single {
+	t.Helper()
+	modulePath := os.Getenv("LUNA_MODULE")
+	if modulePath == "" {
+		t.Skip("LUNA_MODULE not set: " +
+			"this backend is maintainer-verified, never CI-verified")
+	}
+	if os.Getenv("ChrystokiConfigurationPath") == "" {
+		t.Fatal("LUNA_MODULE is set but ChrystokiConfigurationPath is not")
+	}
+	label := os.Getenv("LUNA_WORKSPACE")
+	pin := os.Getenv("LUNA_PIN")
+	if label == "" || pin == "" {
+		t.Fatal("LUNA_MODULE is set but LUNA_WORKSPACE or LUNA_PIN is not")
+	}
+	role, err := lunaRole(os.Getenv("LUNA_ROLE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := pk11.NewLunaAdapter(modulePath)
+	if err != nil {
+		t.Fatalf("NewLunaAdapter: %v", err)
+	}
+	t.Cleanup(func() { adapter.Close() })
+	return &Single{
+		Name: "Luna", Adapter: adapter, Workspace: MustFindWorkspace(t, adapter, label),
+		PIN: []byte(pin), WrongPIN: []byte("00000000"), Role: role,
+		ModulePath: modulePath, AdapterName: pk11.AdapterLuna, RunID: runID(),
+	}
+}
+
+// lunaRole maps LUNA_ROLE to a login identity. An unknown value fails
+// rather than falling back: a run that silently used another role would
+// report the wrong role's behaviour.
+func lunaRole(v string) (pk11.Role, error) {
+	switch v {
+	case "", "co":
+		return pk11.RoleUser, nil
+	case "lco":
+		return pk11.LunaRoleLimitedCryptoOfficer, nil
+	case "cu":
+		return pk11.LunaRoleCryptoUser, nil
+	default:
+		return 0, fmt.Errorf("LUNA_ROLE=%q: want co, lco or cu", v)
+	}
+}

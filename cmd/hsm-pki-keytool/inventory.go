@@ -62,7 +62,7 @@ func (k *keySpecs) Set(v string) error {
 func runGenerateInventoryCmd(args []string) error {
 	fs := flag.NewFlagSet("generate-inventory", flag.ExitOnError)
 
-	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\", \"protectserver\" or \"luna\"")
+	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	curveName := fs.String("curve", "P-256", "EC curve the listed keys were generated on: P-256, P-384, or P-521")
 
@@ -134,7 +134,7 @@ func runGenerateInventoryCmd(args []string) error {
 		previous = &parsed
 	}
 
-	adapter, err := newVendorAdapter(*adapterName, *modulePath)
+	adapter, err := pk11.NewAdapterByName(*adapterName, *modulePath)
 	if err != nil {
 		return err
 	}

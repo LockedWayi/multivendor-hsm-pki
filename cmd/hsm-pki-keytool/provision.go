@@ -28,7 +28,7 @@ import (
 func runProvisionSigningKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("provision-signing-key", flag.ExitOnError)
 
-	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\", \"protectserver\" or \"luna\"")
+	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	curveName := fs.String("curve", "P-256", "EC curve for the key pair: P-256, P-384, or P-521")
 
@@ -65,7 +65,7 @@ func runProvisionSigningKeyCmd(args []string) error {
 		return fmt.Errorf("checking output path %s: %w", *publicKeyOut, err)
 	}
 
-	adapter, err := newVendorAdapter(*adapterName, *modulePath)
+	adapter, err := pk11.NewAdapterByName(*adapterName, *modulePath)
 	if err != nil {
 		return err
 	}

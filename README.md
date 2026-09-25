@@ -36,9 +36,9 @@ and key-protection model is expected to differ most.
 - **One conformance suite, run per backend.** Every test that touches a
   token runs as its own subtest against every backend the environment
   provides. A backend the environment lacks skips; a backend half
-  configured fails rather than skipping. Adding a vendor is an adapter, a
-  registry entry and an entry in the conformance suite's own list, and a
-  test fails when the two lists disagree.
+  configured fails rather than skipping. Adding a vendor is an adapter and
+  one registry entry; every command and every suite reaches a backend
+  through that one list.
 - **PINs live in C-heap memory.** `SecurePIN` holds the PIN in memory the
   Go garbage collector does not move or copy. One copy is outside this
   code: [docs/threat-model.md](docs/threat-model.md) §6.3.

@@ -218,7 +218,7 @@ func TestRunProvisionSigningKeyCmd_TwoRunsNeverProduceOneKey(t *testing.T) {
 func assertLabelIsFree(t *testing.T, b *hsmtest.Backend, label string) {
 	t.Helper()
 	ctx := context.Background()
-	adapter, err := newVendorAdapter(b.AdapterName, b.ModulePath)
+	adapter, err := pk11.NewAdapterByName(b.AdapterName, b.ModulePath)
 	if err != nil {
 		t.Fatalf("reopening the module: %v", err)
 	}

@@ -161,7 +161,7 @@ func requireRecorded(t *testing.T, storePath string, cert *x509.Certificate) {
 // the way the service does at startup.
 func withToken(t *testing.T, b *hsmtest.Backend, env issuedCA, fn func(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace)) {
 	t.Helper()
-	adapter, err := newVendorAdapter(b.AdapterName, b.ModulePath)
+	adapter, err := pk11.NewAdapterByName(b.AdapterName, b.ModulePath)
 	if err != nil {
 		t.Fatalf("opening the module: %v", err)
 	}

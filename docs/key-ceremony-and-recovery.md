@@ -37,6 +37,12 @@ of duties. The operator needs:
 - The vendor module path and adapter name (`softhsm2`, `protectserver` or
   `luna`). For Luna the process also needs `ChrystokiConfigurationPath`
   in its environment before the module loads.
+- Key labels in the platform's one shape, `ca-root-key-v1` and
+  `ca-intermediate-key-v1`: lowercase letters, digits and hyphens, ending
+  in `-v<n>`. The ceremony refuses anything else before it touches a
+  token, because the credential commands that follow it accept only that
+  shape, and a ceremony run under a label they refuse would leave a CA
+  pair on the token that no TLS or OCSP key can sit beside.
 - Every certificate parameter decided **before** the ceremony starts,
   because a ceremony is irreversible: subject names, the EC curve, and the
   root CRL and root certificate distribution URLs. Those two URLs are

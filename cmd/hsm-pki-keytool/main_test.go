@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 func requireSoftHSM2(t *testing.T) string {
@@ -130,7 +131,7 @@ func TestFindWorkspace_AmbiguousLabelFailsClosed(t *testing.T) {
 		}
 	}
 
-	adapter, err := newVendorAdapter("softhsm2", modulePath)
+	adapter, err := pk11.NewAdapterByName("softhsm2", modulePath)
 	if err != nil {
 		t.Fatalf("newVendorAdapter: %v", err)
 	}
@@ -201,7 +202,7 @@ func TestRun_NoArgs(t *testing.T) {
 }
 
 func TestNewVendorAdapter_UnknownAdapter(t *testing.T) {
-	if _, err := newVendorAdapter("not-a-real-adapter", "/dev/null"); err == nil {
+	if _, err := pk11.NewAdapterByName("not-a-real-adapter", "/dev/null"); err == nil {
 		t.Fatal("newVendorAdapter with an unknown adapter name succeeded, want an error")
 	}
 }

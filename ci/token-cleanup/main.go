@@ -32,7 +32,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
@@ -52,7 +51,7 @@ type object struct {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("token-cleanup", flag.ExitOnError)
-	adapterName := fs.String("adapter", config.AdapterSoftHSM2, "vendor adapter: \"softhsm2\", \"protectserver\" or \"luna\"")
+	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	workspaceLabel := fs.String("workspace", "", "token label to clean")
 	workspaceSerial := fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label")
@@ -76,7 +75,7 @@ func run(args []string) error {
 			"pass an explicit prefix (hsmtest uses \"t-\")")
 	}
 
-	adapter, err := newAdapter(*adapterName, *modulePath)
+	adapter, err := pk11.NewAdapterByName(*adapterName, *modulePath)
 	if err != nil {
 		return err
 	}
@@ -185,19 +184,6 @@ func printByRun(matched []object) {
 	sort.Strings(runs)
 	for _, r := range runs {
 		fmt.Printf("    %-28s %d objects\n", r, byRun[r])
-	}
-}
-
-func newAdapter(adapterName, modulePath string) (pk11.VendorAdapter, error) {
-	switch adapterName {
-	case config.AdapterSoftHSM2:
-		return pk11.NewSoftHSM2Adapter(modulePath)
-	case config.AdapterProtectServer:
-		return pk11.NewProtectServerAdapter(modulePath)
-	case config.AdapterLuna:
-		return pk11.NewLunaAdapter(modulePath)
-	default:
-		return nil, fmt.Errorf("unknown -adapter %q", adapterName)
 	}
 }
 

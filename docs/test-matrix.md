@@ -9,8 +9,8 @@ SoftHSM2, ProtectServer and, since 2026-09-23, Luna run today; nShield is
 planned, making four. The cost of adding the third and fourth must be a
 registry entry and an adapter, and that only stays true if the inventory
 is written down. For Luna it held: a constructor, one registry entry in
-each of the two lists below, and two findings absorbed without a branch on
-the vendor's name (§5).
+each of what were then two lists (one since 2026-09-24, §5), and two
+findings absorbed without a branch on the vendor's name.
 
 ---
 
@@ -197,23 +197,23 @@ Then: one entry in `hsmtest`'s `registry`, and every test in §3 runs
 against it. Nothing else should need to change. If something does, that is
 a defect in the harness and belongs here as a finding.
 
-**It is currently two entries, not one.** `internal/pkcs11`'s own
-`TestConformance` predates the harness and keeps a backend list of its
-own, so a new vendor today edits `hsmtest`'s `registry` and that list. No
-import cycle forces this. `conformance_test.go` is an external test
-package (`package pkcs11_test`) and could import `hsmtest`. Folding it in
-would rework the conformance-specific setup (the wrong-PIN cases, the
-reopen hook, its single-token layout) for modest gain, so the duplication
-is accepted and recorded here.
+**It is one entry since 2026-09-24.** Until then `internal/pkcs11`'s own
+`TestConformance` kept a backend list of its own, with the wrong-PIN
+cases, the reopen hook and its single-token layout, and a test compared
+the two lists so a vendor added to one and not the other went red. The
+single-token shape now lives in `hsmtest` too (`Single`,
+`ForEachSingle`), each registry entry carries both setups, and the
+comparison test is gone because there is nothing left to compare. What
+the conformance suite still keeps of its own is the per-backend
+declarations it asserts (Luna's refused private-key wrap and required
+`CKA_VALUE_LEN`), keyed by name, until the adapter carries a capability
+descriptor the core reads.
 
-The duplication is enforced against drift. `hsmtest.Vendors()` exports
-the registry's names and `TestConformanceCoversEveryRegisteredVendor`
-fails when the two lists disagree, by name and in order, so a rename or a
-reorder is caught too. A vendor added to the harness and forgotten here
-would run in every suite except the conformance one, the suite whose
-purpose is finding vendor divergence, and everything would stay green.
-This was verified by adding a third vendor to the registry alone and
-watching the test go red.
+The adapter names are one list too: `pkcs11.AdapterNames()` and
+`pkcs11.NewAdapterByName` are what `config.yaml`, every command's
+`-adapter` flag and the harness go through, so a vendor added there is
+reachable from every entry point at once, and a test walks every name
+through the constructor.
 
 The merge itself is not done. It is left for the vendor that makes it
 necessary. Luna paid the two-entry cost first (2026-09-23): one entry in
