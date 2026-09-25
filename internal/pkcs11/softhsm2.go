@@ -17,4 +17,16 @@ func NewSoftHSM2Adapter(modulePath string) (*SoftHSM2Adapter, error) {
 	return &SoftHSM2Adapter{pkcs11Adapter: base}, nil
 }
 
+// Capabilities declares what SoftHSM2 2.6.1 was measured to do.
+func (a *SoftHSM2Adapter) Capabilities() Capabilities {
+	return Capabilities{
+		ConcurrentSlotEnumeration:  false, // not measured under concurrent callers; the shared lock stays
+		SecondInitializeInProcess:  false, // CKR_CRYPTOKI_ALREADY_INITIALIZED, measured 2026-09-24; one C_Initialize per process here too
+		HandlesSpanSessions:        true,
+		HandlesSurviveSessionClose: true,
+		ZeroDigest:                 ZeroDigestAccepted,
+		UnwrapHonoursExtractable:   true,
+	}
+}
+
 var _ VendorAdapter = (*SoftHSM2Adapter)(nil)

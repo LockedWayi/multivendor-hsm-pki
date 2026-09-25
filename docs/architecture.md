@@ -92,7 +92,11 @@ wrap; unwrapping an AES key requires `CKA_VALUE_LEN` in the template and
 reports its absence as `CKR_ATTRIBUTE_TYPE_INVALID`; and the partition has
 four roles, of which the Crypto Officer is the standard `CKU_USER` and the
 Limited Crypto Officer is the vendor user type `0x80000003`. The whole
-suite ran identically as either role. Two more facts an operator meets
+suite ran identically as either role. Measured 2026-09-24 through the
+capability descriptor: an ECDSA signature over an all-zero digest is
+refused at `C_Sign` (`CKR_DATA_INVALID`), a second `C_Initialize` in one
+process is refused, and a token object's handle is valid in another open
+session and after its own session closes. Two more facts an operator meets
 before a test does: a newly initialized role's password is born expired,
 so `C_Login` succeeds and the next call fails `CKR_PIN_EXPIRED`; and the
 minimum password length is 8, so a shorter wrong PIN tests the length
@@ -110,9 +114,12 @@ token the operator initializes.
 
 One difference from SoftHSM2 in what the conformance suite exercises:
 `C_Verify` rejects a signature over an all-zero digest with
-`CKR_SIGNATURE_INVALID`. SoftHSM2 accepts it. An all-zero digest does not
-occur with real messages, so no workaround exists and the suite uses real
-digests only. Everything else behaves as on SoftHSM2: sessions, `C_Login`
+`CKR_SIGNATURE_INVALID`. SoftHSM2 accepts it, and Luna refuses to sign it
+at all (`CKR_DATA_INVALID`): three modules, three answers, each now the
+adapter's declared `ZeroDigest` and measured by the suite. An all-zero
+digest does not occur with real messages, so no workaround exists and the
+suite uses real digests everywhere but in that one measurement. Everything
+else behaves as on SoftHSM2: sessions, `C_Login`
 as `CKU_USER`, `C_GenerateRandom`, EC P-256 key pairs, AES keys,
 `CKM_ECDSA` sign and verify with a 64-byte `r||s` signature,
 `CKM_AES_CBC_PAD`, `CKM_AES_KEY_WRAP`, object search and attribute reads.
@@ -253,12 +260,17 @@ surface is never large and untested at once.
    partition policy, an unwrap template needs an attribute another vendor
    refuses. Each became either a stricter shared path or a declaration the
    conformance suite asserts per backend; the core never learned a vendor
-   name. Those declarations live in the suite today. The next step is a
-   capability descriptor on the adapter itself, so the same declarations
-   are read by the core and measured by the suite, and then nShield, whose
-   Security World is where the most is still expected to differ. Both
-   vendor paths are maintainer-verified, never CI-verified, and labelled
-   so.
+   name. Since 2026-09-24 those declarations are the adapter's own:
+   `VendorAdapter.Capabilities()` returns a descriptor naming every
+   behaviour on which two conforming modules have been seen to differ,
+   and the suite measures each field in both directions, so a wrong
+   declaration is a failing test on the backend that contradicts it. The
+   first run of that suite corrected four declarations the documents had
+   carried as fact, which is the argument for measuring them. Next: the
+   core reads the descriptor where it changes how the module is driven
+   (the lock around slot enumeration), and then nShield, whose Security
+   World is where the most is still expected to differ. Both vendor paths
+   are maintainer-verified, never CI-verified, and labelled so.
 
    **Optional, not scheduled: a secrets manager for the PIN.** Decided and
    set aside on 2026-09-23. If built, no key would move:

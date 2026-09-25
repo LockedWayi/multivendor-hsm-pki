@@ -7,6 +7,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **A capability descriptor on every adapter.** `VendorAdapter.Capabilities()`
+  returns a `pkcs11.Capabilities`: one field per behaviour on which two
+  conforming modules have been seen to differ (a second `C_Initialize` in
+  one process, object-handle scope across sessions and past a session's
+  close, an ECDSA signature over an all-zero digest, whether unwrap
+  honours `CKA_EXTRACTABLE`, whether a private key can be wrapped,
+  whether an unwrap template needs `CKA_VALUE_LEN`, concurrent slot
+  enumeration). The conformance suite measures every field in both
+  directions, so a declaration the module contradicts is a failing test
+  on that backend; the two Luna declarations the suite kept by name are
+  the adapter's now. The first run corrected four declarations the
+  documents had carried as fact: SoftHSM2 refuses a second
+  `C_Initialize` like every other module and accepts a token object's
+  handle across sessions; the ProtectToolkit-C emulator honoured the
+  unwrap template's `CKA_EXTRACTABLE=false` where it had once ignored it;
+  and Luna refuses to sign an all-zero digest at all (`CKR_DATA_INVALID`),
+  the third answer to that input.
 - **Every adapter-name list is checked against every other.**
   `internal/config`, `hsm-pki-keytool` and `ci/token-cleanup` each map
   an adapter name to a constructor. Tests now walk the closed list of
