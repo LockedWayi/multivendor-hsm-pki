@@ -132,6 +132,9 @@ log "3/4  the suite, -race -p 1, inside the image"
 # because the ProtectToolkit-C emulator can block forever inside
 # C_OpenSession; the slowest package here takes seconds, so a hang costs
 # three minutes and a goroutine dump rather than the ten-minute default.
+# -count=1 so the number below is from a run that happened: a persisted Go
+# build cache replays a package's recorded result, and a replay opens no
+# session on any token (docs/test-matrix.md section 6).
 run_args=(--rm -v "$REPO_ROOT":/repo -w /repo)
 if [ "$WITH_PROTECTSERVER" -eq 1 ]; then
     run_args+=(-v "$PROTECTSERVER_SDK_DIR":"$PROTECTSERVER_SDK_DIR":ro
@@ -153,7 +156,7 @@ fi
 suite_status=0
 docker run "${run_args[@]}" "$DEV_IMAGE" sh -c '
     git config --global --add safe.directory /repo
-    go test -race -p 1 -timeout 180s -v -buildvcs=false ./...
+    go test -race -p 1 -count=1 -timeout 180s -v -buildvcs=false ./...
 ' > "$LOG_DIR/suite.log" 2>&1 || suite_status=$?
 
 # Top-level per-backend subtests, the number docs/test-matrix.md section 3

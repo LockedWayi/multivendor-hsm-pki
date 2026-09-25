@@ -329,11 +329,27 @@ docker run --rm -v "$PWD":/repo -w /repo \
   -e ChrystokiConfigurationPath -e LUNA_MODULE -e LUNA_ROLE \
   -e LUNA_ROOT_WORKSPACE -e LUNA_INTERMEDIATE_WORKSPACE -e LUNA_WORKSPACE \
   -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN -e LUNA_PIN \
-  hsm-pki-dev go test -race -p 1 -timeout 180s ./...
+  hsm-pki-dev go test -race -p 1 -count=1 -timeout 180s ./...
 ```
 
 `tools/bootstrap-workstation.sh --with-protectserver --with-luna` runs
 the same command with the same mounts, refusing when a variable is unset.
+
+**`-count=1` is there because a run against a token is a measurement,
+and Go caches test results.** With a build cache that survives between
+runs (a mounted `GOCACHE`, or the same container reused) `go test`
+replays the recorded result of any package whose binary and read
+environment variables have not changed, prints its `-v` output again and
+marks the package `(cached)`. Found 2026-09-24: six consecutive
+"whole-suite" runs meant to count emulator hangs finished in one to three
+seconds each, every package cached, and a documents-only change's
+"lateral test" executed nothing. A cached result is a true statement
+about that code, and it is not a run against the HSM: no session was
+opened, no hang could have happened, no object was created or cleaned.
+`-count=1` disables the cache for that invocation. The bootstrap runs in
+a fresh container with no persisted cache and was never affected; it
+passes the flag anyway, so the number it prints is always from a run
+that happened.
 
 `-timeout 180s` because the ProtectToolkit-C software emulator blocks
 forever inside `C_OpenSession` in some runs: three of six measured on
