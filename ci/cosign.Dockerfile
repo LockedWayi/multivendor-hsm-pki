@@ -12,7 +12,7 @@
 # 140 MB layer would be rebuilt on every version bump, and the binary's
 # provenance should be checked by a script a reader can follow rather than
 # buried in a build cache.
-FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 # Two distinct needs, and neither is obvious from "run a Go binary":
 #
