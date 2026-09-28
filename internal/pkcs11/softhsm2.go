@@ -25,6 +25,7 @@ var softHSM2Capabilities = Capabilities{
 	HandlesSurviveSessionClose: true,
 	ZeroDigest:                 ZeroDigestAccepted,
 	UnwrapHonoursExtractable:   true,
+	SerializeOnOneThread:       false, // no hang in any run; concurrent callers measured without fault
 }
 
 var _ VendorAdapter = (*SoftHSM2Adapter)(nil)

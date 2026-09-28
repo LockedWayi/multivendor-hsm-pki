@@ -241,6 +241,7 @@ as fact, which is the whole argument for measuring rather than recording.
 | `UnwrapHonoursExtractable` | true | **true** (2026-08-31: false; see the ceremony document §5.3) | not measurable while the wrap is refused |
 | `PrivateKeyWrapRefused` | no | no | policy 1 off |
 | `UnwrapNeedsValueLen` | false (refuses it as read-only) | false (takes either) | true |
+| `SerializeOnOneThread` | false (no hang in any run) | **true** (6 hangs in 144 runs unpinned, 0 in 104 pinned; a rate, not measured per run, see §6) | false (no hang in any run) |
 
 A field that reads "not measured" is declared conservatively and the
 suite skips its measurement with that reason; declaring the permissive
@@ -250,7 +251,12 @@ where a field changes how the module is driven: since 2026-09-24
 `ConcurrentSlotEnumeration` and the exclusive lock on one that does not,
 so ProtectToolkit-C keeps the serialization its deadlock earned and the
 other two no longer pay for it. The declaration that lifts the lock is
-the one the suite exercises with eight goroutines on every run.
+the one the suite exercises with eight goroutines on every run. Since
+2026-09-28 a module that declares `SerializeOnOneThread` has every call,
+`C_Initialize` and `C_Finalize` included, run on one pinned OS thread,
+one at a time; that field is the one the suite cannot measure in a run,
+and its conformance case skips with that reason while
+`modthread_linux_test.go` checks the mechanism by the kernel's thread id.
 
 `internal/signingkey` joined §3 without touching the harness, which is the
 property this section claims: a new suite reaches every backend by calling
@@ -362,7 +368,7 @@ runs (`-count=1`): **6 hangs in 144** whole-suite runs with the module
 driven from whichever OS thread Go scheduled (at the 17th, 20th, 23rd,
 26th, 27th and 29th ProtectServer conformance cases; five parked in
 `C_OpenSession`, one in `C_GenerateKey`, so not one call either), and
-**0 in 104** with every module call funnelled to one OS thread (the
+**0 in 104** with every module call funnelled to one OS thread (then the
 `exp/module-thread` branch, switched on by an environment variable; the
 design is in `architecture.md`, "ProtectToolkit-C software emulation, as
 measured"). At the unpinned rate of about four percent, a hundred and four clean
@@ -376,7 +382,14 @@ the checkout was moved under the loop; the goroutine dump's line numbers
 gave it away, those runs are counted on the unpinned side, and the tool
 now names the commit on every line. The slowest package takes
 seconds, so the limit costs nothing on a healthy run and turns a hang into
-three minutes and a goroutine dump. Keep the dump: it is the evidence, so
+three minutes and a goroutine dump. **Since 2026-09-28 the thread is not
+an experiment:** the ProtectToolkit-C adapter declares
+`SerializeOnOneThread`, so every run against the emulator is a pinned
+run. The record it rests on is the one above, not proof, and
+`tools/hang-tally.sh` keeps counting: a hang on a tree with the
+declaration counts against it, and the declaration is measured again
+on the `libcthsm.so` hardware module when there is one. `-timeout 180s`
+and the cleanup below stay. Keep the dump: it is the evidence, so
 do not stop a hung run by hand. A test binary killed by its timeout runs
 no `t.Cleanup`, which leaves that run's `conf-` objects on the persistent
 emulator token, and because the emulator's RNG restarts from the same

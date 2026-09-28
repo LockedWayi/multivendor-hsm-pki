@@ -15,9 +15,11 @@
 # failures in later packages. Never stop a hung run by hand; the dump is
 # the evidence.
 #
-# HANG_ENV, when set, is passed to docker run as extra flags, for example
-# HANG_ENV="-e HSM_PKI_MODULE_THREAD=1" to measure a branch's experiment
-# switch. Every summary line names the commit the run was built from,
+# HANG_ENV, when set, is passed to docker run as extra flags. Since the
+# ProtectToolkit-C adapter declares SerializeOnOneThread (2026-09-28),
+# every run here is a pinned run, and a hang counts against that
+# declaration; the unpinned arm of 2026-09-24 was a branch's environment
+# switch, which no longer exists. Every summary line names the commit the run was built from,
 # because the suite is compiled from the working tree at the start of each
 # run: a branch switched underneath the loop measures the new branch from
 # that run on, and thirty-two runs of one evening's tally were lost to
