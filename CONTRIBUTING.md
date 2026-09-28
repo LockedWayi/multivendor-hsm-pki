@@ -149,7 +149,8 @@ an absent one. For a Luna partition, set `LUNA_MODULE`,
 `ChrystokiConfigurationPath`, `LUNA_WORKSPACE` and `LUNA_PIN` for the
 Crypto Officer, and `LUNA_LCO_PIN` for the same partition's Limited Crypto
 Officer: every Luna test runs once as each, as the `Luna` and `LunaLCO`
-subtests (docs/test-matrix.md section 6 lists the two-token variables).
+subtests (docs/test-matrix.md section 6 lists the two-token variables and
+`LUNA_V0_WORKSPACE`).
 Never in CI, always locally, against your own SDK or
 appliance. The maintainer runs ProtectToolkit-C 7.3.3 in software
 emulation and a Luna Network HSM 7 with the 10.9.4 minimal client.

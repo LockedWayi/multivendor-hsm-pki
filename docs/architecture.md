@@ -98,8 +98,12 @@ the default partition policy (`CKR_KEY_NOT_WRAPPABLE`) while secret keys
 wrap; unwrapping an AES key requires `CKA_VALUE_LEN` in the template and
 reports its absence as `CKR_ATTRIBUTE_TYPE_INVALID`; and the partition has
 four roles, of which the Crypto Officer is the standard `CKU_USER` and the
-Limited Crypto Officer is the vendor user type `0x80000003`. The whole
-suite ran identically as either role. Measured 2026-09-24 through the
+Limited Crypto Officer is the vendor user type `0x80000003`. Which one the
+service and the operator commands log in as is configuration
+(`pkcs11.luna.role`, `-role`), read through one table of role names per
+adapter, so no vendor name reaches the core. Every token-touching test
+runs as both; the LCO was refused nothing the platform does, only a login
+on a V0 partition, where the role does not exist. Measured 2026-09-24 through the
 capability descriptor: an ECDSA signature over an all-zero digest is
 refused at `C_Sign` (`CKR_DATA_INVALID`), a second `C_Initialize` in one
 process is refused, and a token object's handle is valid in another open

@@ -16,7 +16,7 @@
 # docs/test-matrix.md section 6 lists. --with-luna adds a Luna client and
 # its two partitions, which needs the eight LUNA_* variables and
 # ChrystokiConfigurationPath from the same section, and the four LUNA_LCO_*
-# variables of the Limited Crypto Officer run (LunaLCO),
+# variables of the Limited Crypto Officer run (LunaLCO) and LUNA_V0_WORKSPACE,
 # with the client directory (LUNA_CLIENT_DIR, default $HOME/luna) mounted
 # at the same path inside the image, because the paths in Chrystoki.conf
 # are absolute. With any variable unset either flag is refused rather than
@@ -108,7 +108,8 @@ fi
 if [ "$WITH_LUNA" -eq 1 ]; then
     for v in LUNA_MODULE ChrystokiConfigurationPath LUNA_WORKSPACE LUNA_PIN \
              LUNA_ROOT_WORKSPACE LUNA_INTERMEDIATE_WORKSPACE LUNA_ROOT_PIN LUNA_INTERMEDIATE_PIN \
-             LUNA_LCO_ROOT_WORKSPACE LUNA_LCO_ROOT_PIN LUNA_LCO_INTERMEDIATE_PIN LUNA_LCO_PIN; do
+             LUNA_LCO_ROOT_WORKSPACE LUNA_LCO_ROOT_PIN LUNA_LCO_INTERMEDIATE_PIN LUNA_LCO_PIN \
+             LUNA_V0_WORKSPACE; do
         [ -n "${!v:-}" ] || fail "--with-luna needs $v set (docs/test-matrix.md, section 6, lists them)"
     done
     [ -d "$LUNA_CLIENT_DIR" ] || fail "LUNA_CLIENT_DIR=$LUNA_CLIENT_DIR does not exist"
@@ -155,7 +156,7 @@ if [ "$WITH_LUNA" -eq 1 ]; then
                -e LUNA_ROOT_WORKSPACE -e LUNA_INTERMEDIATE_WORKSPACE
                -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN
                -e LUNA_LCO_ROOT_WORKSPACE -e LUNA_LCO_ROOT_PIN
-               -e LUNA_LCO_INTERMEDIATE_PIN -e LUNA_LCO_PIN)
+               -e LUNA_LCO_INTERMEDIATE_PIN -e LUNA_LCO_PIN -e LUNA_V0_WORKSPACE)
 fi
 suite_status=0
 docker run "${run_args[@]}" "$DEV_IMAGE" sh -c '
