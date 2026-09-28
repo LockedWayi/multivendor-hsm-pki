@@ -535,6 +535,34 @@ signed a fresh blob on the restored token and an independent
 implementation (openssl) has verified that signature against the
 published public key. The copy on the source machine is kept until then.
 
+**The encrypted state backup.** The signing state has one cold copy
+besides the working one: an encrypted bundle on the maintainer's own
+workstation, which is not the machine that signs and is not reachable from
+any pipeline. The bundle holds the two token directories and their
+configuration, with the machine's non-secret working state beside them,
+and never the PKCS#11 module, which is rebuilt from the dev image. It is a
+`tar` stream piped straight into `gpg --symmetric --cipher-algo AES256`,
+with the passphrase handed over a pipe, so nothing is written in the clear
+on the way; the tool that makes it refuses an output path inside a git
+checkout, because an encrypted archive of key material is still key
+material and no repository, release asset or CI cache is a place for it.
+A `SHA-256` manifest of every file travels inside the bundle, and the
+bundle's own digest is compared over a second channel before it is
+opened. The passphrase and the two token PINs each travel by a channel of
+their own, never beside the bundle or each other, so no single
+intercepted message opens it. Opening it is a verification, not a copy:
+the tool that restores the bundle checks the manifest, refuses a
+non-empty target unless told to move it aside (it never deletes), and
+then has every published key sign a fresh blob on the restored token and
+openssl verify each signature against the key in `docs/keys/`; it can run
+that verification alone against a store already in place. A key that
+does not verify fails the restore and says the source copy must be kept.
+Copies are retired in one order: the plaintext store on the machine it
+was moved from goes only after the first real release signature from the
+machine it was moved to has verified; the bundle's intermediate copy on
+the signing machine goes once the cold copy's digest has been compared;
+the cold copy on the maintainer's workstation stays.
+
 ## 8. The credentials the authenticated API needs
 
 The write endpoints accept only a client certificate this CA issued, which
