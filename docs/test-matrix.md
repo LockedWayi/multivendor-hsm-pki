@@ -261,7 +261,9 @@ registry entry. Neither edits the other.
 The backends run so far disagreed in these ways. Check each on any new
 backend. The Luna column is Luna Network HSM 7 (firmware 7.8.7, Luna HSM
 Client 10.9.4, password authentication), measured 2026-09-23 by the
-maintainer; "not measured" means exactly that.
+maintainer; "not measured" means exactly that. No row was measured on a
+PED-authenticated partition, so everything below, the "Login identity"
+row first of all, is unmeasured there.
 
 | Behaviour | What to check | Luna, measured |
 |---|---|---|
@@ -275,7 +277,7 @@ maintainer; "not measured" means exactly that.
 | Protection attributes on generation | Ask the token, not the template. Generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Every backend honours them on generation. ProtectToolkit-C ignored `CKA_EXTRACTABLE=false` on unwrap when first measured (2026-08-31) and honoured it on 2026-09-24, same emulator version; the two paths are still checked separately and the unwrap one is a declaration the suite measures | Honoured on generation. The unwrap path could not be measured for private keys (next row) |
 | Private-key wrapping | Wrap an extractable EC private key under an AES key | **Refused**, `CKR_KEY_NOT_WRAPPABLE`: partition policy "Allow private key wrapping" is off by default. Secret keys wrap. The suite declares the refusal and asserts it, failing if the wrap ever succeeds. The wrap-based backup in `key-ceremony-and-recovery.md` §5 needs that policy changed on Luna |
 | Unwrap template for a secret key | Unwrap an AES key with and without `CKA_VALUE_LEN` | **Requires** it, and reports its absence as `CKR_ATTRIBUTE_TYPE_INVALID`. SoftHSM2 refuses the same attribute as `CKR_ATTRIBUTE_READ_ONLY`; ProtectToolkit-C takes either. No single template serves all three; the suite declares it per backend |
-| Login identity | Which user type the credential logs in as | The Crypto Officer is `CKU_USER`; the Limited Crypto Officer is the vendor type `0x80000003` (`pkcs11.LunaRoleLimitedCryptoOfficer`). The conformance suite ran identically as either. A newly initialized role's password is expired: `C_Login` succeeds and the *next* call fails `CKR_PIN_EXPIRED` |
+| Login identity | Which user type the credential logs in as | The Crypto Officer is `CKU_USER`; the Limited Crypto Officer is the vendor type `0x80000003` (`pkcs11.LunaRoleLimitedCryptoOfficer`). The conformance suite ran identically as either. A newly initialized role's password is expired: `C_Login` succeeds and the *next* call fails `CKR_PIN_EXPIRED`. Password authentication only; login on a PED-authenticated partition is unmeasured |
 | RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times. The RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included, so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend before trusting it with a key | Reseeds (`TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt` passes, and the three tests that skip on the emulator for this reason run) |
 | Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups, `hsmtest.Backend.Cleanup` and the conformance suite's, destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. With that retry, a full run on every backend leaves zero objects, measured on both software backends. Litter from before is not the suite's to delete. `ci/token-cleanup` is the operator's tool for that, dry by default | Zero objects on both partitions after a full run, checked with `ci/token-cleanup -adapter luna` |
 
