@@ -14,8 +14,8 @@
 # aquasec/trivy:0.74.0
 TRIVY_IMAGE="aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
 
-# semgrep/semgrep:1.177.0
-SEMGREP_IMAGE="semgrep/semgrep@sha256:acaac22ffc7b7cc5926de0751b223bce0b2491c33d18422fa72f632c78d81198"
+# semgrep/semgrep:1.178.0
+SEMGREP_IMAGE="semgrep/semgrep@sha256:32e459968daabe7ab86968184a29109b9564aa00392401156f9788452b42786b"
 
 # zricethezav/gitleaks:v8.30.1
 GITLEAKS_IMAGE="zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
