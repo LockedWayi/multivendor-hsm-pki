@@ -18,7 +18,7 @@ one interface with no vendor-specific code.
 |---|---|
 | **SoftHSM2** | Runs in CI on every push. No hardware, no SDK, reproducible by anyone. |
 | **Thales ProtectServer** | Thales ProtectToolkit-C 7.3.3 software emulation (`libctsw.so`, token model `SW:SWEMUL`), on the maintainer's own installation. Not an appliance. Maintainer-verified. |
-| **Thales Luna Network HSM 7** | Luna HSM Client 10.9.4 against two password-authenticated partitions (firmware 7.8.7) on the maintainer's own appliance. Hardware. Maintainer-verified. |
+| **Thales Luna Network HSM 7** | Luna HSM Client 10.9.4 against two password-authenticated partitions (firmware 7.8.7) on the maintainer's own appliance. Hardware. Maintainer-verified, with password authentication only: a PED-authenticated partition was not tested, and how login behaves on one is unmeasured. |
 
 Three implementations needed no vendor-specific code in the adapters, and
 the third was hardware. What Luna did differently was measured and either

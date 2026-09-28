@@ -140,8 +140,10 @@ between them:
   module loaded, the token resolved by label, the user login was
   established. Then a clean stop at the missing intermediate certificate,
   since no ceremony has been run against those tokens.
-- **Luna Network HSM 7** (client 10.9.4, firmware 7.8.7, two partitions
-  of the maintainer's appliance, 2026-09-24): the whole path. A ceremony
+- **Luna Network HSM 7** (client 10.9.4, firmware 7.8.7, two
+  password-authenticated partitions of the maintainer's appliance,
+  2026-09-24; a PED-authenticated partition was not tested, and how
+  login behaves on one is unmeasured): the whole path. A ceremony
   on the two partitions, the TLS identity, the OCSP key and the first
   operator certificate from the dev image; then this image, read-only
   root filesystem, every capability dropped, the client directory mounted

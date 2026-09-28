@@ -57,7 +57,10 @@ whole suite. **ProtectServer** runs through Thales ProtectToolkit-C 7.3.3
 software emulation, on the maintainer's own installation. **Luna** runs
 against two password-authenticated partitions of a Luna Network HSM 7
 (client 10.9.4, firmware 7.8.7) under the maintainer's own access, the
-first hardware in the rotation. nShield is planned and untested.
+first hardware in the rotation. Password authentication only: a
+partition that authenticates through a PIN Entry Device (PED) was not
+tested, so how login behaves there is unmeasured. nShield is planned and
+untested.
 
 All three adapters wrap the shared implementation with no overrides. What
 Luna did differently was measured, and none of it became a branch on a
@@ -76,7 +79,11 @@ model is expected to differ most.
 
 Luna HSM Client 10.9.4 (minimal client), `libCryptoki2.so`, against two
 partitions of the maintainer's own appliance, one V0 and one V1, password
-authentication, firmware 7.8.7. The module resolves every dependency
+authentication, firmware 7.8.7. Nothing here was measured on a
+PED-authenticated partition, where the credential is entered on a PIN
+Entry Device rather than passed to `C_Login`; the login shape on such a
+partition is unmeasured and none of this section should be read as
+covering it. The module resolves every dependency
 inside the dev image and reads its configuration from
 `ChrystokiConfigurationPath` at `C_Initialize`, so that variable has to be
 in the process environment before the module loads; the config layer
