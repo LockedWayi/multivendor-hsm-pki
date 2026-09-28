@@ -17,7 +17,7 @@
 # One digest across both files rather than two: a dev image whose Go differs
 # from the builder's is a suite that passes against a toolchain the shipped
 # binary is not compiled with. Bump them together.
-FROM golang:1.27-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b
+FROM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     softhsm2 opensc ca-certificates \
