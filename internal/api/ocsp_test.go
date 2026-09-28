@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,9 +88,14 @@ func postOCSP(t *testing.T, ts *testServers, req []byte) *http.Response {
 	return resp
 }
 
+// getOCSP sends req the way RFC 5019 §5 says a client does: base64, then
+// URL-encoded. Unencoded, a "//" in the base64 is collapsed to "/" by the
+// mux's path cleaning before the handler sees it, and the request arrives
+// malformed; with random serials and keys that happened about one run in
+// a hundred.
 func getOCSP(t *testing.T, ts *testServers, req []byte) *http.Response {
 	t.Helper()
-	resp, err := http.Get(ts.public.URL + api.OCSPPath + "/" + base64.StdEncoding.EncodeToString(req))
+	resp, err := http.Get(ts.public.URL + api.OCSPPath + "/" + url.PathEscape(base64.StdEncoding.EncodeToString(req)))
 	if err != nil {
 		t.Fatalf("GET /ocsp/...: %v", err)
 	}
@@ -159,6 +165,41 @@ func TestOCSP_GoodRevokedUnknownOverBothTransports(t *testing.T) {
 		}
 		if parsed.Status != ocsp.Unknown {
 			t.Fatalf("unknown: status = %d", parsed.Status)
+		}
+	})
+}
+
+// TestOCSP_GetSurvivesADoubleSlashInTheBase64: a GET request whose base64
+// contains "//" reaches the responder intact when it is URL-encoded, as RFC
+// 5019 §5 requires of the client. The serial is searched for rather than
+// drawn, so the case is exercised on every run instead of about one in a
+// hundred, which is how often random serials produced it before getOCSP
+// encoded its path.
+func TestOCSP_GetSurvivesADoubleSlashInTheBase64(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ts, _, _ := ocspServers(t, b, time.Hour)
+		defer ts.Close()
+		issuer := ts.ca.Certificate()
+
+		var req []byte
+		for n := int64(1); n < 1<<20; n++ {
+			stranger := &x509.Certificate{SerialNumber: big.NewInt(n), RawIssuer: issuer.RawSubject}
+			candidate := ocspRequest(t, stranger, issuer)
+			if strings.Contains(base64.StdEncoding.EncodeToString(candidate), "//") {
+				req = candidate
+				break
+			}
+		}
+		if req == nil {
+			t.Fatal("no serial below 2^20 gives a request whose base64 contains \"//\"")
+		}
+
+		parsed, err := ocsp.ParseResponse(readOCSP(t, getOCSP(t, ts, req)), issuer)
+		if err != nil {
+			t.Fatalf("GET with // in the base64: %v", err)
+		}
+		if parsed.Status != ocsp.Unknown {
+			t.Fatalf("GET with // in the base64: status = %d, want unknown", parsed.Status)
 		}
 	})
 }
