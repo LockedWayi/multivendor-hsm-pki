@@ -37,7 +37,7 @@ func ceremonyArgs(t *testing.T, b *hsmtest.Backend, dir string) []string {
 	// ProtectToolkit refuses a second C_Initialize in one process.
 	b.Release()
 	return []string{
-		"-adapter", b.AdapterName,
+		"-adapter", b.AdapterName, "-role", b.Role.Name(),
 		"-module", b.ModulePath,
 		"-root-workspace", b.Secondary.Label,
 		"-root-pin-env", rootPINEnv,

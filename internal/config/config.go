@@ -105,10 +105,17 @@ type SessionConfig struct {
 
 // VendorConfig configures one PKCS#11 backend. PINEnv names the environment
 // variable the login PIN is read from, never a literal PIN value.
+//
+// Role names the identity the service logs into its token as: empty or
+// "co" is the Crypto Officer, and pkcs11.luna also accepts "lco" and "cu".
+// It is in the configuration, not in code, so the identity the service
+// holds its token open as is something an operator chose and a reviewer
+// can read.
 type VendorConfig struct {
 	ModulePath     string `yaml:"module_path"`
 	WorkspaceLabel string `yaml:"workspace_label"`
 	PINEnv         string `yaml:"pin_env"`
+	Role           string `yaml:"role"`
 }
 
 // CAConfig configures issuance and where the service's signing identity
@@ -217,6 +224,11 @@ func Load(path string) (*Config, error) {
 	}
 	if vendor.PINEnv == "" {
 		return nil, fmt.Errorf("config: pkcs11.%s.pin_env is empty", c.PKCS11.Adapter)
+	}
+	// A role this adapter does not define is refused here, before the
+	// module loads, rather than at C_Login or not at all.
+	if _, err := pkcs11.RoleByName(c.PKCS11.Adapter, vendor.Role); err != nil {
+		return nil, fmt.Errorf("config: pkcs11.%s.role: %w", c.PKCS11.Adapter, err)
 	}
 	// Present but empty is checked too. LookupEnv reports true for PIN="",
 	// and the failure would otherwise surface at the token login.
@@ -512,6 +524,16 @@ func (c *Config) NewVendorAdapter() (pkcs11.VendorAdapter, error) {
 		return nil, err
 	}
 	return pkcs11.NewAdapterByName(c.PKCS11.Adapter, vendor.ModulePath)
+}
+
+// LoginRole returns the identity pkcs11.<adapter>.role names. Load already
+// validated it.
+func (c *Config) LoginRole() (pkcs11.LoginRole, error) {
+	vendor, err := c.PKCS11.selectedVendor()
+	if err != nil {
+		return pkcs11.LoginRole{}, err
+	}
+	return pkcs11.RoleByName(c.PKCS11.Adapter, vendor.Role)
 }
 
 // ResolvePIN reads the PIN from the configured environment variable at the

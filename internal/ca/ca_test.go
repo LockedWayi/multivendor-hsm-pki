@@ -48,7 +48,7 @@ func newTestCAWithRoot(t *testing.T, b *ceremonyBackend) (*ca.CA, []byte) {
 		t.Fatalf("parsing intermediate certificate: %v", err)
 	}
 
-	if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), pk11.RoleUser); err != nil {
+	if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), b.role.Role()); err != nil {
 		t.Fatalf("LoginToken (intermediate): %v", err)
 	}
 	t.Cleanup(func() { _ = b.adapter.LogoutToken(ctx) })

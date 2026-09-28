@@ -176,8 +176,14 @@ What a vendor must provide before it can join `hsmtest`'s registry:
    suite, which needs one token and a wrong PIN: `<VENDOR>_WORKSPACE` and
    `<VENDOR>_PIN`. Plus whatever the module itself reads from the process
    environment: `ET_PTKC_SW_DATAPATH` for the ProtectToolkit emulator,
-   `ChrystokiConfigurationPath` for Luna, and `LUNA_ROLE` (`co`, `lco`,
-   `cu`) for the role the conformance suite logs in as. **`<VENDOR>_MODULE`
+   `ChrystokiConfigurationPath` for Luna. Luna runs twice, once per role,
+   as the backends `Luna` (the Crypto Officer, with the variables above)
+   and `LunaLCO` (the Limited Crypto Officer: `LUNA_LCO_ROOT_WORKSPACE`, a
+   second V1 partition for the root, since the LCO exists only on V1;
+   `LUNA_LCO_ROOT_PIN`, `LUNA_LCO_INTERMEDIATE_PIN` for the LCO on
+   `LUNA_INTERMEDIATE_WORKSPACE`, and `LUNA_LCO_PIN` for the LCO on
+   `LUNA_WORKSPACE`). `LUNA_ROLE`, which chose one role for a whole run,
+   was removed on 2026-09-28. **`<VENDOR>_MODULE`
    unset means skip.** Set, with any of the others missing, means fail:
    a half-configured backend is a configuration error, not an absent
    backend, and a run that quietly dropped the vendor is the run this
@@ -321,8 +327,10 @@ ProtectServer variables, not the five the ceremony harness reads: with
 suite fails closed on a half-configured backend rather than skipping. For
 Luna, all of `LUNA_MODULE`, `ChrystokiConfigurationPath`,
 `LUNA_ROOT_WORKSPACE`, `LUNA_INTERMEDIATE_WORKSPACE`, `LUNA_ROOT_PIN`,
-`LUNA_INTERMEDIATE_PIN`, `LUNA_WORKSPACE` and `LUNA_PIN`; `LUNA_ROLE` is
-optional and defaults to the Crypto Officer. The Luna client directory is
+`LUNA_INTERMEDIATE_PIN`, `LUNA_WORKSPACE` and `LUNA_PIN` for the Crypto
+Officer, and `LUNA_LCO_ROOT_WORKSPACE`, `LUNA_LCO_ROOT_PIN`,
+`LUNA_LCO_INTERMEDIATE_PIN` and `LUNA_LCO_PIN` for the Limited Crypto
+Officer; with the module set, any one missing fails. The Luna client directory is
 mounted at the same path inside the container as outside, because
 `ChrystokiConfigurationPath` and the certificate paths in `Chrystoki.conf`
 are absolute; the container reaches the appliance through the host's
@@ -335,9 +343,10 @@ docker run --rm -v "$PWD":/repo -w /repo \
   -e PROTECTSERVER_MODULE=... -e PROTECTSERVER_WORKSPACE=... -e PROTECTSERVER_PIN \
   -e PROTECTSERVER_ROOT_WORKSPACE=... -e PROTECTSERVER_INTERMEDIATE_WORKSPACE=... \
   -e PROTECTSERVER_ROOT_PIN -e PROTECTSERVER_INTERMEDIATE_PIN \
-  -e ChrystokiConfigurationPath -e LUNA_MODULE -e LUNA_ROLE \
+  -e ChrystokiConfigurationPath -e LUNA_MODULE \
   -e LUNA_ROOT_WORKSPACE -e LUNA_INTERMEDIATE_WORKSPACE -e LUNA_WORKSPACE \
   -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN -e LUNA_PIN \
+  -e LUNA_LCO_ROOT_WORKSPACE -e LUNA_LCO_ROOT_PIN -e LUNA_LCO_INTERMEDIATE_PIN -e LUNA_LCO_PIN \
   hsm-pki-dev go test -race -p 1 -count=1 -timeout 180s ./...
 ```
 

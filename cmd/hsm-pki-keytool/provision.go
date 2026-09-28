@@ -29,6 +29,7 @@ func runProvisionSigningKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("provision-signing-key", flag.ExitOnError)
 
 	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	curveName := fs.String("curve", "P-256", "EC curve for the key pair: P-256, P-384, or P-521")
 
@@ -39,6 +40,10 @@ func runProvisionSigningKeyCmd(args []string) error {
 	publicKeyOut := fs.String("public-key-out", "", "path to write the public key PEM")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	role, err := pk11.RoleByName(*adapterName, *roleName)
+	if err != nil {
 		return err
 	}
 
@@ -79,7 +84,7 @@ func runProvisionSigningKeyCmd(args []string) error {
 		return err
 	}
 
-	key, provisionErr := provisionSigningKey(ctx, adapter, ws, pinResolver(*pinEnv), signingkey.Params{
+	key, provisionErr := provisionSigningKey(ctx, adapter, ws, pinResolver(*pinEnv), role, signingkey.Params{
 		Label: *keyLabel,
 		Curve: curve,
 	})
@@ -105,7 +110,7 @@ func runProvisionSigningKeyCmd(args []string) error {
 // provisionSigningKey holds the token's login for one provisioning and
 // gives it back afterwards, on every path. It may return a valid Key with
 // a non-nil error: a failed logout does not un-generate the key pair.
-func provisionSigningKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), params signingkey.Params) (key signingkey.Key, err error) {
+func provisionSigningKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), role pk11.LoginRole, params signingkey.Params) (key signingkey.Key, err error) {
 	if adapter.TokenLoggedIn() {
 		return signingkey.Key{}, fmt.Errorf("a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
 	}
@@ -114,8 +119,8 @@ func provisionSigningKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk1
 		return signingkey.Key{}, fmt.Errorf("resolving PIN for %q: %w", ws.Label, err)
 	}
 	// LoginToken zeroes pin.
-	if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
-		return signingkey.Key{}, fmt.Errorf("logging into %q: %w", ws.Label, err)
+	if err := loginAs(ctx, adapter, ws, pin, role); err != nil {
+		return signingkey.Key{}, err
 	}
 	defer func() {
 		logoutErr := adapter.LogoutToken(ctx)

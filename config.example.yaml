@@ -114,11 +114,17 @@ pkcs11:
     # libCryptoki2.so from the Luna HSM Client (minimal client shown).
     module_path: "/opt/luna/libs/64/libCryptoki2.so"
     # The partition's label, as assigned on the appliance and shown by
-    # `lunacm:> slot list`. The service logs in as the Crypto Officer.
+    # `lunacm:> slot list`.
     workspace_label: "CHANGE_ME"
-    # Environment variable holding the Crypto Officer's password, not the
+    # Environment variable holding the password of the role below, not the
     # password itself. Luna enforces a minimum length of 8.
     pin_env: "LUNA_PIN"
+    # The identity the service holds its partition open as: "co" (Crypto
+    # Officer, the default), "lco" (Limited Crypto Officer, V1 partitions
+    # only) or "cu" (Crypto User). Set here rather than in code so it can
+    # be read and reviewed; the service also logs it at startup. The other
+    # adapters accept "co" only and refuse anything else.
+    role: "co"
 
 ca:
   # ECDSA P-256 is the default curve; P-384 is available where a larger

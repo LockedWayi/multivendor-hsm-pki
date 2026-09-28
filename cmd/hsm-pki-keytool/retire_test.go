@@ -66,7 +66,7 @@ func retireArgs(t *testing.T, b *hsmtest.Backend, keyLabel, inventoryPath string
 	t.Setenv(pinEnv, b.PrimaryPIN)
 	b.Release()
 	return []string{
-		"-adapter", b.AdapterName,
+		"-adapter", b.AdapterName, "-role", b.Role.Name(),
 		"-module", b.ModulePath,
 		"-workspace", b.Primary.Label,
 		"-pin-env", pinEnv,

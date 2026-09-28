@@ -69,6 +69,7 @@ func runCeremonyCmd(args []string) error {
 	fs := flag.NewFlagSet("ceremony", flag.ExitOnError)
 
 	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	curveName := fs.String("curve", "P-256", "EC curve for both key pairs: P-256, P-384, or P-521")
 
@@ -91,6 +92,10 @@ func runCeremonyCmd(args []string) error {
 	interCertOut := fs.String("intermediate-cert-out", "", "path to write the intermediate certificate PEM")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	role, err := pk11.RoleByName(*adapterName, *roleName)
+	if err != nil {
 		return err
 	}
 
@@ -145,6 +150,7 @@ func runCeremonyCmd(args []string) error {
 		RootCRLURL:         *rootCRLURL,
 		RootCertURL:        *rootCertURL,
 		RootKeyExtractable: *rootKeyExtractable,
+		Role:               role,
 
 		IntermediateWorkspace: interWS,
 		IntermediatePIN:       pinResolver(*interPINEnv),

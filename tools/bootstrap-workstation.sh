@@ -15,7 +15,8 @@
 # emulator on this host, which needs the seven PROTECTSERVER_* variables
 # docs/test-matrix.md section 6 lists. --with-luna adds a Luna client and
 # its two partitions, which needs the eight LUNA_* variables and
-# ChrystokiConfigurationPath from the same section (LUNA_ROLE is optional),
+# ChrystokiConfigurationPath from the same section, and the four LUNA_LCO_*
+# variables of the Limited Crypto Officer run (LunaLCO),
 # with the client directory (LUNA_CLIENT_DIR, default $HOME/luna) mounted
 # at the same path inside the image, because the paths in Chrystoki.conf
 # are absolute. With any variable unset either flag is refused rather than
@@ -106,13 +107,14 @@ if [ "$WITH_PROTECTSERVER" -eq 1 ]; then
 fi
 if [ "$WITH_LUNA" -eq 1 ]; then
     for v in LUNA_MODULE ChrystokiConfigurationPath LUNA_WORKSPACE LUNA_PIN \
-             LUNA_ROOT_WORKSPACE LUNA_INTERMEDIATE_WORKSPACE LUNA_ROOT_PIN LUNA_INTERMEDIATE_PIN; do
+             LUNA_ROOT_WORKSPACE LUNA_INTERMEDIATE_WORKSPACE LUNA_ROOT_PIN LUNA_INTERMEDIATE_PIN \
+             LUNA_LCO_ROOT_WORKSPACE LUNA_LCO_ROOT_PIN LUNA_LCO_INTERMEDIATE_PIN LUNA_LCO_PIN; do
         [ -n "${!v:-}" ] || fail "--with-luna needs $v set (docs/test-matrix.md, section 6, lists them)"
     done
     [ -d "$LUNA_CLIENT_DIR" ] || fail "LUNA_CLIENT_DIR=$LUNA_CLIENT_DIR does not exist"
     case "$LUNA_MODULE" in "$LUNA_CLIENT_DIR"/*) ;; *) fail "LUNA_MODULE=$LUNA_MODULE is not under LUNA_CLIENT_DIR=$LUNA_CLIENT_DIR, so the image cannot see it" ;; esac
     case "${ChrystokiConfigurationPath:-}" in "$LUNA_CLIENT_DIR"/*) ;; *) fail "ChrystokiConfigurationPath=${ChrystokiConfigurationPath:-} is not under LUNA_CLIENT_DIR=$LUNA_CLIENT_DIR, so the image cannot see it" ;; esac
-    echo "    Luna: module $LUNA_MODULE, client $LUNA_CLIENT_DIR, role ${LUNA_ROLE:-co}"
+    echo "    Luna: module $LUNA_MODULE, client $LUNA_CLIENT_DIR, as the Crypto Officer (Luna) and the Limited Crypto Officer (LunaLCO)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -148,10 +150,12 @@ if [ "$WITH_LUNA" -eq 1 ]; then
     # by absolute path. Read-write, because the client keeps a lock file
     # and its STC state under the configuration directory.
     run_args+=(-v "$LUNA_CLIENT_DIR":"$LUNA_CLIENT_DIR"
-               -e ChrystokiConfigurationPath -e LUNA_MODULE -e LUNA_ROLE
+               -e ChrystokiConfigurationPath -e LUNA_MODULE
                -e LUNA_WORKSPACE -e LUNA_PIN
                -e LUNA_ROOT_WORKSPACE -e LUNA_INTERMEDIATE_WORKSPACE
-               -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN)
+               -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN
+               -e LUNA_LCO_ROOT_WORKSPACE -e LUNA_LCO_ROOT_PIN
+               -e LUNA_LCO_INTERMEDIATE_PIN -e LUNA_LCO_PIN)
 fi
 suite_status=0
 docker run "${run_args[@]}" "$DEV_IMAGE" sh -c '
@@ -168,7 +172,7 @@ count_backend() {
     local backend="$1" kind="$2"
     grep -cE "^    --- $kind: Test[A-Za-z0-9_]+/$backend " "$LOG_DIR/suite.log" || true
 }
-for backend in SoftHSM2 ProtectServer Luna; do
+for backend in SoftHSM2 ProtectServer Luna LunaLCO; do
     printf '    %-14s passed %3s  skipped %3s  failed %3s\n' "$backend" \
         "$(count_backend "$backend" PASS)" "$(count_backend "$backend" SKIP)" "$(count_backend "$backend" FAIL)"
 done
@@ -194,8 +198,11 @@ fi
 if [ "$WITH_PROTECTSERVER" -eq 1 ] && [ "$(count_backend ProtectServer PASS)" -eq 0 ]; then
     fail "--with-protectserver was given but no ProtectServer subtest ran; check the variables against docs/test-matrix.md"
 fi
-if [ "$WITH_LUNA" -eq 1 ] && [ "$(count_backend Luna PASS)" -eq 0 ]; then
-    fail "--with-luna was given but no Luna subtest ran; check the variables against docs/test-matrix.md"
+if [ "$WITH_LUNA" -eq 1 ]; then
+    for backend in Luna LunaLCO; do
+        [ "$(count_backend "$backend" PASS)" -gt 0 ] ||
+            fail "--with-luna was given but no $backend subtest ran; check the variables against docs/test-matrix.md"
+    done
 fi
 
 # ---------------------------------------------------------------------------

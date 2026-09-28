@@ -26,7 +26,7 @@ func newTestAdapter(t *testing.T, b *ceremonyBackend) (pk11.VendorAdapter, pk11.
 	// LoginToken is not idempotent, so an already authenticated backend is
 	// left alone.
 	if !b.adapter.TokenLoggedIn() {
-		if err := b.adapter.LoginToken(context.Background(), b.interWS, []byte(b.interPIN), pk11.RoleUser); err != nil {
+		if err := b.adapter.LoginToken(context.Background(), b.interWS, []byte(b.interPIN), b.role.Role()); err != nil {
 			t.Fatalf("LoginToken: %v", err)
 		}
 		t.Cleanup(func() { _ = b.adapter.LogoutToken(context.Background()) })

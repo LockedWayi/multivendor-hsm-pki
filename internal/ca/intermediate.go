@@ -20,6 +20,9 @@ type LoadIntermediateParams struct {
 	// KeyLabel is the CKA_LABEL of the intermediate's key pair on the token
 	// this service authenticates.
 	KeyLabel string
+	// Role is the identity the service logs into its token as. The zero
+	// value is the Crypto Officer.
+	Role pk11.LoginRole
 	// CertPath is the ceremony-produced intermediate certificate, PEM. It
 	// holds no private key material.
 	CertPath string
@@ -55,8 +58,8 @@ func LoadIntermediate(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.W
 		if err != nil {
 			return nil, fmt.Errorf("ca: resolving PIN: %w", err)
 		}
-		if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
-			return nil, fmt.Errorf("ca: token login: %w", err)
+		if err := adapter.LoginToken(ctx, ws, pin, params.Role.Role()); err != nil {
+			return nil, fmt.Errorf("ca: token login as %q: %w", params.Role.Name(), params.Role.Explain(err))
 		}
 	}
 

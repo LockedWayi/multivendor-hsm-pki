@@ -40,6 +40,7 @@ func runRetireSigningKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("retire-signing-key", flag.ExitOnError)
 
 	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 
 	workspaceLabel := fs.String("workspace", "", "token label holding the key; the supply-chain token")
@@ -49,6 +50,10 @@ func runRetireSigningKeyCmd(args []string) error {
 	inventoryPath := fs.String("inventory", "", "the current published key inventory; the key must be listed there as verify-only")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	role, err := pk11.RoleByName(*adapterName, *roleName)
+	if err != nil {
 		return err
 	}
 	for name, v := range map[string]string{
@@ -91,7 +96,7 @@ func runRetireSigningKeyCmd(args []string) error {
 		return err
 	}
 
-	destroyed, err := retireSigningKey(ctx, adapter, ws, pinResolver(*pinEnv), *keyLabel, curve, listed)
+	destroyed, err := retireSigningKey(ctx, adapter, ws, pinResolver(*pinEnv), role, *keyLabel, curve, listed)
 	if err != nil {
 		return err
 	}
@@ -147,7 +152,7 @@ func retirableEntry(path, label string) (inventory.Entry, error) {
 // retireSigningKey holds the token's login for one destruction and gives
 // it back afterwards, on every path. The private half goes first, so a
 // failure part-way leaves a key that cannot sign rather than one that can.
-func retireSigningKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), label string, curve pk11.ECCurve, listed *ecdsa.PublicKey) (destroyed signingkey.Destroyed, err error) {
+func retireSigningKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), role pk11.LoginRole, label string, curve pk11.ECCurve, listed *ecdsa.PublicKey) (destroyed signingkey.Destroyed, err error) {
 	if adapter.TokenLoggedIn() {
 		return signingkey.Destroyed{}, fmt.Errorf("a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
 	}
@@ -156,8 +161,8 @@ func retireSigningKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.W
 		return signingkey.Destroyed{}, fmt.Errorf("resolving PIN for %q: %w", ws.Label, err)
 	}
 	// LoginToken zeroes pin.
-	if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
-		return signingkey.Destroyed{}, fmt.Errorf("logging into %q: %w", ws.Label, err)
+	if err := loginAs(ctx, adapter, ws, pin, role); err != nil {
+		return signingkey.Destroyed{}, err
 	}
 	defer func() {
 		logoutErr := adapter.LogoutToken(ctx)

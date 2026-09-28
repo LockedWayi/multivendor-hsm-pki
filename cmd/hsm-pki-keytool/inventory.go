@@ -63,6 +63,7 @@ func runGenerateInventoryCmd(args []string) error {
 	fs := flag.NewFlagSet("generate-inventory", flag.ExitOnError)
 
 	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	curveName := fs.String("curve", "P-256", "EC curve the listed keys were generated on: P-256, P-384, or P-521")
 
@@ -84,6 +85,10 @@ func runGenerateInventoryCmd(args []string) error {
 	sigPath := fs.String("signature-out", "", "path to write the detached signature")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	role, err := pk11.RoleByName(*adapterName, *roleName)
+	if err != nil {
 		return err
 	}
 
@@ -157,7 +162,7 @@ func runGenerateInventoryCmd(args []string) error {
 			keyWS.Serial)
 	}
 
-	entries, err := readEntries(ctx, adapter, keyWS, pinResolver(*pinEnv), curve, keys, previous, *invKeyLabel)
+	entries, err := readEntries(ctx, adapter, keyWS, pinResolver(*pinEnv), role, curve, keys, previous, *invKeyLabel)
 	if err != nil {
 		return err
 	}
@@ -179,7 +184,7 @@ func runGenerateInventoryCmd(args []string) error {
 		return err
 	}
 
-	signature, signerPub, err := signInventory(ctx, adapter, invWS, pinResolver(*invPINEnv), *invKeyLabel, document)
+	signature, signerPub, err := signInventory(ctx, adapter, invWS, pinResolver(*invPINEnv), role, *invKeyLabel, document)
 	if err != nil {
 		return err
 	}
@@ -208,7 +213,7 @@ func runGenerateInventoryCmd(args []string) error {
 // public half comes off the token. A retired key's comes from the previous
 // document, because the key has been destroyed. A key listed as retired
 // that is still on the token is an error.
-func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), curve pk11.ECCurve, specs keySpecs, previous *inventory.Inventory, invKeyLabel string) (entries []inventory.Entry, err error) {
+func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), role pk11.LoginRole, curve pk11.ECCurve, specs keySpecs, previous *inventory.Inventory, invKeyLabel string) (entries []inventory.Entry, err error) {
 	prior := map[string]inventory.Entry{}
 	if previous != nil {
 		for _, e := range previous.Keys {
@@ -223,8 +228,8 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 	if err != nil {
 		return nil, fmt.Errorf("resolving PIN for %q: %w", ws.Label, err)
 	}
-	if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
-		return nil, fmt.Errorf("logging into %q: %w", ws.Label, err)
+	if err := loginAs(ctx, adapter, ws, pin, role); err != nil {
+		return nil, err
 	}
 	defer func() {
 		if logoutErr := adapter.LogoutToken(ctx); logoutErr != nil && err == nil {
@@ -323,7 +328,7 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 // check the signature before publishing it. The signature is ECDSA P-256
 // over SHA-256 regardless of -curve: that flag describes the listed keys,
 // and the digest algorithm is part of the published verification recipe.
-func signInventory(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), keyLabel string, document []byte) (sig []byte, pub *ecdsa.PublicKey, err error) {
+func signInventory(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN func() ([]byte, error), role pk11.LoginRole, keyLabel string, document []byte) (sig []byte, pub *ecdsa.PublicKey, err error) {
 	if adapter.TokenLoggedIn() {
 		return nil, nil, fmt.Errorf("a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
 	}
@@ -331,8 +336,8 @@ func signInventory(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Work
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolving PIN for %q: %w", ws.Label, err)
 	}
-	if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
-		return nil, nil, fmt.Errorf("logging into %q: %w", ws.Label, err)
+	if err := loginAs(ctx, adapter, ws, pin, role); err != nil {
+		return nil, nil, err
 	}
 	defer func() {
 		if logoutErr := adapter.LogoutToken(ctx); logoutErr != nil && err == nil {

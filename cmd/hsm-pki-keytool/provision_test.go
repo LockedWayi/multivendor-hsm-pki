@@ -26,7 +26,7 @@ func provisionArgs(t *testing.T, b *hsmtest.Backend, dir, keyLabel string) []str
 	t.Setenv(pinEnv, b.PrimaryPIN)
 	b.Release()
 	return []string{
-		"-adapter", b.AdapterName,
+		"-adapter", b.AdapterName, "-role", b.Role.Name(),
 		"-module", b.ModulePath,
 		"-workspace", b.Primary.Label,
 		"-pin-env", pinEnv,
@@ -129,7 +129,7 @@ func TestRunProvisionSigningKeyCmd_RefusesTheCAsToken(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenSession: %v", err)
 		}
-		if err := b.Adapter.Login(ctx, s, []byte(b.PrimaryPIN), pk11.RoleUser); err != nil {
+		if err := b.Adapter.Login(ctx, s, []byte(b.PrimaryPIN), b.Role.Role()); err != nil {
 			t.Fatalf("Login: %v", err)
 		}
 		if _, err := b.Adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
@@ -227,7 +227,7 @@ func assertLabelIsFree(t *testing.T, b *hsmtest.Backend, label string) {
 	if err != nil {
 		t.Fatalf("findWorkspace: %v", err)
 	}
-	if err := adapter.LoginToken(ctx, ws, []byte(b.PrimaryPIN), pk11.RoleUser); err != nil {
+	if err := adapter.LoginToken(ctx, ws, []byte(b.PrimaryPIN), b.Role.Role()); err != nil {
 		t.Fatalf("LoginToken: %v", err)
 	}
 	defer func() { _ = adapter.LogoutToken(ctx) }()

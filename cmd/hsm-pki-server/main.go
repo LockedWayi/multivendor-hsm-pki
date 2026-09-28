@@ -83,10 +83,15 @@ func run(configPath string, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// ws.Label is an operator-assigned token label, never the PIN.
+	// ws.Label is an operator-assigned token label, never the PIN. The
+	// role is logged because which identity the service holds its token
+	// open as is a security property an operator should be able to read
+	// from the log as well as from the configuration.
+	role, _ := cfg.LoginRole()
 	logger.Info("connected to HSM",
 		"adapter", cfg.PKCS11.Adapter,
 		"workspace", ws.Label,
+		"role", role.Name(),
 	)
 
 	// The paths belong to internal/api and the origin to the operator; the
@@ -101,6 +106,7 @@ func run(configPath string, logger *slog.Logger) error {
 	// a CA. A self-signed certificate fails here.
 	caInstance, err := ca.LoadIntermediate(ctx, adapter, ws, cfg.PKCS11.SessionOptions, cfg.ResolvePIN, ca.LoadIntermediateParams{
 		KeyLabel:     cfg.CA.IntermediateKeyLabel,
+		Role:         role,
 		CertPath:     cfg.CA.IntermediateCertPath,
 		Curve:        cfg.CA.Curve(),
 		CertTTL:      time.Duration(cfg.CA.CertTTLHours) * time.Hour,
@@ -310,12 +316,16 @@ func verifyHSMConnection(ctx context.Context, cfg *config.Config, adapter pkcs11
 	}
 	ws := matches[0]
 
+	role, err := cfg.LoginRole()
+	if err != nil {
+		return pkcs11.Workspace{}, err
+	}
 	pin, err := cfg.ResolvePIN()
 	if err != nil {
 		return pkcs11.Workspace{}, err
 	}
-	if err := adapter.LoginToken(ctx, ws, pin, pkcs11.RoleUser); err != nil {
-		return pkcs11.Workspace{}, err
+	if err := adapter.LoginToken(ctx, ws, pin, role.Role()); err != nil {
+		return pkcs11.Workspace{}, fmt.Errorf("token login as %q: %w", role.Name(), role.Explain(err))
 	}
 
 	return ws, nil

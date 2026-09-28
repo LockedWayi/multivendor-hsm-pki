@@ -41,6 +41,7 @@ func newTestCAAt(t *testing.T, b *hsmtest.Backend, baseURL string) (*ca.CA, pk11
 	result, err := ca.RunCeremony(ctx, b.Adapter, pk11.SessionOptions{}, ca.CeremonyParams{
 		RootWorkspace: b.Secondary,
 		RootPIN:       b.SecondaryPINFunc(),
+		Role:          b.Role,
 		RootKeyLabel:  b.Label("api-root-key-v1"),
 		RootSubject:   pkix.Name{CommonName: "hsm-pki-platform api test Root CA"},
 		RootCurve:     pk11.P256,
@@ -66,6 +67,7 @@ func newTestCAAt(t *testing.T, b *hsmtest.Backend, baseURL string) (*ca.CA, pk11
 	// Loaded the way cmd/hsm-pki-server does.
 	c, err := ca.LoadIntermediate(ctx, b.Adapter, b.Primary, pk11.SessionOptions{}, b.PrimaryPINFunc(), ca.LoadIntermediateParams{
 		KeyLabel:     interKeyLabel,
+		Role:         b.Role,
 		CertPath:     interCertPath,
 		Curve:        pk11.P256,
 		CertTTL:      time.Hour,

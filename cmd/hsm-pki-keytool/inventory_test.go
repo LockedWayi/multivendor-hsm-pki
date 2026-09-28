@@ -26,7 +26,7 @@ func provisionOn(t *testing.T, b *hsmtest.Backend, ws pk11.Workspace, pin, label
 		t.Fatalf("OpenSession(%s): %v", ws.Label, err)
 	}
 	defer func() { _ = b.Adapter.CloseSession(ctx, s) }()
-	if err := b.Adapter.Login(ctx, s, []byte(pin), pk11.RoleUser); err != nil {
+	if err := b.Adapter.Login(ctx, s, []byte(pin), b.Role.Role()); err != nil {
 		t.Fatalf("Login(%s): %v", ws.Label, err)
 	}
 	defer func() { _ = b.Adapter.LogoutToken(ctx) }()
@@ -79,7 +79,7 @@ func newInventoryFixture(t *testing.T, b *hsmtest.Backend) inventoryFixture {
 	b.Release()
 
 	f.args = []string{
-		"-adapter", b.AdapterName,
+		"-adapter", b.AdapterName, "-role", b.Role.Name(),
 		"-module", b.ModulePath,
 		"-workspace", b.Primary.Label,
 		"-pin-env", keyPINEnv,
