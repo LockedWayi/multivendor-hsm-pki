@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -695,5 +696,55 @@ func TestExampleConfig_NamesEveryAdapter(t *testing.T) {
 	}
 	if selected, _ := doc.PKCS11["adapter"].(string); !slices.Contains(everyAdapter, selected) {
 		t.Errorf("config.example.yaml selects pkcs11.adapter %q, which is not an accepted name", selected)
+	}
+}
+
+// pkcs11.<adapter>.role: absent is the Crypto Officer; a Luna role is
+// accepted under pkcs11.luna; the same name under another adapter, or an
+// unknown name, fails Load before any module is loaded.
+func TestLoad_Role(t *testing.T) {
+	lunaConfig := strings.NewReplacer(
+		`adapter: "softhsm2"`, `adapter: "luna"`,
+		"  softhsm2:\n", "  luna:\n",
+	).Replace(validSoftHSM2Config)
+	withRole := func(body, role string) string {
+		return strings.Replace(body, `    pin_env: "TEST_SOFTHSM2_PIN"`+"\n",
+			`    pin_env: "TEST_SOFTHSM2_PIN"`+"\n"+`    role: "`+role+`"`+"\n", 1)
+	}
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+
+	cases := []struct {
+		name, body string
+		wantRole   pkcs11.Role
+		wantName   string
+		wantErr    string
+	}{
+		{"absent is the Crypto Officer", validSoftHSM2Config, pkcs11.RoleUser, "co", ""},
+		{"co on softhsm2", withRole(validSoftHSM2Config, "co"), pkcs11.RoleUser, "co", ""},
+		{"lco on luna", withRole(lunaConfig, "lco"), pkcs11.LunaRoleLimitedCryptoOfficer, "lco", ""},
+		{"cu on luna", withRole(lunaConfig, "cu"), pkcs11.LunaRoleCryptoUser, "cu", ""},
+		{"lco on softhsm2 is refused", withRole(validSoftHSM2Config, "lco"), 0, "", "pkcs11.softhsm2.role"},
+		{"an unknown name is refused", withRole(lunaConfig, "admin"), 0, "", "pkcs11.luna.role"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, c.body))
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) || !errors.Is(err, pkcs11.ErrUnknownRole) {
+					t.Fatalf("Load = %v, want ErrUnknownRole naming %s", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			role, err := cfg.LoginRole()
+			if err != nil {
+				t.Fatalf("LoginRole: %v", err)
+			}
+			if role.Role() != c.wantRole || role.Name() != c.wantName {
+				t.Fatalf("LoginRole = %q/%#x, want %q/%#x", role.Name(), role.Role(), c.wantName, c.wantRole)
+			}
+		})
 	}
 }

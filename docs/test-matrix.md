@@ -78,7 +78,8 @@ go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
 ```
 
 The same command with `ProtectServer` or `Luna` in place of `SoftHSM2`
-gives 134 for each (2026-09-28; 133 on 2026-09-24): every top-level per-backend subtest runs
+gives 134 for each (2026-09-28; 133 on 2026-09-24), and so does `LunaLCO`,
+the same appliance as the Limited Crypto Officer: every top-level per-backend subtest runs
 on every registered backend. This is the top-level count, the one
 `tools/bootstrap-workstation.sh` reports. Counting every nested subtest
 under a backend as well (`--- PASS`/`SKIP` lines at any depth, the
@@ -176,8 +177,15 @@ What a vendor must provide before it can join `hsmtest`'s registry:
    suite, which needs one token and a wrong PIN: `<VENDOR>_WORKSPACE` and
    `<VENDOR>_PIN`. Plus whatever the module itself reads from the process
    environment: `ET_PTKC_SW_DATAPATH` for the ProtectToolkit emulator,
-   `ChrystokiConfigurationPath` for Luna, and `LUNA_ROLE` (`co`, `lco`,
-   `cu`) for the role the conformance suite logs in as. **`<VENDOR>_MODULE`
+   `ChrystokiConfigurationPath` for Luna. Luna runs twice, once per role,
+   as the backends `Luna` (the Crypto Officer, with the variables above)
+   and `LunaLCO` (the Limited Crypto Officer: `LUNA_LCO_ROOT_WORKSPACE`, a
+   second V1 partition for the root, since the LCO exists only on V1;
+   `LUNA_LCO_ROOT_PIN`, `LUNA_LCO_INTERMEDIATE_PIN` for the LCO on
+   `LUNA_INTERMEDIATE_WORKSPACE`, and `LUNA_LCO_PIN` for the LCO on
+   `LUNA_WORKSPACE`), plus `LUNA_V0_WORKSPACE`, a V0 partition on which
+   the LCO's refusal is checked every run. `LUNA_ROLE`, which chose one
+   role for a whole run, was removed on 2026-09-28. **`<VENDOR>_MODULE`
    unset means skip.** Set, with any of the others missing, means fail:
    a half-configured backend is a configuration error, not an absent
    backend, and a run that quietly dropped the vendor is the run this
@@ -284,7 +292,7 @@ row first of all, is unmeasured there.
 | Protection attributes on generation | Ask the token, not the template. Generate with `CKA_SENSITIVE=true` and `CKA_EXTRACTABLE=false`, then read both back with `C_GetAttributeValue`. Every backend honours them on generation. ProtectToolkit-C ignored `CKA_EXTRACTABLE=false` on unwrap when first measured (2026-08-31) and honoured it on 2026-09-24, same emulator version; the two paths are still checked separately and the unwrap one is a declaration the suite measures | Honoured on generation. The unwrap path could not be measured for private keys (next row) |
 | Private-key wrapping | Wrap an extractable EC private key under an AES key | **Refused**, `CKR_KEY_NOT_WRAPPABLE`: partition policy "Allow private key wrapping" is off by default. Secret keys wrap. The suite declares the refusal and asserts it, failing if the wrap ever succeeds. The wrap-based backup in `key-ceremony-and-recovery.md` §5 needs that policy changed on Luna |
 | Unwrap template for a secret key | Unwrap an AES key with and without `CKA_VALUE_LEN` | **Requires** it, and reports its absence as `CKR_ATTRIBUTE_TYPE_INVALID`. SoftHSM2 refuses the same attribute as `CKR_ATTRIBUTE_READ_ONLY`; ProtectToolkit-C takes either. No single template serves all three; the suite declares it per backend |
-| Login identity | Which user type the credential logs in as | The Crypto Officer is `CKU_USER`; the Limited Crypto Officer is the vendor type `0x80000003` (`pkcs11.LunaRoleLimitedCryptoOfficer`). The conformance suite ran identically as either. A newly initialized role's password is expired: `C_Login` succeeds and the *next* call fails `CKR_PIN_EXPIRED`. Password authentication only; login on a PED-authenticated partition is unmeasured |
+| Login identity | Which user type the credential logs in as | The Crypto Officer is `CKU_USER`; the Limited Crypto Officer is the vendor type `0x80000003` (`pkcs11.LunaRoleLimitedCryptoOfficer`). Since 2026-09-28 every token-touching test runs as both (`Luna` and `LunaLCO`), the service, the ceremony and every keytool command included, and the LCO was refused nothing: 134 of 134 on V1 partitions. The one refusal is the login itself on a V0 partition, `CKR_USER_PIN_NOT_INITIALIZED` whatever the password, checked every run. A newly initialized role's password is expired: `C_Login` succeeds and the *next* call fails `CKR_PIN_EXPIRED`. Password authentication only; login on a PED-authenticated partition is unmeasured |
 | RNG reseeding across `C_Initialize` | Generate a key pair, close the library, reopen it, generate another. ProtectToolkit-C 7.3.3 **in software emulation** returns the same key pair both times. The RNG is seeded identically per `C_Initialize`, `C_GenerateRandom` included, so two keys provisioned by two runs are one key. SoftHSM2 reseeds. Check this on any new backend before trusting it with a key | Reseeds (`TestTokenRNG_ReseedsAcrossInitializeOrTheDuplicateCheckCatchesIt` passes, and the three tests that skip on the emulator for this reason run) |
 | Object accumulation | Tokens that persist between runs accumulate test keys. Both cleanups, `hsmtest.Backend.Cleanup` and the conformance suite's, destroy what a run created, and both **retry through a fresh connection** when the adapter has been closed by a test that closes it on purpose. With that retry, a full run on every backend leaves zero objects, measured on both software backends. Litter from before is not the suite's to delete. `ci/token-cleanup` is the operator's tool for that, dry by default | Zero objects on both partitions after a full run, checked with `ci/token-cleanup -adapter luna` |
 
@@ -321,8 +329,11 @@ ProtectServer variables, not the five the ceremony harness reads: with
 suite fails closed on a half-configured backend rather than skipping. For
 Luna, all of `LUNA_MODULE`, `ChrystokiConfigurationPath`,
 `LUNA_ROOT_WORKSPACE`, `LUNA_INTERMEDIATE_WORKSPACE`, `LUNA_ROOT_PIN`,
-`LUNA_INTERMEDIATE_PIN`, `LUNA_WORKSPACE` and `LUNA_PIN`; `LUNA_ROLE` is
-optional and defaults to the Crypto Officer. The Luna client directory is
+`LUNA_INTERMEDIATE_PIN`, `LUNA_WORKSPACE` and `LUNA_PIN` for the Crypto
+Officer, and `LUNA_LCO_ROOT_WORKSPACE`, `LUNA_LCO_ROOT_PIN`,
+`LUNA_LCO_INTERMEDIATE_PIN` and `LUNA_LCO_PIN` for the Limited Crypto
+Officer, and `LUNA_V0_WORKSPACE`; with the module set, any one missing
+fails. The Luna client directory is
 mounted at the same path inside the container as outside, because
 `ChrystokiConfigurationPath` and the certificate paths in `Chrystoki.conf`
 are absolute; the container reaches the appliance through the host's
@@ -335,9 +346,11 @@ docker run --rm -v "$PWD":/repo -w /repo \
   -e PROTECTSERVER_MODULE=... -e PROTECTSERVER_WORKSPACE=... -e PROTECTSERVER_PIN \
   -e PROTECTSERVER_ROOT_WORKSPACE=... -e PROTECTSERVER_INTERMEDIATE_WORKSPACE=... \
   -e PROTECTSERVER_ROOT_PIN -e PROTECTSERVER_INTERMEDIATE_PIN \
-  -e ChrystokiConfigurationPath -e LUNA_MODULE -e LUNA_ROLE \
+  -e ChrystokiConfigurationPath -e LUNA_MODULE \
   -e LUNA_ROOT_WORKSPACE -e LUNA_INTERMEDIATE_WORKSPACE -e LUNA_WORKSPACE \
   -e LUNA_ROOT_PIN -e LUNA_INTERMEDIATE_PIN -e LUNA_PIN \
+  -e LUNA_LCO_ROOT_WORKSPACE -e LUNA_LCO_ROOT_PIN -e LUNA_LCO_INTERMEDIATE_PIN -e LUNA_LCO_PIN \
+  -e LUNA_V0_WORKSPACE \
   hsm-pki-dev go test -race -p 1 -count=1 -timeout 180s ./...
 ```
 

@@ -81,6 +81,7 @@ type issuerFlags struct {
 	baseURL         *string
 	storePath       *string
 	validity        *time.Duration
+	roleName        *string
 }
 
 // addIssuerFlags registers the shared flags on fs.
@@ -97,12 +98,21 @@ func addIssuerFlags(fs *flag.FlagSet) *issuerFlags {
 		baseURL:         fs.String("base-url", "", "the service's ca.base_url; the issued certificate's CRL and AIA pointers are composed from it"),
 		storePath:       fs.String("store", "", "the service's ca.store_path; the issued certificate is recorded there or the service will refuse it"),
 		validity:        fs.Duration("validity", defaultCredentialValidity, "how long the issued certificate is valid for; nothing renews it"),
+		roleName:        addRoleFlag(fs),
 	}
+}
+
+// role resolves -role for -adapter. check has already refused a bad one.
+func (f *issuerFlags) role() (pk11.LoginRole, error) {
+	return pk11.RoleByName(*f.adapterName, *f.roleName)
 }
 
 // check validates everything reachable without the token, including the
 // extra flags a particular command requires, and resolves the curve.
 func (f *issuerFlags) check(extra map[string]string) (pk11.ECCurve, error) {
+	if _, err := f.role(); err != nil {
+		return 0, err
+	}
 	required := map[string]string{
 		"-module":                 *f.modulePath,
 		"-workspace":              *f.workspaceLabel,
@@ -123,6 +133,7 @@ func (f *issuerFlags) check(extra map[string]string) (pk11.ECCurve, error) {
 	if *f.validity <= 0 {
 		return 0, fmt.Errorf("-validity must be positive, got %s", *f.validity)
 	}
+
 	// The same check internal/api applies to ca.base_url, run before the
 	// token so a typo costs nothing. Both URLs are extensions, fixed at
 	// signature time and never editable afterwards.
@@ -162,8 +173,13 @@ func openIssuer(ctx context.Context, f *issuerFlags, curve pk11.ECCurve) (*ca.CA
 	// LoadIntermediate logs the token in and checks the certificate
 	// against the key under the label: a CA certificate, not self-signed,
 	// pathlen:0, inside its window, public key matching the token's.
+	role, err := f.role()
+	if err != nil {
+		return fail(err)
+	}
 	issuer, err := ca.LoadIntermediate(ctx, adapter, ws, pk11.DefaultSessionOptions(), pinResolver(*f.pinEnv), ca.LoadIntermediateParams{
 		KeyLabel:     *f.keyLabel,
+		Role:         role,
 		CertPath:     *f.certPath,
 		Curve:        curve,
 		CertTTL:      *f.validity,
@@ -378,6 +394,7 @@ func builtinProfile(name string, validity time.Duration) *profile.Profile {
 func runProvisionOCSPKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("provision-ocsp-key", flag.ExitOnError)
 	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	workspaceLabel := fs.String("workspace", "", "token label the intermediate key lives on")
 	workspaceSerial := fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label")
@@ -387,6 +404,10 @@ func runProvisionOCSPKeyCmd(args []string) error {
 	curveName := fs.String("curve", "P-256", "EC curve for the key pair: P-256, P-384, or P-521")
 
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	role, err := pk11.RoleByName(*adapterName, *roleName)
+	if err != nil {
 		return err
 	}
 	for name, v := range map[string]string{
@@ -428,8 +449,8 @@ func runProvisionOCSPKeyCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
-		return fmt.Errorf("logging into %q: %w", ws.Label, err)
+	if err := loginAs(ctx, adapter, ws, pin, role); err != nil {
+		return err
 	}
 	defer func() { _ = adapter.LogoutToken(ctx) }()
 

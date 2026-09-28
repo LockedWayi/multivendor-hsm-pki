@@ -78,7 +78,7 @@ func bootstrapCA(t *testing.T, b *hsmtest.Backend) issuedCA {
 // issuerArgs is the flag set both commands share.
 func issuerArgs(b *hsmtest.Backend, env issuedCA) []string {
 	return []string{
-		"-adapter", b.AdapterName,
+		"-adapter", b.AdapterName, "-role", b.Role.Name(),
 		"-module", b.ModulePath,
 		"-workspace", b.Primary.Label,
 		"-pin-env", env.pinEnv,
@@ -176,7 +176,7 @@ func withToken(t *testing.T, b *hsmtest.Backend, env issuedCA, fn func(ctx conte
 	if err != nil {
 		t.Fatalf("resolving the PIN: %v", err)
 	}
-	if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
+	if err := adapter.LoginToken(ctx, ws, pin, b.Role.Role()); err != nil {
 		t.Fatalf("logging in: %v", err)
 	}
 	defer func() { _ = adapter.LogoutToken(ctx) }()
@@ -698,7 +698,7 @@ func TestRunProvisionOCSPKeyCmd_ProvisionsAKeyTheServiceCanSignWith(t *testing.T
 		env := bootstrapCA(t, b)
 		label := b.Label("ocsp-signing-key-v1")
 		args := []string{
-			"-adapter", b.AdapterName, "-module", b.ModulePath,
+			"-adapter", b.AdapterName, "-role", b.Role.Name(), "-module", b.ModulePath,
 			"-workspace", b.Primary.Label, "-pin-env", env.pinEnv,
 			"-intermediate-key-label", env.interKeyLabel, "-key-label", label,
 		}

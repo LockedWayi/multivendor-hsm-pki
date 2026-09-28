@@ -31,7 +31,7 @@ func session(t *testing.T, b *hsmtest.Backend) *pk11.Session {
 		t.Fatalf("OpenSession: %v", err)
 	}
 	t.Cleanup(func() { _ = b.Adapter.CloseSession(context.Background(), s) })
-	if err := b.Adapter.Login(ctx, s, []byte(b.PrimaryPIN), pk11.RoleUser); err != nil {
+	if err := b.Adapter.Login(ctx, s, []byte(b.PrimaryPIN), b.Role.Role()); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	t.Cleanup(func() { _ = b.Adapter.LogoutToken(context.Background()) })

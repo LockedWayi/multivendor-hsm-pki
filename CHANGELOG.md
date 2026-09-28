@@ -31,6 +31,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   environment variable, its design recorded in `docs/architecture.md`).
   Consistent with a thread-affinity cause and not proof of one; the
   numbers and the caveat are in the test matrix.
+- **The login role is configuration, and Luna runs every test as both
+  roles.** `pkcs11.<adapter>.role` in the service's configuration and
+  `-role` on every keytool command choose the identity a token is opened
+  as: `co` (the Crypto Officer, the default) everywhere, `lco` and `cu`
+  on Luna only; any other name, or a Luna role on another adapter, is
+  refused, never downgraded. The service logs the role it holds its token
+  open as. The zero value of the new `pkcs11.LoginRole` is the Crypto
+  Officer, because a bare role's zero is `CKU_SO`. `internal/hsmtest`
+  registers `LunaLCO` beside `Luna`: 134 of 134 as the Limited Crypto
+  Officer, which was refused nothing the platform does; its one refusal,
+  a login on a V0 partition, answers `CKR_USER_PIN_NOT_INITIALIZED` and
+  is now explained in the error and checked on every run. `LUNA_ROLE` is
+  gone. The ceremony and the re-issue check both logins before the first
+  key, so a root login that fails no longer leaves a new key on the
+  intermediate's token.
 - **`SerializeOnOneThread`, the module thread as a declared capability.**
   A module that declares it has every call, `C_Initialize` and
   `C_Finalize` included, run on one pinned OS thread, one at a time; the

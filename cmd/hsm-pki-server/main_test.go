@@ -11,9 +11,15 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 )
 
-// writeConfig writes a service configuration for one token of one backend.
-// The PIN is read from the MAIN_TEST_PIN variable, as the service does.
-func writeConfig(t *testing.T, adapterName, modulePath, label string) string {
+// writeConfig writes a service configuration for one token of one backend,
+// logging in as the backend's role. The PIN is read from the MAIN_TEST_PIN
+// variable, as the service does.
+func writeConfig(t *testing.T, b *hsmtest.Backend, label string) string {
+	t.Helper()
+	return writeConfigAs(t, b.AdapterName, b.ModulePath, label, b.Role.Name())
+}
+
+func writeConfigAs(t *testing.T, adapterName, modulePath, label, role string) string {
 	t.Helper()
 	body := "pkcs11:\n" +
 		"  adapter: \"" + adapterName + "\"\n" +
@@ -21,6 +27,7 @@ func writeConfig(t *testing.T, adapterName, modulePath, label string) string {
 		"    module_path: \"" + modulePath + "\"\n" +
 		"    workspace_label: \"" + label + "\"\n" +
 		"    pin_env: \"MAIN_TEST_PIN\"\n" +
+		"    role: \"" + role + "\"\n" +
 		"ca:\n" +
 		"  curve: \"P-256\"\n" +
 		"  cert_ttl_hours: 8760\n" +
@@ -40,7 +47,7 @@ func writeConfig(t *testing.T, adapterName, modulePath, label string) string {
 func TestVerifyHSMConnection_Success(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		t.Setenv("MAIN_TEST_PIN", b.PrimaryPIN)
-		cfg, err := config.Load(writeConfig(t, b.AdapterName, b.ModulePath, b.Primary.Label))
+		cfg, err := config.Load(writeConfig(t, b, b.Primary.Label))
 		if err != nil {
 			t.Fatalf("config.Load: %v", err)
 		}
@@ -67,7 +74,7 @@ func TestVerifyHSMConnection_Success(t *testing.T) {
 func TestVerifyHSMConnection_UnknownWorkspaceFails(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		t.Setenv("MAIN_TEST_PIN", b.PrimaryPIN)
-		cfg, err := config.Load(writeConfig(t, b.AdapterName, b.ModulePath, "no-such-workspace"))
+		cfg, err := config.Load(writeConfig(t, b, "no-such-workspace"))
 		if err != nil {
 			t.Fatalf("config.Load: %v", err)
 		}
@@ -89,7 +96,7 @@ func TestVerifyHSMConnection_UnknownWorkspaceFails(t *testing.T) {
 func TestVerifyHSMConnection_WrongPINFails(t *testing.T) {
 	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
 		t.Setenv("MAIN_TEST_PIN", "0"+b.PrimaryPIN)
-		cfg, err := config.Load(writeConfig(t, b.AdapterName, b.ModulePath, b.Primary.Label))
+		cfg, err := config.Load(writeConfig(t, b, b.Primary.Label))
 		if err != nil {
 			t.Fatalf("config.Load: %v", err)
 		}
@@ -117,7 +124,7 @@ func TestVerifyHSMConnection_AmbiguousWorkspaceLabelFails(t *testing.T) {
 	pins := hsmtest.NewSoftHSM2Tokens(t, label, label)
 	t.Setenv("MAIN_TEST_PIN", pins[0])
 
-	cfg, err := config.Load(writeConfig(t, "softhsm2", modulePath, label))
+	cfg, err := config.Load(writeConfigAs(t, "softhsm2", modulePath, label, "co"))
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}

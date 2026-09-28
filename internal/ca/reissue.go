@@ -34,6 +34,10 @@ type ReissueIntermediateParams struct {
 	// already trust.
 	RootCert *x509.Certificate
 
+	// Role is the identity both tokens are logged into as. The zero value
+	// is the Crypto Officer.
+	Role pk11.LoginRole
+
 	IntermediateWorkspace pk11.Workspace
 	IntermediatePIN       PINResolver
 	// IntermediateKeyLabel is the new key label, the next version. It must
@@ -182,13 +186,17 @@ func ReissueIntermediate(ctx context.Context, adapter pk11.VendorAdapter, sessio
 	if err := params.validate(); err != nil {
 		return nil, err
 	}
+	if err := checkLogins(ctx, adapter, params.Role,
+		tokenLogin{params.RootWorkspace, params.RootPIN}, tokenLogin{params.IntermediateWorkspace, params.IntermediatePIN}); err != nil {
+		return nil, fmt.Errorf("ca: reissue-intermediate: %w", err)
+	}
 
-	interPub, err := generateCeremonyKey(ctx, adapter, sessionOpts, params.IntermediateWorkspace, params.IntermediatePIN, params.IntermediateKeyLabel, params.IntermediateCurve)
+	interPub, err := generateCeremonyKey(ctx, adapter, sessionOpts, params.IntermediateWorkspace, params.IntermediatePIN, params.Role, params.IntermediateKeyLabel, params.IntermediateCurve)
 	if err != nil {
 		return nil, fmt.Errorf("ca: reissue-intermediate: new intermediate key: %w", err)
 	}
 
-	return withTokenLogin(ctx, adapter, params.RootWorkspace, params.RootPIN, func() (*ReissueIntermediateResult, error) {
+	return withTokenLogin(ctx, adapter, params.RootWorkspace, params.RootPIN, params.Role, func() (*ReissueIntermediateResult, error) {
 		// A serial is a claim the driver makes; an object search is a
 		// measurement. If the key generated a moment ago on the
 		// intermediate token is visible from this session, the two

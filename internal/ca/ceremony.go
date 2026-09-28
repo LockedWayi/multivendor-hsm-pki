@@ -59,6 +59,10 @@ type CeremonyParams struct {
 	// Required for the same reason.
 	RootCertURL string
 
+	// Role is the identity both tokens are logged into as. The zero value
+	// is the Crypto Officer.
+	Role pk11.LoginRole
+
 	// RootKeyExtractable sets CKA_EXTRACTABLE on the root private key. It
 	// is an operator choice per ceremony. true makes a wrap-based backup of
 	// the root possible where the token's policy allows a private key to be
@@ -148,13 +152,17 @@ func RunCeremony(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk
 	if err := params.validate(); err != nil {
 		return nil, err
 	}
+	if err := checkLogins(ctx, adapter, params.Role,
+		tokenLogin{params.RootWorkspace, params.RootPIN}, tokenLogin{params.IntermediateWorkspace, params.IntermediatePIN}); err != nil {
+		return nil, fmt.Errorf("ca: ceremony: %w", err)
+	}
 
-	interPub, err := generateCeremonyKey(ctx, adapter, sessionOpts, params.IntermediateWorkspace, params.IntermediatePIN, params.IntermediateKeyLabel, params.IntermediateCurve)
+	interPub, err := generateCeremonyKey(ctx, adapter, sessionOpts, params.IntermediateWorkspace, params.IntermediatePIN, params.Role, params.IntermediateKeyLabel, params.IntermediateCurve)
 	if err != nil {
 		return nil, fmt.Errorf("ca: ceremony: intermediate key: %w", err)
 	}
 
-	return withTokenLogin(ctx, adapter, params.RootWorkspace, params.RootPIN, func() (*CeremonyResult, error) {
+	return withTokenLogin(ctx, adapter, params.RootWorkspace, params.RootPIN, params.Role, func() (*CeremonyResult, error) {
 		// A serial is a claim the driver makes; an object search is a
 		// measurement. If these two workspaces are one token, the
 		// intermediate key generated a moment ago is visible from this
@@ -182,8 +190,8 @@ func RunCeremony(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk
 // window: findKeyByLabel refuses a label that matches more than one object,
 // so a duplicate fails the next signature loudly instead of signing with
 // the wrong key.
-func generateCeremonyKey(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk11.SessionOptions, ws pk11.Workspace, resolvePIN PINResolver, label string, curve pk11.ECCurve) (*ecdsa.PublicKey, error) {
-	return withTokenLogin(ctx, adapter, ws, resolvePIN, func() (*ecdsa.PublicKey, error) {
+func generateCeremonyKey(ctx context.Context, adapter pk11.VendorAdapter, sessionOpts pk11.SessionOptions, ws pk11.Workspace, resolvePIN PINResolver, role pk11.LoginRole, label string, curve pk11.ECCurve) (*ecdsa.PublicKey, error) {
+	return withTokenLogin(ctx, adapter, ws, resolvePIN, role, func() (*ecdsa.PublicKey, error) {
 		exists, err := keyPairExists(ctx, adapter, ws, sessionOpts, label)
 		if err != nil {
 			return nil, err
@@ -339,6 +347,29 @@ func keyPairExists(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Work
 	})
 }
 
+// tokenLogin is one token and its PIN, for checkLogins.
+type tokenLogin struct {
+	ws  pk11.Workspace
+	pin PINResolver
+}
+
+// checkLogins logs into each token as role and straight out again, before
+// anything is created. The ceremony and the re-issue generate the
+// intermediate's key first and log into the root afterwards, so a root
+// login that fails, a wrong PIN or a role the token has no user for, would
+// otherwise leave a new key on the intermediate token under a label no
+// retry can use. A login needs no mutation, so it is checked with the
+// rest of the parameters, as every irreversible operation here checks
+// what it can before it changes anything.
+func checkLogins(ctx context.Context, adapter pk11.VendorAdapter, role pk11.LoginRole, tokens ...tokenLogin) error {
+	for _, t := range tokens {
+		if _, err := withTokenLogin(ctx, adapter, t.ws, t.pin, role, func() (struct{}, error) { return struct{}{}, nil }); err != nil {
+			return fmt.Errorf("checking the login before anything is created: %w", err)
+		}
+	}
+	return nil
+}
+
 // withTokenLogin logs into ws for the span of fn and logs out afterwards,
 // on every path, including a panic. It refuses to run when the adapter
 // already holds a token authenticated.
@@ -347,7 +378,7 @@ func keyPairExists(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Work
 // the zero value there, which threw away certificates that cannot be
 // regenerated because their key labels are taken. Callers check the result
 // even when the error is non-nil.
-func withTokenLogin[T any](ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN PINResolver, fn func() (T, error)) (result T, err error) {
+func withTokenLogin[T any](ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Workspace, resolvePIN PINResolver, role pk11.LoginRole, fn func() (T, error)) (result T, err error) {
 	var zero T
 	if adapter.TokenLoggedIn() {
 		return zero, fmt.Errorf("ca: ceremony: a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
@@ -356,8 +387,8 @@ func withTokenLogin[T any](ctx context.Context, adapter pk11.VendorAdapter, ws p
 	if err != nil {
 		return zero, fmt.Errorf("ca: ceremony: resolving PIN for %q: %w", ws.Label, err)
 	}
-	if err := adapter.LoginToken(ctx, ws, pin, pk11.RoleUser); err != nil {
-		return zero, fmt.Errorf("ca: ceremony: logging into %q: %w", ws.Label, err)
+	if err := adapter.LoginToken(ctx, ws, pin, role.Role()); err != nil {
+		return zero, fmt.Errorf("ca: ceremony: logging into %q as %q: %w", ws.Label, role.Name(), role.Explain(err))
 	}
 	defer func() {
 		logoutErr := adapter.LogoutToken(ctx)

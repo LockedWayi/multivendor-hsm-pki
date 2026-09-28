@@ -38,6 +38,7 @@ func ceremonyThenReissueParams(t *testing.T, b *ceremonyBackend) (*ca.CeremonyRe
 	return result, rootCert, ca.ReissueIntermediateParams{
 		RootWorkspace: b.rootWS,
 		RootPIN:       func() ([]byte, error) { return []byte(b.rootPIN), nil },
+		Role:          b.role,
 		RootKeyLabel:  b.rootKeyLabel(),
 		RootCurve:     pk11.P256,
 		RootCert:      rootCert,
@@ -230,7 +231,7 @@ func TestReissueIntermediate_LeafChainsToTheOriginalRoot(t *testing.T) {
 // logs in for the check and out afterwards.
 func keyExistsOnToken(t *testing.T, ctx context.Context, b *ceremonyBackend, ws pk11.Workspace, pin, label string) bool {
 	t.Helper()
-	if err := b.adapter.LoginToken(ctx, ws, []byte(pin), pk11.RoleUser); err != nil {
+	if err := b.adapter.LoginToken(ctx, ws, []byte(pin), b.role.Role()); err != nil {
 		t.Fatalf("LoginToken for the existence check: %v", err)
 	}
 	defer func() {

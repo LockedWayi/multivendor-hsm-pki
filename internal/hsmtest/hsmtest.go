@@ -50,6 +50,12 @@ type Backend struct {
 	PrimaryPIN   string
 	SecondaryPIN string
 
+	// Role is the identity both tokens are logged into as, by the harness
+	// and by the code under test, which a test hands it to (the ceremony's
+	// and the service's Role, a command's -role). The zero value is the
+	// Crypto Officer.
+	Role pk11.LoginRole
+
 	// ModulePath and AdapterName are what a command-line entry point needs
 	// to reach this backend.
 	ModulePath  string
@@ -131,8 +137,8 @@ func (b *Backend) destroyRunObjects(adapter pk11.VendorAdapter, ws pk11.Workspac
 		pin = b.SecondaryPIN
 	}
 	_ = adapter.LogoutToken(ctx)
-	if err := adapter.LoginToken(ctx, ws, []byte(pin), pk11.RoleUser); err != nil {
-		return fmt.Errorf("login: %w", err)
+	if err := adapter.LoginToken(ctx, ws, []byte(pin), b.Role.Role()); err != nil {
+		return fmt.Errorf("login as %q: %w", b.Role.Name(), b.Role.Explain(err))
 	}
 	defer func() { _ = adapter.LogoutToken(ctx) }()
 
@@ -216,6 +222,10 @@ var registry = []descriptor{
 	{"SoftHSM2", setupSoftHSM2, singleSoftHSM2},
 	{"ProtectServer", setupProtectServer, singleProtectServer},
 	{"Luna", setupLuna, singleLuna},
+	// The same appliance as the Limited Crypto Officer: every test that
+	// touches a token runs once per role, so the first operation the LCO
+	// is refused shows up as a failing subtest under this name.
+	{"LunaLCO", setupLunaLCO, singleLunaLCO},
 	// nShield is added here when it is run. docs/test-matrix.md says what
 	// a vendor must provide first.
 }
@@ -371,10 +381,8 @@ func setupProtectServer(t *testing.T) *Backend {
 
 // setupLuna uses two partitions on the maintainer's own Luna Network HSM,
 // assigned to this client and initialized by hand. It provisions nothing.
-// Every login here is the Crypto Officer (CKU_USER): the code under test
-// logs in as CKU_USER itself, so a different role in the harness would
-// mix two identities in one test. The conformance suite is where the
-// other Luna roles are measured.
+// Every login is the Crypto Officer; setupLunaLCO is the same appliance as
+// the Limited Crypto Officer.
 func setupLuna(t *testing.T) *Backend {
 	t.Helper()
 	modulePath := os.Getenv("LUNA_MODULE")
@@ -421,6 +429,69 @@ func setupLuna(t *testing.T) *Backend {
 	return b
 }
 
+// setupLunaLCO is the Luna backend with every login, the harness's and the
+// code under test's, as the Limited Crypto Officer. That role exists only
+// on a V1 partition, and the ceremony refuses root and intermediate on one
+// token, so the root here is a second V1 partition (LUNA_LCO_ROOT_WORKSPACE);
+// the intermediate is LUNA_INTERMEDIATE_WORKSPACE, the Crypto Officer
+// backend's own, logged into with the LCO's password. LUNA_MODULE set with
+// any of the three LCO variables missing fails, as a half-configured
+// backend does everywhere here: the decision is that every test runs as
+// both roles, and a silent skip would report one.
+func setupLunaLCO(t *testing.T) *Backend {
+	t.Helper()
+	modulePath := os.Getenv("LUNA_MODULE")
+	if modulePath == "" {
+		t.Skip("LUNA_MODULE not set: " +
+			"this backend is maintainer-verified, never CI-verified")
+	}
+	if os.Getenv("ChrystokiConfigurationPath") == "" {
+		t.Fatal("LUNA_MODULE is set but ChrystokiConfigurationPath is not")
+	}
+	primaryLabel := os.Getenv("LUNA_INTERMEDIATE_WORKSPACE")
+	secondaryLabel := os.Getenv("LUNA_LCO_ROOT_WORKSPACE")
+	primaryPIN := os.Getenv("LUNA_LCO_INTERMEDIATE_PIN")
+	secondaryPIN := os.Getenv("LUNA_LCO_ROOT_PIN")
+	if primaryLabel == "" || secondaryLabel == "" || primaryPIN == "" || secondaryPIN == "" {
+		t.Fatal("LUNA_MODULE is set but LUNA_INTERMEDIATE_WORKSPACE, LUNA_LCO_ROOT_WORKSPACE, " +
+			"LUNA_LCO_INTERMEDIATE_PIN or LUNA_LCO_ROOT_PIN is not")
+	}
+	if primaryLabel == secondaryLabel {
+		t.Fatal("LUNA_INTERMEDIATE_WORKSPACE and LUNA_LCO_ROOT_WORKSPACE " +
+			"name the same partition; the CA hierarchy requires two")
+	}
+	role := mustLunaRole(t, "lco")
+
+	adapter, err := pk11.NewLunaAdapter(modulePath)
+	if err != nil {
+		t.Fatalf("NewLunaAdapter: %v", err)
+	}
+	b := &Backend{
+		Name:         "LunaLCO",
+		Adapter:      adapter,
+		Primary:      MustFindWorkspace(t, adapter, primaryLabel),
+		Secondary:    MustFindWorkspace(t, adapter, secondaryLabel),
+		PrimaryPIN:   primaryPIN,
+		SecondaryPIN: secondaryPIN,
+		Role:         role,
+		ModulePath:   modulePath,
+		AdapterName:  pk11.AdapterLuna,
+		RunID:        runID(),
+	}
+	t.Cleanup(b.Release)
+	t.Cleanup(func() { b.Cleanup(t) })
+	return b
+}
+
+func mustLunaRole(t *testing.T, name string) pk11.LoginRole {
+	t.Helper()
+	role, err := pk11.RoleByName(pk11.AdapterLuna, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return role
+}
+
 // MustFindWorkspace resolves a token by label and fails the test if it is
 // missing or carries no serial. The ceremony compares serials, so a
 // backend that reports none cannot run the two-token tests.
@@ -457,9 +528,8 @@ type Single struct {
 	// WrongPIN fails as a wrong PIN and not as a length error: Luna
 	// enforces a minimum of 8, so it is at least that long everywhere.
 	WrongPIN []byte
-	// Role is the login identity. Role's zero value is CKU_SO, so it is
-	// set explicitly for every backend.
-	Role        pk11.Role
+	// Role is the login identity. The zero value is the Crypto Officer.
+	Role        pk11.LoginRole
 	ModulePath  string
 	AdapterName string
 	// RunID is folded into every object label the suite creates.
@@ -503,7 +573,7 @@ func singleSoftHSM2(t *testing.T) *Single {
 	}
 	return &Single{
 		Name: "SoftHSM2", Adapter: adapter, Workspace: MustFindWorkspace(t, adapter, label),
-		PIN: []byte(pins[0]), WrongPIN: []byte(wrong), Role: pk11.RoleUser,
+		PIN: []byte(pins[0]), WrongPIN: []byte(wrong), Role: pk11.CryptoOfficer(),
 		ModulePath: modulePath, AdapterName: pk11.AdapterSoftHSM2, RunID: id,
 	}
 }
@@ -530,17 +600,30 @@ func singleProtectServer(t *testing.T) *Single {
 	t.Cleanup(func() { adapter.Close() })
 	return &Single{
 		Name: "ProtectServer", Adapter: adapter, Workspace: MustFindWorkspace(t, adapter, label),
-		PIN: []byte(pin), WrongPIN: []byte("00000000"), Role: pk11.RoleUser,
+		PIN: []byte(pin), WrongPIN: []byte("00000000"), Role: pk11.CryptoOfficer(),
 		ModulePath: modulePath, AdapterName: pk11.AdapterProtectServer, RunID: runID(),
 	}
 }
 
-// singleLuna uses the partition LUNA_WORKSPACE names. LUNA_ROLE picks the
-// identity the whole conformance suite logs in as: co (the Crypto
-// Officer, CKU_USER, the default), lco (the Limited Crypto Officer) or cu
-// (the Crypto User). Running the suite once per role is how a restricted
-// role's refusals are measured rather than assumed.
+// singleLuna uses the partition LUNA_WORKSPACE names, as the Crypto
+// Officer with LUNA_PIN; singleLunaLCO is the same partition as the Limited
+// Crypto Officer with LUNA_LCO_PIN. LUNA_ROLE, which chose one of the two
+// for a whole run, is gone: both run every time.
 func singleLuna(t *testing.T) *Single {
+	t.Helper()
+	return singleLunaAs(t, "Luna", pk11.CryptoOfficer(), "LUNA_PIN")
+}
+
+func singleLunaLCO(t *testing.T) *Single {
+	t.Helper()
+	if os.Getenv("LUNA_MODULE") == "" {
+		t.Skip("LUNA_MODULE not set: " +
+			"this backend is maintainer-verified, never CI-verified")
+	}
+	return singleLunaAs(t, "LunaLCO", mustLunaRole(t, "lco"), "LUNA_LCO_PIN")
+}
+
+func singleLunaAs(t *testing.T, name string, role pk11.LoginRole, pinVar string) *Single {
 	t.Helper()
 	modulePath := os.Getenv("LUNA_MODULE")
 	if modulePath == "" {
@@ -551,13 +634,9 @@ func singleLuna(t *testing.T) *Single {
 		t.Fatal("LUNA_MODULE is set but ChrystokiConfigurationPath is not")
 	}
 	label := os.Getenv("LUNA_WORKSPACE")
-	pin := os.Getenv("LUNA_PIN")
+	pin := os.Getenv(pinVar)
 	if label == "" || pin == "" {
-		t.Fatal("LUNA_MODULE is set but LUNA_WORKSPACE or LUNA_PIN is not")
-	}
-	role, err := lunaRole(os.Getenv("LUNA_ROLE"))
-	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("LUNA_MODULE is set but LUNA_WORKSPACE or %s is not", pinVar)
 	}
 	adapter, err := pk11.NewLunaAdapter(modulePath)
 	if err != nil {
@@ -565,24 +644,8 @@ func singleLuna(t *testing.T) *Single {
 	}
 	t.Cleanup(func() { adapter.Close() })
 	return &Single{
-		Name: "Luna", Adapter: adapter, Workspace: MustFindWorkspace(t, adapter, label),
+		Name: name, Adapter: adapter, Workspace: MustFindWorkspace(t, adapter, label),
 		PIN: []byte(pin), WrongPIN: []byte("00000000"), Role: role,
 		ModulePath: modulePath, AdapterName: pk11.AdapterLuna, RunID: runID(),
-	}
-}
-
-// lunaRole maps LUNA_ROLE to a login identity. An unknown value fails
-// rather than falling back: a run that silently used another role would
-// report the wrong role's behaviour.
-func lunaRole(v string) (pk11.Role, error) {
-	switch v {
-	case "", "co":
-		return pk11.RoleUser, nil
-	case "lco":
-		return pk11.LunaRoleLimitedCryptoOfficer, nil
-	case "cu":
-		return pk11.LunaRoleCryptoUser, nil
-	default:
-		return 0, fmt.Errorf("LUNA_ROLE=%q: want co, lco or cu", v)
 	}
 }

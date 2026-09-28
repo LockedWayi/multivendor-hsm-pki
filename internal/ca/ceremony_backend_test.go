@@ -19,7 +19,9 @@ type ceremonyBackend struct {
 	adapter           pk11.VendorAdapter
 	rootWS, interWS   pk11.Workspace
 	rootPIN, interPIN string
-	runID             string
+	// role is the identity both tokens are logged into as.
+	role  pk11.LoginRole
+	runID string
 
 	backend *hsmtest.Backend
 }
@@ -41,6 +43,7 @@ func fromHSMTest(hb *hsmtest.Backend) *ceremonyBackend {
 		interWS:  hb.Primary,
 		rootPIN:  hb.SecondaryPIN,
 		interPIN: hb.PrimaryPIN,
+		role:     hb.Role,
 		runID:    hb.RunID,
 		backend:  hb,
 	}

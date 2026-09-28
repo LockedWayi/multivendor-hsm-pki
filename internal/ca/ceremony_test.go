@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -36,6 +37,7 @@ func testCeremonyParams(b *ceremonyBackend) ca.CeremonyParams {
 	return ca.CeremonyParams{
 		RootWorkspace: b.rootWS,
 		RootPIN:       func() ([]byte, error) { return []byte(b.rootPIN), nil },
+		Role:          b.role,
 		RootKeyLabel:  b.rootKeyLabel(),
 		RootSubject:   pkix.Name{CommonName: "test Root CA"},
 		RootCurve:     pk11.P256,
@@ -258,7 +260,7 @@ func TestRunCeremony_ConcurrentRunsFailClosed(t *testing.T) {
 		}
 
 		// The winner's key label must resolve to exactly one object.
-		if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), pk11.RoleUser); err != nil {
+		if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), b.role.Role()); err != nil {
 			t.Fatalf("LoginToken: %v", err)
 		}
 		defer func() { _ = b.adapter.LogoutToken(ctx) }()
@@ -287,7 +289,7 @@ func TestRunCeremony_ConcurrentIssuanceUnderCeremonyIntermediate(t *testing.T) {
 			t.Fatalf("parsing intermediate cert: %v", err)
 		}
 
-		if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), pk11.RoleUser); err != nil {
+		if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), b.role.Role()); err != nil {
 			t.Fatalf("LoginToken: %v", err)
 		}
 		defer func() { _ = b.adapter.LogoutToken(ctx) }()
@@ -390,7 +392,7 @@ func TestRunCeremony_RootKeyExtractableIsOperatorControlled(t *testing.T) {
 					t.Fatalf("RunCeremony: %v", err)
 				}
 
-				if err := b.adapter.LoginToken(ctx, b.rootWS, []byte(b.rootPIN), pk11.RoleUser); err != nil {
+				if err := b.adapter.LoginToken(ctx, b.rootWS, []byte(b.rootPIN), b.role.Role()); err != nil {
 					t.Fatalf("LoginToken (root): %v", err)
 				}
 				defer func() { _ = b.adapter.LogoutToken(ctx) }()
@@ -488,7 +490,7 @@ func issueTestLeaf(t *testing.T, b *ceremonyBackend, interCert *x509.Certificate
 	t.Helper()
 	ctx := context.Background()
 
-	if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), pk11.RoleUser); err != nil {
+	if err := b.adapter.LoginToken(ctx, b.interWS, []byte(b.interPIN), b.role.Role()); err != nil {
 		t.Fatalf("LoginToken (intermediate, for test leaf): %v", err)
 	}
 	defer func() {
@@ -531,5 +533,42 @@ func writePEM(t *testing.T, path, blockType string, der []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der}), 0644); err != nil {
 		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
+}
+
+// Both logins are checked before the first key exists. The ceremony
+// generates the intermediate's key first and logs into the root after; a
+// root login that fails there would leave that key on the intermediate
+// token under a label no retry can use. The failure here is a PIN that
+// cannot be resolved, so no wrong PIN reaches a token that counts them.
+func TestRunCeremony_ARootLoginThatCannotSucceedCreatesNothing(t *testing.T) {
+	for _, op := range []string{"ceremony", "reissue"} {
+		t.Run(op, func(t *testing.T) {
+			forEachCeremonyBackend(t, func(t *testing.T, b *ceremonyBackend) {
+				ctx := context.Background()
+				noPIN := func() ([]byte, error) { return nil, errors.New("no root PIN for this test") }
+
+				var err error
+				var interLabel string
+				switch op {
+				case "ceremony":
+					params := testCeremonyParams(b)
+					params.RootPIN = noPIN
+					interLabel = params.IntermediateKeyLabel
+					_, err = ca.RunCeremony(ctx, b.adapter, pk11.SessionOptions{}, params)
+				case "reissue":
+					_, _, params := ceremonyThenReissueParams(t, b)
+					params.RootPIN = noPIN
+					interLabel = params.IntermediateKeyLabel
+					_, err = ca.ReissueIntermediate(ctx, b.adapter, pk11.SessionOptions{}, params)
+				}
+				if err == nil || !strings.Contains(err.Error(), "before anything is created") {
+					t.Fatalf("%s with an unresolvable root PIN = %v, want the login check to refuse it", op, err)
+				}
+				if keyExistsOnToken(t, ctx, b, b.interWS, b.interPIN, interLabel) {
+					t.Fatalf("%s refused, but the intermediate key %q was created anyway", op, interLabel)
+				}
+			})
+		})
 	}
 }

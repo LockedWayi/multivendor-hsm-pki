@@ -35,6 +35,7 @@ func runCeremonyForLoad(t *testing.T, b *ceremonyBackend) (interCertPath string,
 func loadParams(b *ceremonyBackend, certPath string) ca.LoadIntermediateParams {
 	return ca.LoadIntermediateParams{
 		KeyLabel:     b.interKeyLabel(),
+		Role:         b.role,
 		CertPath:     certPath,
 		Curve:        pk11.P256,
 		CertTTL:      time.Hour,

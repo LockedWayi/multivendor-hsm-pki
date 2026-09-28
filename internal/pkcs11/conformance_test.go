@@ -41,8 +41,8 @@ type conformanceBackend struct {
 	ws       pk11.Workspace
 	userPIN  []byte
 	wrongPIN []byte
-	// role is the login identity every login in the suite uses. Set
-	// explicitly for every backend: Role's zero value is CKU_SO.
+	// role is the login identity every login in the suite uses, the
+	// PKCS#11 user type of the backend's LoginRole.
 	role pk11.Role
 	// caps is the adapter's own declaration. Every field is measured by a
 	// subtest below; a declaration the token no longer matches is a
@@ -76,7 +76,7 @@ func newConformanceBackend(t *testing.T, s *hsmtest.Single) *conformanceBackend 
 		ws:          s.Workspace,
 		userPIN:     s.PIN,
 		wrongPIN:    s.WrongPIN,
-		role:        s.Role,
+		role:        s.Role.Role(),
 		caps:        s.Adapter.Capabilities(),
 		adapterName: s.AdapterName,
 		modulePath:  s.ModulePath,
