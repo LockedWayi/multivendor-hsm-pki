@@ -64,20 +64,21 @@ Three properties of the harness matter for a new vendor:
 | `internal/pkcs11` `TestConformance` | 1 group, 26 cases | The `VendorAdapter` contract: sessions, login lifecycle, key generation and **key protection attributes**, sign/verify, encrypt/decrypt, wrap/unwrap, find/attributes, error mapping |
 | `internal/ca` ceremony, re-issue + intermediate | 16 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, intermediate re-issue under an existing root, `LoadIntermediate`'s startup gates |
 | `internal/ca` issuance, signer, service + profiles | 25 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points, the profile deciding the certificate and a request without one refused |
-| `internal/api` HTTP surface | 46 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness (27); **mutual TLS on the write endpoints** over an HSM-held TLS identity, with the handshake, the store lookup and the identity lists each refusing on their own (8); the profile query parameter (2); the per-identity binding of profiles and names, every deny path (5); and the OCSP responder over both transports, its error responses, its absence without a key, the AIA pointer in new leaves and `openssl ocsp` agreeing with it (4) |
+| `internal/api` HTTP surface | 47 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness (27); **mutual TLS on the write endpoints** over an HSM-held TLS identity, with the handshake, the store lookup and the identity lists each refusing on their own (8); the profile query parameter (2); the per-identity binding of profiles and names, every deny path (5); and the OCSP responder over both transports, its error responses, its absence without a key, the AIA pointer in new leaves, `openssl ocsp` agreeing with it, and a GET request whose base64 contains `//` (5) |
 | `internal/signingkey` | 18 | Supply-chain key provisioning and destruction: protection attributes read back off the token, versioned-label enforcement, refusal of a taken label, the duplicate-key check, HSM signature cross-checked in `crypto/ecdsa`, exported PEM parsed through `x509.ParsePKIXPublicKey`, and the refusal to provision onto a token that already holds a CA-hierarchy key |
 | `cmd/hsm-pki-keytool` | 24 | The ceremony, the supply-chain key provisioning, its retirement against the inventory, the signed key-inventory generation (18), and the three credential commands (6): the TLS identity, the first client certificate and the OCSP responder key, as an operator runs them through the CLI's own adapter, including the openssl-made request the runbook tells an operator to make and a real mutual handshake against the service |
 | `cmd/hsm-pki-server` | 3 | Startup: workspace resolution and anchor login, an unknown workspace refused, a wrong PIN refused |
 
-**133** per-backend subtests in total, measured 2026-09-23 inside the
-container from the run that produced the per-suite numbers above, with:
+**134** per-backend subtests in total, measured 2026-09-28 inside the
+container (133 on 2026-09-23, from the run that produced the per-suite
+numbers above; the OCSP double-slash case added one), with:
 
 ```sh
 go test -race -p 1 -v ./... | grep -cE '^=== RUN +Test[A-Za-z0-9_]+/SoftHSM2$'
 ```
 
 The same command with `ProtectServer` or `Luna` in place of `SoftHSM2`
-gives 133 for each (2026-09-24): every top-level per-backend subtest runs
+gives 134 for each (2026-09-28; 133 on 2026-09-24): every top-level per-backend subtest runs
 on every registered backend. This is the top-level count, the one
 `tools/bootstrap-workstation.sh` reports. Counting every nested subtest
 under a backend as well (`--- PASS`/`SKIP` lines at any depth, the

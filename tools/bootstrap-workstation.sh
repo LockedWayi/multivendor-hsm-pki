@@ -29,7 +29,7 @@
 # Every step's full output lands under .local/bootstrap/, and the summary
 # at the end reports the top-level per-backend subtest counts for every
 # registered backend, the number docs/test-matrix.md section 3 anchors
-# (133 per backend on 2026-09-24), so the number here and the number there
+# (134 per backend on 2026-09-28), so the number here and the number there
 # are the same number.
 set -euo pipefail
 
