@@ -31,6 +31,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   environment variable, its design recorded in `docs/architecture.md`).
   Consistent with a thread-affinity cause and not proof of one; the
   numbers and the caveat are in the test matrix.
+- **`SerializeOnOneThread`, the module thread as a declared capability.**
+  A module that declares it has every call, `C_Initialize` and
+  `C_Finalize` included, run on one pinned OS thread, one at a time; the
+  core reads the declaration and the environment switch of the
+  experiment is gone. The ProtectToolkit-C adapter declares it on the
+  record above; SoftHSM2 and Luna, which never hung and ran concurrent
+  callers without fault, do not, and keep their concurrency. A hang rate
+  is not something one run can measure, so the conformance case says so
+  and skips; the mechanism is checked by the kernel's thread id, and
+  `tools/hang-tally.sh` keeps counting on the declared tree. A panic in a
+  module call reaches the caller rather than ending the process from the
+  thread's goroutine. `-timeout 180s` stays.
 - **`-count=1` in every documented whole-suite command and in the
   bootstrap.** Go replays a cached package result when the binary and
   the environment it read have not changed, and with a build cache that

@@ -54,6 +54,7 @@ var lunaCapabilities = Capabilities{
 	// measured on keep the default.
 	PrivateKeyWrapRefused: "Luna partition policy 1 (Allow private key wrapping) is off",
 	UnwrapNeedsValueLen:   true,
+	SerializeOnOneThread:  false, // no hang in any run; concurrent callers measured without fault
 }
 
 var _ VendorAdapter = (*LunaAdapter)(nil)

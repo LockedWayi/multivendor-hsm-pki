@@ -34,6 +34,11 @@ var protectServerCapabilities = Capabilities{
 	// same emulator version; the suite now asserts today's measurement
 	// and fails the day it changes back.
 	UnwrapHonoursExtractable: true,
+	// C_OpenSession (five times) and C_GenerateKey (once) hung under a
+	// single caller in 6 of 144 whole-suite runs unpinned, 0 of 104
+	// pinned, 2026-09-24; measured on libctsw.so emulation only, and to be
+	// measured again on libcthsm.so hardware.
+	SerializeOnOneThread: true,
 }
 
 var _ VendorAdapter = (*ProtectServerAdapter)(nil)

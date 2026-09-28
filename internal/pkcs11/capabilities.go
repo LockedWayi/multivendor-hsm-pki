@@ -11,7 +11,8 @@ package pkcs11
 //
 // The zero value is the conservative declaration: nothing extra is
 // promised, so a module that declares nothing is treated as the most
-// restrictive one measured so far.
+// restrictive one measured so far. SerializeOnOneThread is the one
+// exception, and says why.
 type Capabilities struct {
 	// ConcurrentSlotEnumeration declares that C_GetSlotList may be called
 	// from several goroutines at once. ProtectToolkit-C 7.3.3 deadlocks
@@ -73,6 +74,24 @@ type Capabilities struct {
 	// refuses the attribute as CKR_ATTRIBUTE_READ_ONLY, ProtectToolkit-C
 	// takes either.
 	UnwrapNeedsValueLen bool
+
+	// SerializeOnOneThread declares that the module must be driven from a
+	// single OS thread: the shared implementation then runs every call to
+	// it, C_Initialize and C_Finalize included, on one pinned thread, one
+	// call at a time (modthread.go). Declared for the ProtectToolkit-C
+	// emulator, whose C_OpenSession and C_GenerateKey hung under a single
+	// caller in 6 of 144 whole-suite runs from whichever thread Go
+	// scheduled and in 0 of 104 on one thread: about one chance in a
+	// hundred if the thread made no difference, so consistent with a
+	// thread-affinity cause and not proof of one. Unlike the other
+	// fields, false is the zero value and not the restrictive answer: the
+	// thread costs every concurrent caller, and SoftHSM2 and Luna ran
+	// concurrent callers without fault, so a module has to earn the
+	// thread by a measured hang. The suite cannot measure a rate in one
+	// run; tools/hang-tally.sh does, so a declaration that does not help
+	// shows up as hangs, and one that is not needed shows up as a clean
+	// tally with the declaration removed.
+	SerializeOnOneThread bool
 }
 
 // ZeroDigestBehaviour is a module's answer to an ECDSA signature over an

@@ -51,6 +51,10 @@ type pkcs11Adapter struct {
 	// the module is driven; measured by the conformance suite.
 	caps Capabilities
 
+	// mt is the OS thread every module call runs on when caps declares
+	// SerializeOnOneThread, and nil otherwise. See modthread.go.
+	mt *moduleThread
+
 	sessMu   sync.Mutex
 	sessions map[p11.SessionHandle]*Session
 
@@ -68,22 +72,40 @@ type pkcs11Adapter struct {
 // newPKCS11Adapter loads and initializes the module at modulePath and
 // starts the session janitor. Every vendor constructor calls it.
 func newPKCS11Adapter(modulePath string, caps Capabilities) (*pkcs11Adapter, error) {
-	ctx := p11.New(modulePath)
-	if ctx == nil {
-		return nil, fmt.Errorf("pkcs11: failed to load module %q", modulePath)
+	var mt *moduleThread
+	if caps.SerializeOnOneThread {
+		mt = newModuleThread()
 	}
-	if err := ctx.Initialize(); err != nil {
-		ctx.Destroy()
-		return nil, fmt.Errorf("pkcs11: C_Initialize: %w", err)
-	}
-
 	a := &pkcs11Adapter{
-		ctx:         ctx,
 		caps:        caps,
+		mt:          mt,
 		sessions:    make(map[p11.SessionHandle]*Session),
 		janitorStop: make(chan struct{}),
 		janitorDone: make(chan struct{}),
 	}
+
+	// The module is loaded and initialized on the thread that will drive
+	// it: a module with per-thread state would otherwise record
+	// C_Initialize against a thread no later call arrives from.
+	err := a.onModuleThread(func() error {
+		ctx := p11.New(modulePath)
+		if ctx == nil {
+			return fmt.Errorf("pkcs11: failed to load module %q", modulePath)
+		}
+		if err := ctx.Initialize(); err != nil {
+			ctx.Destroy()
+			return fmt.Errorf("pkcs11: C_Initialize: %w", err)
+		}
+		a.ctx = ctx
+		return nil
+	})
+	if err != nil {
+		if mt != nil {
+			mt.stop()
+		}
+		return nil, err
+	}
+
 	go a.janitor(janitorInterval)
 	return a, nil
 }
@@ -97,7 +119,19 @@ func (a *pkcs11Adapter) withStateLock(fn func() error) error {
 	if a.closed {
 		return ErrAdapterClosed
 	}
-	return fn()
+	return a.onModuleThread(fn)
+}
+
+// onModuleThread runs fn on the module's own OS thread when the adapter
+// declared SerializeOnOneThread, and inline otherwise. Every call into the
+// module goes through it: both lock helpers, the constructor and Close.
+func (a *pkcs11Adapter) onModuleThread(fn func() error) error {
+	if a.mt == nil {
+		return fn()
+	}
+	var err error
+	a.mt.run(func() { err = fn() })
+	return err
 }
 
 // withReadLock runs fn under a shared lock. Only C_GetAttributeValue and
@@ -113,7 +147,7 @@ func (a *pkcs11Adapter) withReadLock(fn func() error) error {
 	if a.closed {
 		return ErrAdapterClosed
 	}
-	return fn()
+	return a.onModuleThread(fn)
 }
 
 func checkCtx(ctx context.Context) error {
@@ -718,12 +752,18 @@ func (a *pkcs11Adapter) Close() error {
 
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		for _, h := range handles {
-			_ = a.ctx.CloseSession(h)
-		}
-		a.ctx.Finalize()
-		a.ctx.Destroy()
+		_ = a.onModuleThread(func() error {
+			for _, h := range handles {
+				_ = a.ctx.CloseSession(h)
+			}
+			a.ctx.Finalize()
+			a.ctx.Destroy()
+			return nil
+		})
 		a.closed = true
+		if a.mt != nil {
+			a.mt.stop()
+		}
 	})
 	return nil
 }

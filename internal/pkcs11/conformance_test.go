@@ -984,6 +984,17 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
+	// Every other declaration is a fact one run can check. This one is a
+	// hang rate: 6 in 144 unpinned against 0 in 104 pinned is what put it
+	// on the emulator, and one run that passes says nothing either way.
+	// The mechanism it switches on is measured in modthread_linux_test.go;
+	// the declaration itself by tools/hang-tally.sh, which counts hangs per
+	// commit, so the skip names where the measurement lives.
+	t.Run("Capability_SerializeOnOneThread", func(t *testing.T) {
+		t.Skipf("declared %v: a hang rate over many runs, not a property one run can measure; tools/hang-tally.sh measures it, modthread_linux_test.go the mechanism",
+			b.caps.SerializeOnOneThread)
+	})
+
 	// 200 bits divides to a 25-byte CKA_VALUE_LEN, which a token might
 	// accept as a non-standard key. The adapter refuses it first.
 	t.Run("GenerateSecretKey_InvalidKeySizeRejected", func(t *testing.T) {
