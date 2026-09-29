@@ -323,6 +323,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Scanner pins: trivy 0.74.0, semgrep 1.177.0, govulncheck v1.8.0.
 
 ### Fixed
+- **A key created by `Unwrap` could be non-sensitive.** `Unwrap` passed the
+  caller's template through as given, and a template without
+  `CKA_SENSITIVE` gave a non-sensitive key on SoftHSM2 2.6.1 and
+  ProtectToolkit-C 7.3.3, which hands such a private key's value to any
+  authenticated session; the conformance suite's own backup round trip
+  restored its key that way. `Unwrap` now forces `CKA_SENSITIVE=true`, as
+  key generation does, dropping any value the template carries, and the
+  suite reads the attribute back after both of its unwraps. No production
+  path unwraps today. `key-ceremony-and-recovery.md` §5.1 gains the wrap
+  mechanisms measured on three backends: none wraps a private key on all
+  three.
 - The dependency gate installed govulncheck and never ran it.
 - The mechanism job's path filter never skipped: the decision was read
   through a pipe, and the status of a pipe is its last command's.

@@ -707,7 +707,7 @@ func (a *pkcs11Adapter) Unwrap(ctx context.Context, s *Session, unwrappingKey Ob
 	if err := s.touch(); err != nil {
 		return 0, err
 	}
-	p11Template := toP11Attributes(tmpl)
+	p11Template := unwrapTemplate(tmpl)
 
 	var handle p11.ObjectHandle
 	err := a.withStateLock(func() error {
@@ -805,6 +805,26 @@ func (a *pkcs11Adapter) sweepExpired() {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
+
+// unwrapTemplate is tmpl with CKA_SENSITIVE forced true, as generation
+// forces it. A template that leaves the attribute out gets a
+// non-sensitive key on SoftHSM2 2.6.1 and ProtectToolkit-C 7.3.3
+// (measured 2026-09-29), and ProtectToolkit-C hands a non-sensitive
+// private key's value to any authenticated session: a restore would have
+// turned a backed-up key into a readable one. Luna 7.8.7 refuses the
+// unwrap without the attribute (CKR_TEMPLATE_INCOMPLETE). A caller's own
+// CKA_SENSITIVE is dropped rather than obeyed, so no template can ask for
+// the laxer behaviour.
+func unwrapTemplate(tmpl []Attribute) []*p11.Attribute {
+	out := make([]*p11.Attribute, 0, len(tmpl)+1)
+	for _, a := range tmpl {
+		if a.Type == AttrSensitive {
+			continue
+		}
+		out = append(out, p11.NewAttribute(uint(a.Type), a.Value))
+	}
+	return append(out, p11.NewAttribute(p11.CKA_SENSITIVE, true))
+}
 
 func toP11Attributes(attrs []Attribute) []*p11.Attribute {
 	out := make([]*p11.Attribute, len(attrs))

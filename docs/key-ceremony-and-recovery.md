@@ -339,6 +339,32 @@ until an operator enables that policy**, a decision with its own security
 weight, since it is the setting that lets private key material leave the
 partition under a wrapping key at all.
 
+**Enabling the policy does not make this design run unchanged.** Measured
+on a Luna partition with the policy on (2026-09-28, outside the suite's
+rotation) and on the two software backends (2026-09-29), wrapping an EC
+P-256 private key under an AES-256 key:
+
+| Mechanism | SoftHSM2 2.6.1 | ProtectToolkit-C 7.3.3 | Luna 7.8.7, policy on |
+|---|---|---|---|
+| `CKM_AES_KEY_WRAP` (RFC 3394, this design's) | wraps | wraps | `CKR_MECHANISM_INVALID` |
+| `CKM_AES_KEY_WRAP_PAD` | wraps | wraps | `CKR_MECHANISM_INVALID` |
+| `CKM_AES_KEY_WRAP_KWP` (RFC 5649) | `CKR_MECHANISM_INVALID` | `CKR_MECHANISM_INVALID` | wraps |
+| `CKM_AES_CBC_PAD` | `CKR_MECHANISM_INVALID` | wraps | wraps |
+
+No mechanism wraps on all three, so the backup's mechanism is a fact
+about the pair of tokens that will perform it, chosen when that pair is,
+and a restore reads it from the backup's record rather than assuming it.
+The suite keeps `CKM_AES_KEY_WRAP`, which both software backends take,
+and Luna's declaration describes the default policy, in which nothing
+wraps; a policy is a property of one partition, not of the module, and a
+declaration per partition was considered and not adopted. The restored
+key's template also has to carry `CKA_SENSITIVE`: Luna refuses the unwrap
+without it (`CKR_TEMPLATE_INCOMPLETE`), and both software backends accept
+the omission and create a key whose value is not protected, which
+ProtectToolkit-C then hands to any session. `Unwrap` forces the attribute
+true on every backend, as key generation does, and the suite reads it
+back.
+
 **What this is not**: a working restore procedure by itself. It proves the
 primitive round-trips on one token. A real backup unwraps onto a different
 token under separate custody. `C_UnwrapKey` does not care about that (it
@@ -398,7 +424,7 @@ attributes the unwrap template asked for.
 |---|---|
 | SoftHSM2 2.6.1 | `false`. The template is honored |
 | ProtectToolkit-C 7.3.3 software emulation | **`true`** when first measured (2026-08-31): the template's request was ignored. **`false`** on 2026-09-24, on the same emulator version, through the same test: the template was honoured. The difference is not explained; the adapter now declares what was measured last (`UnwrapHonoursExtractable`) and the suite fails the day it changes back |
-| Luna Network HSM 7, firmware 7.8.7 | Not measured: the wrap that would produce the ciphertext to restore is refused under the default partition policy (§5.1) |
+| Luna Network HSM 7, firmware 7.8.7 | Not measured on the partitions the suite runs: the wrap that would produce the ciphertext to restore is refused under the default partition policy (§5.1). On one partition with the policy on, `false`: the template was honoured (2026-09-28, measured once, under `CKM_AES_KEY_WRAP_KWP`) |
 
 Both results, and both dates, are conformant, which is the point: an
 attribute a restore asks for is one the module may or may not apply, and

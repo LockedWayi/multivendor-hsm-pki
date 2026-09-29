@@ -80,7 +80,8 @@ type VendorAdapter interface {
 	// never leaves the token in plaintext.
 	Wrap(ctx context.Context, s *Session, wrappingKey, keyToWrap ObjectHandle, mech Mechanism) ([]byte, error)
 	// Unwrap imports wrapped as a new token object matching tmpl,
-	// decrypted under unwrappingKey inside the token.
+	// decrypted under unwrappingKey inside the token. The object is
+	// always created with CKA_SENSITIVE true, whatever tmpl says.
 	Unwrap(ctx context.Context, s *Session, unwrappingKey ObjectHandle, mech Mechanism, wrapped []byte, tmpl []Attribute) (ObjectHandle, error)
 
 	// Close releases the loaded module and any open sessions. After Close,
