@@ -6,6 +6,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.3.0], 2026-09-29
+
 ### Added
 - **A capability descriptor on every adapter.** `VendorAdapter.Capabilities()`
   returns a `pkcs11.Capabilities`: one field per behaviour on which two
