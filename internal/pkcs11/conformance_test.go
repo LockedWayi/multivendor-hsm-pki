@@ -164,6 +164,19 @@ func (b *conformanceBackend) openLoggedInSession(t *testing.T, opts pk11.Session
 	return s
 }
 
+// requireSensitive fails t unless the object reads back CKA_SENSITIVE
+// true: the attribute that keeps a key's value from C_GetAttributeValue.
+func (b *conformanceBackend) requireSensitive(t *testing.T, s *pk11.Session, h pk11.ObjectHandle, what string) {
+	t.Helper()
+	attrs, err := b.adapter.GetAttributes(context.Background(), s, h, []pk11.AttributeType{pk11.AttrSensitive})
+	if err != nil {
+		t.Fatalf("GetAttributes (%s): %v", what, err)
+	}
+	if len(attrs[0].Value) == 0 || attrs[0].Value[0] == 0 {
+		t.Fatalf("%s reads back CKA_SENSITIVE=false; Unwrap must create every key sensitive", what)
+	}
+}
+
 // runConformanceSuite exercises the full VendorAdapter contract against b.
 // Subtests run in declared order, and the last one closes b.adapter.
 func runConformanceSuite(t *testing.T, b *conformanceBackend) {
@@ -736,6 +749,8 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		if b.caps.UnwrapNeedsValueLen {
 			tmpl = append(tmpl, pk11.NumericAttribute(pk11.AttrValueLen, 16))
 		}
+		// The template asks for a non-sensitive key; Unwrap must not obey.
+		tmpl = append(tmpl, pk11.Attribute{Type: pk11.AttrSensitive, Value: []byte{0}})
 		unwrapped, err := b.adapter.Unwrap(ctx, s, wrappingKey, mech, wrapped, tmpl)
 		if err != nil {
 			t.Fatalf("Unwrap with UnwrapNeedsValueLen=%v declared: %v", b.caps.UnwrapNeedsValueLen, err)
@@ -743,6 +758,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		if unwrapped == 0 {
 			t.Fatal("Unwrap returned a zero handle")
 		}
+		b.requireSensitive(t, s, unwrapped, "unwrapped AES key (template asked for CKA_SENSITIVE=false)")
 	})
 
 	// WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip: wrap, destroy, unwrap,
@@ -821,6 +837,10 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		if restored == 0 {
 			t.Fatal("Unwrap returned a zero handle")
 		}
+		// The template says nothing about CKA_SENSITIVE; both software
+		// modules then create a non-sensitive key, and ProtectToolkit-C
+		// would hand its value to any session. Unwrap supplies it.
+		b.requireSensitive(t, s, restored, "restored private key")
 
 		restoredSig, err := b.adapter.Sign(ctx, s, restored, pk11.Mechanism{Type: pk11.MechECDSA}, digest[:])
 		if err != nil {

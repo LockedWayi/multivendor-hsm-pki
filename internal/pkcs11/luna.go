@@ -39,7 +39,11 @@ func NewLunaAdapter(modulePath string) (*LunaAdapter, error) {
 
 // lunaCapabilities is what a Luna Network HSM 7 (firmware 7.8.7) was
 // measured to do through client 10.9.4, on partitions in their default
-// policy.
+// policy. Two fields are properties of a partition's policy rather than
+// of the module, and they describe the default by decision: a partition
+// with private-key wrapping allowed wraps (under the padded AES wrap, not
+// CKM_AES_KEY_WRAP) and honours CKA_EXTRACTABLE on unwrap, measured once
+// on such a partition, which the suite does not run.
 var lunaCapabilities = Capabilities{
 	ConcurrentSlotEnumeration:  true, // measured 2026-09-24: 20 rounds of eight concurrent callers under the shared lock, no failure
 	SecondInitializeInProcess:  false,
@@ -50,8 +54,8 @@ var lunaCapabilities = Capabilities{
 	// would produce the ciphertext to restore is refused first.
 	UnwrapHonoursExtractable: false,
 	// Partition policy 1, "Allow private key wrapping", defaults to 0
-	// even when the capability is present; the partitions this was
-	// measured on keep the default.
+	// even when the capability is present; the partitions the suite runs
+	// on keep the default, and this field describes it.
 	PrivateKeyWrapRefused: "Luna partition policy 1 (Allow private key wrapping) is off",
 	UnwrapNeedsValueLen:   true,
 	SerializeOnOneThread:  false, // no hang in any run; concurrent callers measured without fault
