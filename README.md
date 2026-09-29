@@ -216,11 +216,12 @@ the SBOM and the provenance with the same key
 the inventory is signed by an offline token, and the anchor lives in another
 repository. Admission accepts only this signature, and CI cannot make it.
 
-One digest carries it today. Check it with the anchor inputs above:
+The v0.3.0 image carries it (an earlier digest, `sha256:0848e76a…`, does
+too). Check it with the anchor inputs above:
 
 ```sh
 HSM_PKI_TRUST_ANCHOR_REPO=... HSM_PKI_TRUST_ANCHOR_COMMIT=... HSM_PKI_TRUST_ANCHOR_SHA256=... \
-    ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:0848e76a2236b177b890efb9c7e41050904622a9edc075c7dee18fee58266e0a
+    ci/verify-release.sh ghcr.io/lockedwayi/multivendor-hsm-pki@sha256:aca09cc7b88c3dd6c2a99ed890a3f3ad38c280990abba29aba1d2dde0ed7b79a
 ```
 
 ## Status
