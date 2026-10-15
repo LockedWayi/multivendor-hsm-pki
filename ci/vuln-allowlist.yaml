@@ -28,7 +28,17 @@
 # on the expiry date, and that is the intended behaviour: at that point
 # somebody looks again, and either upgrades or writes a new reason.
 #
-# There are no accepted findings today. `trivy fs`, `trivy image` and
-# `govulncheck` are all clean against this tree (measured 2026-09-05), so
-# the honest content of this file is an empty list.
-vulnerabilities: []
+# One accepted finding today (2026-10-02); `trivy fs` and `govulncheck`
+# are clean against this tree.
+vulnerabilities:
+  - id: CVE-2026-84782
+    statement: >-
+      libssl3 3.0.20-1~deb12u2 in the Debian 12 base of hsm-pki-server:ci,
+      an information disclosure in OpenSSL for which Debian has published no
+      fixed version as of 2026-10-02 (trivy reports "affected", no fix
+      column). The project is parked: the image is built and scanned by CI
+      and not deployed anywhere, and the only change on the branch is
+      documentation. Accepted until Debian ships the fix; at expiry the
+      base image is rebuilt and this entry is removed or renewed with a new
+      reason.
+    expired_at: 2026-12-01
