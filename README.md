@@ -1,5 +1,6 @@
 # HSM-PKI Platform
 
+[![ci](https://github.com/LockedWayi/multivendor-hsm-pki/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/LockedWayi/multivendor-hsm-pki/actions/workflows/ci.yml?query=branch%3Amain)
 ![coverage](docs/coverage.svg)
 
 A vendor-agnostic **PKCS#11 abstraction layer** with a **Certificate
@@ -7,6 +8,18 @@ Authority** built on it, containerized, deployed to Kubernetes, and shipped
 by a pipeline whose security checks block merges. Private keys never leave
 the HSM. The design reasoning is in
 **[docs/architecture.md](docs/architecture.md)**.
+
+```
+              CA / applications
+                     │
+        one PKCS#11-shaped interface        ← VendorAdapter
+    ┌─────────┬──────┴───────┬─────────┐
+ SoftHSM2  ProtectServer    Luna      nShield  ← vendor implementations
+  token       slot        partition   softcard ← each vendor's isolated key space
+ ✅ built     ✅ built     ✅ built    ○ planned
+ (CI runs)  (local only) (maintainer's
+                          appliance)
+```
 
 ## Why this is unusual
 
