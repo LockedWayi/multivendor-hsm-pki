@@ -43,7 +43,7 @@ REGISTRY_IMAGE="registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace52
 
 # golang.org/x/vuln/cmd/govulncheck. A module version rather than an image:
 # the module proxy's checksum database makes a released version immutable.
-GOVULNCHECK_VERSION="v1.8.0"
+GOVULNCHECK_VERSION="v1.9.0"
 
 # requireSuppressionReporting refuses a trivy invocation that reads the
 # shared allowlist without also reporting what it suppressed.
