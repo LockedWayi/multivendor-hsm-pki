@@ -123,10 +123,35 @@ keeps them outside the cluster. Backing the default provisioner's directory
 instead does *not* work. It keys each volume to the PVC's UID, so a rebuilt
 cluster gets a new empty one (`module-mount.yaml` has the measurement).
 
+The node mounts `.local/k3d/node` by the absolute path the checkout had
+when the cluster was created. Move or rename the checkout and that path is
+gone: Docker recreates it empty the next time the node starts, the
+PersistentVolumes fail their `Directory` check, and the pod sits in
+`ContainerCreating`. `k3d-up.sh` compares the node's mount with the
+checkout it runs from and refuses to reuse a cluster whose mount points
+elsewhere, so the fix is `--recreate`, after moving anything you still
+need from the old directory into the new one. An empty directory is seeded
+from `.local/dev`.
+
+Both host-side listeners bind to loopback: the registry on
+`127.0.0.1:5000` and the API server on `127.0.0.1:6443`
+(`HSM_PKI_K3D_BIND`, `HSM_PKI_K3D_API_PORT`). The registry is plaintext
+HTTP with no authentication and the API server is the cluster's root of
+authority, and Docker publishes a port ahead of the host firewall, so
+`0.0.0.0` is reachable from the network whatever `ufw` allows. Nothing off
+the host needs either: the host pushes through `localhost` and the cluster
+pulls over the k3d network. A registry created before this change is kept
+as it is, because recreating it discards the signatures it holds; to move
+it, copy `/var/lib/registry` out of the old container (`docker run --rm
+--volumes-from k3d-hsm-pki-registry … tar`) into the new one.
+
 What it runs, for reference:
 
 ```sh
-k3d cluster create hsm-pki --agents 0 --no-lb --k3s-arg "--disable=traefik@server:0" \
+k3d registry create hsm-pki-registry --port 127.0.0.1:5000
+k3d cluster create hsm-pki --agents 0 --no-lb --api-port 127.0.0.1:6443 \
+    --k3s-arg "--disable=traefik@server:0" \
+    --registry-use k3d-hsm-pki-registry:5000 \
     --volume "$PWD/.local/k3d/node:/opt/hsm-pki@server:0"
 
 N=k3d-hsm-pki-server-0
@@ -204,6 +229,7 @@ exits rather than one that serves errors.
 | Symptom | Cause |
 |---|---|
 | Pod `Pending`, PVC unbound | The node-local PVs are missing. The prerequisite above was not run |
+| Pod `ContainerCreating`, events say `hostPath type check failed: /opt/hsm-pki/store is not a directory` | The node's mount points at a host path that no longer exists, usually because the checkout moved after the cluster was created. `k3d-up.sh --recreate` |
 | `failed to load module` | `/pkcs11` has no module, or the copied file was the symlink |
 | `CKR_SLOT_ID_INVALID` / workspace not found | The token store on the node does not hold a token with the configured label |
 | `CKR_PIN_INCORRECT` | The Secret's value is not the token's user PIN |

@@ -16,6 +16,11 @@
 # back, and the CA's issued and revoked records survive, because they were
 # never in the cluster.
 #
+# A cluster is reused only while its node still mounts this checkout's state
+# directory. The mount is an absolute host path fixed at creation, so a
+# checkout that has moved leaves the node bound to a directory that no
+# longer exists; the script refuses rather than staging state into it.
+#
 # Prerequisite: deploy/docker/run-local.sh has been run once, which produces
 # the ceremony artifacts and the tokens this reads from .local/dev.
 set -euo pipefail
@@ -33,6 +38,15 @@ LOCAL="$REPO_ROOT/.local/dev"
 # cluster, so k3d cluster delete leaves the signed image alone.
 REGISTRY_NAME="${HSM_PKI_K3D_REGISTRY:-hsm-pki-registry}"
 REGISTRY_HOST_PORT=5000
+# Both host-side listeners bind to loopback. The registry speaks plaintext
+# HTTP with no authentication and the API server is the cluster's root of
+# authority, and Docker publishes a port by inserting its own iptables
+# chain ahead of the host firewall's, so 0.0.0.0 here is a listener on
+# every interface whatever ufw says. Nothing off this host needs either:
+# the host pushes through localhost and the cluster pulls over the k3d
+# network.
+BIND_HOST="${HSM_PKI_K3D_BIND:-127.0.0.1}"
+API_PORT="${HSM_PKI_K3D_API_PORT:-6443}"
 # Two names for one registry, and the difference matters exactly once. The
 # host pushes and signs through localhost; the cluster pulls through the
 # container name on the k3d network. Same registry, so a signature written
@@ -70,21 +84,53 @@ fi
 
 if k3d registry list "k3d-$REGISTRY_NAME" >/dev/null 2>&1; then
     log "registry k3d-$REGISTRY_NAME already exists"
+    # An existing registry is kept whatever it listens on: recreating it
+    # would discard the signatures it holds, and a signature cannot be
+    # re-made without the signing token's PIN. Said, not fixed.
+    registry_host="$(docker inspect "k3d-$REGISTRY_NAME" \
+        --format '{{index .Config.Labels "k3d.registry.hostIP"}}' 2>/dev/null || true)"
+    if [ "${registry_host:-0.0.0.0}" != "$BIND_HOST" ]; then
+        echo "    NOTE: it listens on ${registry_host:-0.0.0.0}:$REGISTRY_HOST_PORT, not $BIND_HOST."
+        echo "    To move it, carry /var/lib/registry across to a new one (README, \"On k3d\")."
+    fi
 else
-    log "creating registry k3d-$REGISTRY_NAME"
-    k3d registry create "$REGISTRY_NAME" --port "$REGISTRY_HOST_PORT" >/dev/null
+    log "creating registry k3d-$REGISTRY_NAME on $BIND_HOST:$REGISTRY_HOST_PORT"
+    k3d registry create "$REGISTRY_NAME" --port "$BIND_HOST:$REGISTRY_HOST_PORT" >/dev/null
 fi
 
 if k3d cluster list "$CLUSTER" >/dev/null 2>&1; then
     log "cluster $CLUSTER already exists"
+    # The node mounts $NODE_STATE by the absolute path it had when the
+    # cluster was created. If the checkout has moved since, that path is
+    # gone; Docker recreates it empty at the node's next start, the
+    # fixed-path PersistentVolumes fail their Directory check, and the pod
+    # sits in ContainerCreating with "hostPath type check failed". Staging
+    # state into that node would populate a directory nothing else reads,
+    # so the script stops here instead. Found 2026-11-06: the checkout had
+    # moved, the host rebooted, and the cluster came back without its CA.
+    mounted="$(docker inspect "$NODE" \
+        --format '{{range .Mounts}}{{if eq .Destination "/opt/hsm-pki"}}{{.Source}}{{end}}{{end}}')"
+    if [ "$mounted" != "$NODE_STATE" ]; then
+        cat >&2 <<EOF
+the node mounts /opt/hsm-pki from
+    ${mounted:-(nothing)}
+and this checkout's state directory is
+    $NODE_STATE
+Rebuild the cluster:  $0 --recreate   (the registry and its signatures are kept)
+If the old directory still holds a store or tokens you need, move them into
+$NODE_STATE first; an empty one is seeded from .local/dev.
+EOF
+        exit 1
+    fi
 else
-    log "creating cluster $CLUSTER with host-backed state"
+    log "creating cluster $CLUSTER with host-backed state, API on $BIND_HOST:$API_PORT"
     mkdir -p "$NODE_STATE/pkcs11" "$NODE_STATE/tokens" "$NODE_STATE/store"
     # --registry-use writes the node's registries.yaml. Without it
     # containerd tries HTTPS against a plain-HTTP registry and the pod sits
     # in ImagePullBackOff with a TLS error that says nothing about the cause.
     k3d cluster create "$CLUSTER" \
         --agents 0 --no-lb \
+        --api-port "$BIND_HOST:$API_PORT" \
         --k3s-arg "--disable=traefik@server:0" \
         --registry-use "k3d-$REGISTRY_NAME:$REGISTRY_HOST_PORT" \
         --volume "$NODE_STATE:/opt/hsm-pki@server:0" >/dev/null
