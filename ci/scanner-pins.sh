@@ -11,23 +11,23 @@
 # Nothing here decides what a verifier trusts. The trust-anchor inputs are
 # supplied from outside the tree; see ci/fetch-trust-anchor.sh.
 
-# aquasec/trivy:0.74.0
-TRIVY_IMAGE="aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+# aquasec/trivy:0.76.2
+TRIVY_IMAGE="aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
 
-# semgrep/semgrep:1.178.0
-SEMGREP_IMAGE="semgrep/semgrep@sha256:32e459968daabe7ab86968184a29109b9564aa00392401156f9788452b42786b"
+# semgrep/semgrep:1.184.0
+SEMGREP_IMAGE="semgrep/semgrep@sha256:cc1b68266f267878b39739373ea9985b9a78e5d64497dd875c8de100b22695ed"
 
 # zricethezav/gitleaks:v8.30.1
 GITLEAKS_IMAGE="zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
 
-# ghcr.io/opentofu/opentofu:1.12.6. Must stay >= the required_version in
+# ghcr.io/opentofu/opentofu:1.13.9. Must stay >= the required_version in
 # deploy/terraform/environments/*/versions.tf, which needs 1.10.0's native
 # S3 conditional-write locking.
-TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:22cb52f6c5bf5c72a48a8f56d993d8df3e9462b1cdfb5db7e77143c87e8d159f"
+TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:f5aef7f2632b490e3c289a239d7974497d0583f3df6bfa35e8eb31a367ee5ec0"
 
 # alpine:3. Used for one root-owned file operation at a time: chown a
 # signature bundle, delete token state a root container created.
-ALPINE_IMAGE="alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
+ALPINE_IMAGE="alpine@sha256:3f4d6b32e26703c6082839234f43769d5046b3ac7c910033911d1e71d8cd630a"
 TOFU_CLEANUP_IMAGE="$ALPINE_IMAGE"
 
 # koalaman/shellcheck:v0.11.0
@@ -43,7 +43,7 @@ REGISTRY_IMAGE="registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace52
 
 # golang.org/x/vuln/cmd/govulncheck. A module version rather than an image:
 # the module proxy's checksum database makes a released version immutable.
-GOVULNCHECK_VERSION="v1.8.0"
+GOVULNCHECK_VERSION="v1.9.0"
 
 # requireSuppressionReporting refuses a trivy invocation that reads the
 # shared allowlist without also reporting what it suppressed.
@@ -55,7 +55,8 @@ GOVULNCHECK_VERSION="v1.8.0"
 # that is how an entry which has stopped matching anything is caught. But
 # a trivy report from a run that suppressed nothing is indistinguishable
 # from one that was never asked -- both simply omit the field, and the
-# report's metadata records no flags. Measured on 0.74.0, not assumed.
+# report's metadata records no flags. Measured on 0.74.0 and again on
+# 0.76.2, not assumed.
 #
 # So the mistake cannot be detected downstream. It can only be prevented
 # here, where somebody edits the command.
