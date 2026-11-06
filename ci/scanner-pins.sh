@@ -20,10 +20,10 @@ SEMGREP_IMAGE="semgrep/semgrep@sha256:cc1b68266f267878b39739373ea9985b9a78e5d644
 # zricethezav/gitleaks:v8.30.1
 GITLEAKS_IMAGE="zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
 
-# ghcr.io/opentofu/opentofu:1.12.6. Must stay >= the required_version in
+# ghcr.io/opentofu/opentofu:1.13.9. Must stay >= the required_version in
 # deploy/terraform/environments/*/versions.tf, which needs 1.10.0's native
 # S3 conditional-write locking.
-TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:22cb52f6c5bf5c72a48a8f56d993d8df3e9462b1cdfb5db7e77143c87e8d159f"
+TOFU_IMAGE="ghcr.io/opentofu/opentofu@sha256:f5aef7f2632b490e3c289a239d7974497d0583f3df6bfa35e8eb31a367ee5ec0"
 
 # alpine:3. Used for one root-owned file operation at a time: chown a
 # signature bundle, delete token state a root container created.
