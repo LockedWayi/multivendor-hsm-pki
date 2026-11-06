@@ -11,8 +11,8 @@
 # Nothing here decides what a verifier trusts. The trust-anchor inputs are
 # supplied from outside the tree; see ci/fetch-trust-anchor.sh.
 
-# aquasec/trivy:0.74.0
-TRIVY_IMAGE="aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
+# aquasec/trivy:0.76.2
+TRIVY_IMAGE="aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb"
 
 # semgrep/semgrep:1.178.0
 SEMGREP_IMAGE="semgrep/semgrep@sha256:32e459968daabe7ab86968184a29109b9564aa00392401156f9788452b42786b"
@@ -55,7 +55,8 @@ GOVULNCHECK_VERSION="v1.8.0"
 # that is how an entry which has stopped matching anything is caught. But
 # a trivy report from a run that suppressed nothing is indistinguishable
 # from one that was never asked -- both simply omit the field, and the
-# report's metadata records no flags. Measured on 0.74.0, not assumed.
+# report's metadata records no flags. Measured on 0.74.0 and again on
+# 0.76.2, not assumed.
 #
 # So the mistake cannot be detected downstream. It can only be prevented
 # here, where somebody edits the command.
