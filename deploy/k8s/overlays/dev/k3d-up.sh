@@ -16,6 +16,11 @@
 # back, and the CA's issued and revoked records survive, because they were
 # never in the cluster.
 #
+# A cluster is reused only while its node still mounts this checkout's state
+# directory. The mount is an absolute host path fixed at creation, so a
+# checkout that has moved leaves the node bound to a directory that no
+# longer exists; the script refuses rather than staging state into it.
+#
 # Prerequisite: deploy/docker/run-local.sh has been run once, which produces
 # the ceremony artifacts and the tokens this reads from .local/dev.
 set -euo pipefail
@@ -77,6 +82,28 @@ fi
 
 if k3d cluster list "$CLUSTER" >/dev/null 2>&1; then
     log "cluster $CLUSTER already exists"
+    # The node mounts $NODE_STATE by the absolute path it had when the
+    # cluster was created. If the checkout has moved since, that path is
+    # gone; Docker recreates it empty at the node's next start, the
+    # fixed-path PersistentVolumes fail their Directory check, and the pod
+    # sits in ContainerCreating with "hostPath type check failed". Staging
+    # state into that node would populate a directory nothing else reads,
+    # so the script stops here instead. Found 2026-11-06: the checkout had
+    # moved, the host rebooted, and the cluster came back without its CA.
+    mounted="$(docker inspect "$NODE" \
+        --format '{{range .Mounts}}{{if eq .Destination "/opt/hsm-pki"}}{{.Source}}{{end}}{{end}}')"
+    if [ "$mounted" != "$NODE_STATE" ]; then
+        cat >&2 <<EOF
+the node mounts /opt/hsm-pki from
+    ${mounted:-(nothing)}
+and this checkout's state directory is
+    $NODE_STATE
+Rebuild the cluster:  $0 --recreate   (the registry and its signatures are kept)
+If the old directory still holds a store or tokens you need, move them into
+$NODE_STATE first; an empty one is seeded from .local/dev.
+EOF
+        exit 1
+    fi
 else
     log "creating cluster $CLUSTER with host-backed state"
     mkdir -p "$NODE_STATE/pkcs11" "$NODE_STATE/tokens" "$NODE_STATE/store"
