@@ -134,11 +134,13 @@ func run(args []string) error {
 	return nil
 }
 
-// survey lists every public and private key object on the token and
-// returns the total beside those matching prefix. The ratio tells the
-// operator whether this is litter or the prefix is wrong.
+// survey lists every key object on the token, public, private and
+// secret, and returns the total beside those matching prefix. The ratio
+// tells the operator whether this is litter or the prefix is wrong.
+// Secret keys are counted because the conformance suite makes them: a run
+// killed mid-way leaves AES keys behind as well as key pairs.
 func survey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, prefix string) (total int, matched []object, err error) {
-	for _, class := range []pk11.ObjectClass{pk11.ClassPublicKey, pk11.ClassPrivateKey} {
+	for _, class := range []pk11.ObjectClass{pk11.ClassPublicKey, pk11.ClassPrivateKey, pk11.ClassSecretKey} {
 		handles, err := adapter.FindObjects(ctx, s, []pk11.Attribute{
 			pk11.NumericAttribute(pk11.AttrClass, uint64(class)),
 		})
