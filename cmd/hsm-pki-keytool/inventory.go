@@ -336,6 +336,9 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 					"doing the deed would make this document say something untrue", spec.label, ws.Label)
 			}
 			entry.PublicKeyPEM = previousEntry.PublicKeyPEM
+			// Its own curve, not this run's: after a rotation to another
+			// curve the retired key is still on the one it was made on.
+			entry.Curve = previousEntry.Curve
 			retiredAt := previousEntry.RetiredAt
 			if retiredAt == nil {
 				retiredAt = &now

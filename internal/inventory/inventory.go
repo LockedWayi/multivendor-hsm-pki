@@ -187,6 +187,11 @@ func (inv Inventory) Validate() error {
 		if err != nil {
 			return err
 		}
+		// The stated curve is what a verifier and retire-signing-key read
+		// without decoding the key, so it has to be the key's.
+		if name := pub.Curve.Params().Name; e.Curve != name {
+			return fmt.Errorf("%w: %q states curve %q but its key is on %s", ErrInvalid, e.Label, e.Curve, name)
+		}
 		id := keyID{pub.X.String(), pub.Y.String()}
 		if other, dup := seenKey[id]; dup {
 			return fmt.Errorf("%w: %q and %q are the same key pair under two labels; one key must not serve two purposes",
