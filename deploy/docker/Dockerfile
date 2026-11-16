@@ -24,7 +24,7 @@
 # CGO_ENABLED=0 build does not merely produce a static binary -- it does not
 # compile. That is what forces a runtime base with a dynamic loader, and it is
 # why "scratch" was never available to this service.
-FROM golang:1.27-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS build
+FROM golang:1.27-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS build
 
 ENV CGO_ENABLED=1
 
