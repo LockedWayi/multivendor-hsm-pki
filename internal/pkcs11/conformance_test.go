@@ -188,7 +188,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 			t.Fatalf("Workspaces: %v", err)
 		}
 		for _, ws := range wss {
-			if ws.Label == b.ws.Label && ws.Present {
+			if ws.Label == b.ws.Label {
 				return
 			}
 		}

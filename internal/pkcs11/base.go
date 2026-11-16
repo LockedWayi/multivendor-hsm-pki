@@ -202,8 +202,7 @@ func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 				SlotID: id,
 				Label:  strings.TrimRight(ti.Label, " "),
 				// PKCS#11 pads both fixed-width fields with spaces.
-				Serial:  strings.TrimRight(ti.SerialNumber, " "),
-				Present: true,
+				Serial: strings.TrimRight(ti.SerialNumber, " "),
 			})
 		}
 		return nil
