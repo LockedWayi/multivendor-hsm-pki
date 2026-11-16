@@ -60,6 +60,10 @@ set -euo pipefail
 COSIGN_TRACK="${HSM_PKI_COSIGN_VERSION:-v3}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The two cosign versions are pinned beside the other third-party pins,
+# where the freshness check reads them.
+# shellcheck source=ci/scanner-pins.sh
+. "$REPO_ROOT/ci/scanner-pins.sh"
 BIN_DIR="${HSM_PKI_COSIGN_DIR:-$REPO_ROOT/.local/bin}"
 RELEASE_KEY="$REPO_ROOT/ci/sigstore-release-cosign.pub"
 RUNNER_IMAGE="hsm-pki-cosign:local"
@@ -93,14 +97,14 @@ esac
 # Same release key either way; openssl checks both.
 case "$COSIGN_TRACK" in
     v3)
-        COSIGN_VERSION="v3.1.3"
+        COSIGN_VERSION="$COSIGN_V3_VERSION"
         RELEASE_SIG_STYLE="bundle"
         case "$COSIGN_ARCH" in
             amd64) COSIGN_SHA256="549398fbe5a2f930b4eb564c7bbe9588270566ffcc8c9cb45644c066714aa380" ;;
             arm64) COSIGN_SHA256="43266ec58f867517ab60e46972a1700f72f277d4c62a039325a4af66e4a1a1e4" ;;
         esac ;;
     v2)
-        COSIGN_VERSION="v2.6.1"
+        COSIGN_VERSION="$COSIGN_V2_VERSION"
         RELEASE_SIG_STYLE="detached"
         case "$COSIGN_ARCH" in
             amd64) COSIGN_SHA256="cc616c0d689a1ce248de015db41a925eb4cb1fcd8f49349e4e884a3a3838e328" ;;
