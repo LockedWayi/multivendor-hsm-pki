@@ -115,6 +115,18 @@ func runGenerateInventoryCmd(args []string) error {
 		return fmt.Errorf("-validity must be positive, got %s", *validity)
 	}
 
+	// The signature on the document's path would replace the document it
+	// signs, and on -in's path the previous document this run reads from.
+	shared := []namedPath{{"-out", *outPath}, {"-signature-out", *sigPath}}
+	if err := refuseSharedPaths(shared...); err != nil {
+		return err
+	}
+	if *inPath != "" {
+		if err := refuseSharedPaths(namedPath{"-in", *inPath}, namedPath{"-signature-out", *sigPath}); err != nil {
+			return err
+		}
+	}
+
 	// Overwriting -out without reading it would reset the version counter
 	// and lose every valid_from, so the previous document has to be named.
 	if *inPath == "" {

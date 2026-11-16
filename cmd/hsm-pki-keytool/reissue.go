@@ -84,10 +84,8 @@ func runReissueIntermediateCmd(args []string) error {
 	}
 	// The previous intermediate's output path is the certificate still
 	// serving traffic through the transition window.
-	if _, err := os.Stat(*interCertOut); err == nil {
-		return fmt.Errorf("refusing to overwrite existing file %s", *interCertOut)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("checking output path %s: %w", *interCertOut, err)
+	if err := refuseExistingFile(*interCertOut); err != nil {
+		return err
 	}
 
 	rootCert, err := readCertPEM(*rootCertIn)

@@ -114,12 +114,19 @@ func runCeremonyCmd(args []string) error {
 			return fmt.Errorf("%s is required", name)
 		}
 	}
-	// A re-run against a previous ceremony's output paths is a mistake.
+	// A re-run against a previous ceremony's output paths is a mistake, and
+	// so is one path for two outputs: either way a certificate that cannot
+	// be produced again would be overwritten.
+	if err := refuseSharedPaths(
+		namedPath{"-root-cert-out", *rootCertOut},
+		namedPath{"-root-crl-out", *rootCRLOut},
+		namedPath{"-intermediate-cert-out", *interCertOut},
+	); err != nil {
+		return err
+	}
 	for _, path := range []string{*rootCertOut, *rootCRLOut, *interCertOut} {
-		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("refusing to overwrite existing file %s", path)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("checking output path %s: %w", path, err)
+		if err := refuseExistingFile(path); err != nil {
+			return err
 		}
 	}
 

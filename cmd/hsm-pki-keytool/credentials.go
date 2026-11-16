@@ -42,6 +42,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -568,6 +569,30 @@ func refuseExistingFile(path string) error {
 		return fmt.Errorf("refusing to overwrite existing file %s", path)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("checking output path %s: %w", path, err)
+	}
+	return nil
+}
+
+// namedPath is one file a command reads or writes, with the flag that
+// named it, for the error message.
+type namedPath struct{ flag, path string }
+
+// refuseSharedPaths refuses when two of paths name the same file. Two
+// outputs of one run on one path mean the second write replaces the first;
+// for the ceremony the first is a certificate whose key labels are now
+// taken, so it cannot be produced again. Compared after filepath.Abs, so
+// "out/a.pem" and "./out/a.pem" are one file.
+func refuseSharedPaths(paths ...namedPath) error {
+	seen := make(map[string]string, len(paths))
+	for _, p := range paths {
+		abs, err := filepath.Abs(p.path)
+		if err != nil {
+			return fmt.Errorf("resolving %s %s: %w", p.flag, p.path, err)
+		}
+		if other, dup := seen[abs]; dup {
+			return fmt.Errorf("%s and %s both name %s; one would overwrite the other", other, p.flag, p.path)
+		}
+		seen[abs] = p.flag
 	}
 	return nil
 }

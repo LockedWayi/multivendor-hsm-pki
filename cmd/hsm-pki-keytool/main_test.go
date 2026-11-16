@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
@@ -102,6 +103,33 @@ func TestRunCeremonyCmd_RefusesToOverwriteExistingOutput(t *testing.T) {
 
 		if err := runCeremonyCmd(ceremonyArgs(t, b, dir)); err == nil {
 			t.Fatal("runCeremonyCmd with a pre-existing output file succeeded, want an error")
+		}
+	})
+}
+
+// TestRunCeremonyCmd_RefusesOnePathForTwoOutputs: the intermediate's
+// certificate written over the root's would leave the root certificate
+// nowhere while its key label is taken. The refusal comes before the
+// token is touched, which the same ceremony then proves by running
+// cleanly under the same labels.
+func TestRunCeremonyCmd_RefusesOnePathForTwoOutputs(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		dir := t.TempDir()
+		args := ceremonyArgs(t, b, dir)
+		for _, clash := range [][]string{
+			{"-intermediate-cert-out", filepath.Join(dir, "root.pem")},
+			{"-root-crl-out", filepath.Join(dir, ".", "intermediate.pem")},
+		} {
+			err := runCeremonyCmd(append(append([]string(nil), args...), clash...))
+			if err == nil || !strings.Contains(err.Error(), "one would overwrite the other") {
+				t.Fatalf("runCeremonyCmd with %v: %v, want the shared-path refusal", clash, err)
+			}
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Fatalf("a refused ceremony wrote %d files", len(entries))
+		}
+		if err := runCeremonyCmd(args); err != nil {
+			t.Fatalf("the same ceremony with distinct paths, after the refusals: %v (a refusal touched the token)", err)
 		}
 	})
 }
