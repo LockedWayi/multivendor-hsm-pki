@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 // listing writes an inventory that lists label with status and pubPEM,
@@ -126,6 +128,46 @@ func TestRunRetireSigningKeyCmd_RefusesAKeyThatIsNotTheOneListed(t *testing.T) {
 		right := retireArgs(t, b, label, listing(t, label, inventory.StatusVerifyOnly, pubPEM))
 		if err := runRetireSigningKeyCmd(right); err != nil {
 			t.Fatalf("the key should still be on the token after the refusal, but retiring it failed: %v", err)
+		}
+	})
+}
+
+// TestRunRetireSigningKeyCmd_FinishesARetirementInterruptedHalfway: the
+// private half goes first, so a failure between the two destructions
+// leaves only the public half. Before the fix the command read both
+// halves before destroying anything and could never remove what was
+// left.
+func TestRunRetireSigningKeyCmd_FinishesARetirementInterruptedHalfway(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		label := b.Label("image-signing-key-v1")
+		pubPEM := string(provisionOn(t, b, b.Primary, b.PrimaryPIN, label))
+
+		// The first half of a retirement, done by hand.
+		ctx := context.Background()
+		s, err := b.Adapter.OpenSession(ctx, b.Primary, pk11.SessionOptions{})
+		if err != nil {
+			t.Fatalf("OpenSession: %v", err)
+		}
+		if err := b.Adapter.Login(ctx, s, []byte(b.PrimaryPIN), b.Role.Role()); err != nil {
+			t.Fatalf("Login: %v", err)
+		}
+		priv, err := pk11.FindKeyByLabel(ctx, b.Adapter, s, pk11.ClassPrivateKey, label)
+		if err != nil {
+			t.Fatalf("FindKeyByLabel: %v", err)
+		}
+		if err := b.Adapter.DestroyObject(ctx, s, priv); err != nil {
+			t.Fatalf("DestroyObject: %v", err)
+		}
+		_ = b.Adapter.LogoutToken(ctx)
+		_ = b.Adapter.CloseSession(ctx, s)
+
+		args := retireArgs(t, b, label, listing(t, label, inventory.StatusVerifyOnly, pubPEM))
+		if err := runRetireSigningKeyCmd(args); err != nil {
+			t.Fatalf("finishing the interrupted retirement: %v", err)
+		}
+		err = runRetireSigningKeyCmd(args)
+		if err == nil || !strings.Contains(err.Error(), "no key object found") {
+			t.Fatalf("after finishing = %v, want nothing left under the label", err)
 		}
 	})
 }

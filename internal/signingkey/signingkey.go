@@ -296,28 +296,38 @@ func Destroy(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, l
 	return done, nil
 }
 
-// Load reads an existing signing key's public half and protection
-// attributes off the token, without checking them. Verify checks them.
-func Load(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string, curve pk11.ECCurve) (Key, error) {
+// PublicKey reads the public half under label off the token. It needs
+// only that half, which is what a retirement interrupted between its two
+// destructions leaves behind.
+func PublicKey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string, curve pk11.ECCurve) (*ecdsa.PublicKey, error) {
 	ellipticCurve := curve.Curve()
 	if ellipticCurve == nil {
-		return Key{}, fmt.Errorf("signingkey: %w", pk11.ErrUnsupportedCurve)
+		return nil, fmt.Errorf("signingkey: %w", pk11.ErrUnsupportedCurve)
 	}
-
 	pubHandle, err := pk11.FindKeyByLabel(ctx, adapter, s, pk11.ClassPublicKey, label)
 	if err != nil {
-		return Key{}, fmt.Errorf("signingkey: %w", err)
+		return nil, fmt.Errorf("signingkey: %w", err)
 	}
 	pubAttrs, err := adapter.GetAttributes(ctx, s, pubHandle, []pk11.AttributeType{pk11.AttrEcPoint})
 	if err != nil {
-		return Key{}, fmt.Errorf("signingkey: reading CKA_EC_POINT for %q: %w", label, err)
+		return nil, fmt.Errorf("signingkey: reading CKA_EC_POINT for %q: %w", label, err)
 	}
 	if len(pubAttrs) == 0 {
-		return Key{}, fmt.Errorf("signingkey: CKA_EC_POINT not returned for %q", label)
+		return nil, fmt.Errorf("signingkey: CKA_EC_POINT not returned for %q", label)
 	}
 	pub, err := pk11.DecodeECPoint(ellipticCurve, pubAttrs[0].Value)
 	if err != nil {
-		return Key{}, fmt.Errorf("signingkey: decoding public key %q: %w", label, err)
+		return nil, fmt.Errorf("signingkey: decoding public key %q: %w", label, err)
+	}
+	return pub, nil
+}
+
+// Load reads an existing signing key's public half and protection
+// attributes off the token, without checking them. Verify checks them.
+func Load(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string, curve pk11.ECCurve) (Key, error) {
+	pub, err := PublicKey(ctx, adapter, s, label, curve)
+	if err != nil {
+		return Key{}, err
 	}
 
 	privHandle, err := pk11.FindKeyByLabel(ctx, adapter, s, pk11.ClassPrivateKey, label)

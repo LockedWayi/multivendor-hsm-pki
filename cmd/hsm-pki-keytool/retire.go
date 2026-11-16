@@ -182,14 +182,17 @@ func retireSigningKey(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.W
 		}
 	}()
 
-	// Load, not Verify: a key on its way out need not pass the protection
-	// check, and refusing to destroy a key because it is extractable would
-	// keep the wrong key alive.
-	onToken, err := signingkey.Load(ctx, adapter, s, label, curve)
+	// The public half only, and no protection check: a key on its way out
+	// need not pass one, refusing to destroy a key because it is
+	// extractable would keep the wrong key alive, and a retirement
+	// interrupted after the private half went leaves only the public half,
+	// which this has to be able to finish. The public half is also what
+	// identifies the key.
+	onToken, err := signingkey.PublicKey(ctx, adapter, s, label, curve)
 	if err != nil {
 		return signingkey.Destroyed{}, fmt.Errorf("reading %q off token %q: %w", label, ws.Label, err)
 	}
-	if !signingkey.SameKey(onToken.Public, listed) {
+	if !signingkey.SameKey(onToken, listed) {
 		return signingkey.Destroyed{}, fmt.Errorf("the key under label %q on token %q is not the key the inventory lists under that label; "+
 			"refusing to destroy a key the document is not talking about", label, ws.Label)
 	}
