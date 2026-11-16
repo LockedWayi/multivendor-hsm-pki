@@ -380,12 +380,17 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if ci/mechanism-test-needed.sh "$BASE_SHA" > /tmp/needed.txt; then
-            run=true
-          else
-            run=false
-          fi
+          # Only exit 1 means "nothing watched changed". Any other failure,
+          # a missing base (2) or a base git cannot reach (128), is an
+          # error, not a reason to skip the test.
+          rc=0
+          ci/mechanism-test-needed.sh "$BASE_SHA" > /tmp/needed.txt || rc=$?
           cat /tmp/needed.txt
+          case "$rc" in
+            0) run=true ;;
+            1) run=false ;;
+            *) echo "mechanism-test-needed failed with exit $rc; refusing to decide the test is not needed" >&2; exit "$rc" ;;
+          esac
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "decision: run=$run"
           {
