@@ -495,21 +495,32 @@ func mustLunaRole(t *testing.T, name string) pk11.LoginRole {
 // MustFindWorkspace resolves a token by label and fails the test if it is
 // missing or carries no serial. The ceremony compares serials, so a
 // backend that reports none cannot run the two-token tests.
+//
+// A failure closes the adapter first. The callers build the adapter and
+// register its release only once both workspaces are found, so without
+// this a missing workspace left the module initialized, and every later
+// test against that backend in the same binary failed with
+// CKR_CRYPTOKI_ALREADY_INITIALIZED instead of the real reason.
 func MustFindWorkspace(t *testing.T, adapter pk11.VendorAdapter, label string) pk11.Workspace {
 	t.Helper()
+	fail := func(format string, args ...any) {
+		t.Helper()
+		_ = adapter.Close()
+		t.Fatalf(format, args...)
+	}
 	wss, err := adapter.Workspaces(context.Background())
 	if err != nil {
-		t.Fatalf("Workspaces: %v", err)
+		fail("Workspaces: %v", err)
 	}
 	for _, w := range wss {
 		if w.Label == label {
 			if w.Serial == "" {
-				t.Fatalf("workspace %q carries no token serial; the token-identity check needs one", label)
+				fail("workspace %q carries no token serial; the token-identity check needs one", label)
 			}
 			return w
 		}
 	}
-	t.Fatalf("workspace %q not found among %+v", label, wss)
+	fail("workspace %q not found among %+v", label, wss)
 	return pk11.Workspace{}
 }
 
