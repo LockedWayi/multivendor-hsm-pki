@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **A revocation could be lost from the OCSP cache.** A response read
+  from the store before a revocation and still being signed when the
+  revocation's cache invalidation landed was cached afterwards, and the
+  revoked certificate was answered `good` until nextUpdate (24 hours by
+  default) while the CRL already listed it. A generation counter now
+  guards the cache write.
+- **OCSP nextUpdate** is clamped to the responder certificate's and the
+  issuer's NotAfter, as the CRL's already was to the issuer's.
+- **A negative `ca.crl_validity_hours`** is refused at load. It used to
+  start a service whose every `/crl` failed after spending a CRL number.
+- **The CRL drops an entry** once its certificate expired more than one
+  CRL window ago (RFC 5280 section 3.3); it used to list every
+  revocation forever.
+
+### Security
+- **Client authentication compares the issuer.** A certificate minted by
+  a sibling intermediate under the same root, carrying a recorded
+  issuer's serial and subject, was accepted on the authenticated
+  listener. The leaf's issuer must now be this CA's certificate.
+- **Fresh OCSP signatures are rationed** (20 a second, a burst of 100),
+  answered `tryLater` past the ration: every unknown-serial request from
+  the unauthenticated endpoint cost one signature on the CA's token.
+
 ## [0.3.0], 2026-09-29
 
 ### Added
