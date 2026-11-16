@@ -45,13 +45,13 @@ echo
 echo "==> upstream images referenced from scripts and workflows"
 # A list of the upstream names this repository uses. A name here without
 # @sha256: on the same line is a finding. A new upstream image is added
-# here too.
+# here too. Only a line that is a comment from its start is prose. A
+# trailing comment does not make the command before it any less a use of
+# the image, and a '#' inside a command (${#arr[@]}) is not a comment.
 UPSTREAM='alpine|golang|debian|registry|ubuntu|aquasec/trivy|semgrep/semgrep|zricethezav/gitleaks|ghcr\.io/opentofu/opentofu|gcr\.io/distroless|koalaman/shellcheck'
 while IFS= read -r hit; do
     case "$hit" in
         *"@sha256:"*) continue ;;
-        # A comment is prose about an image, not a use of one.
-        *"#"*) continue ;;
     esac
     fail "$hit"
 done < <(tracked 'ci/*.sh' 'ci/*.yml' 'deploy/*.sh' 'deploy/*.yml' 'deploy/*.yaml' \
