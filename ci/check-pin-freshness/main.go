@@ -440,14 +440,20 @@ func (c *httpClient) Tags(ctx context.Context, registry, repo string) ([]string,
 		if err := c.getJSON(ctx, url, token, &body); err != nil {
 			return nil, err
 		}
+		// The end is an empty page, or a page that does not move past
+		// the previous one (a registry that ignores last=). Not a short
+		// page: a registry that caps n below what was asked answers short
+		// from the first page on, and stopping there reads the newest
+		// release out of a truncated list.
 		if len(body.Tags) == 0 {
 			break
 		}
-		all = append(all, body.Tags...)
-		if len(body.Tags) < 1000 {
+		next := body.Tags[len(body.Tags)-1]
+		if next == last {
 			break
 		}
-		last = body.Tags[len(body.Tags)-1]
+		all = append(all, body.Tags...)
+		last = next
 	}
 	if len(all) == 0 {
 		return nil, fmt.Errorf("%s/%s lists no tags", registry, repo)

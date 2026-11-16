@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -367,6 +368,43 @@ func TestTagsWalksPastAThousandWithoutALinkHeader(t *testing.T) {
 	got, ok := newest(tags, version{})
 	if !ok || got.String() != "1.12.6" {
 		t.Errorf("newest = %s (%v), want 1.12.6; the second page was not read", got, ok)
+	}
+}
+
+// TestTagsWalksARegistryThatCapsThePageSize: a registry may answer fewer
+// tags than n asks for on every page. Before the fix a short page ended
+// the walk, so with a cap of 100 only the first 100 tags were seen.
+func TestTagsWalksARegistryThatCapsThePageSize(t *testing.T) {
+	var all []string
+	for i := 0; i < 250; i++ {
+		all = append(all, fmt.Sprintf("1.%03d.0", i))
+	}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/token") {
+			fmt.Fprint(w, `{"token":"t"}`)
+			return
+		}
+		start := 0
+		if last := r.URL.Query().Get("last"); last != "" {
+			for i, tag := range all {
+				if tag == last {
+					start = i + 1
+				}
+			}
+		}
+		end := min(start+100, len(all))
+		page, _ := json.Marshal(map[string][]string{"tags": all[start:end]})
+		w.Write(page)
+	}))
+	defer srv.Close()
+
+	c := &httpClient{hc: srv.Client()}
+	tags, err := c.Tags(context.Background(), strings.TrimPrefix(srv.URL, "https://"), "capped/repo")
+	if err != nil {
+		t.Fatalf("Tags: %v", err)
+	}
+	if len(tags) != len(all) {
+		t.Fatalf("got %d tags, want %d; a short page was read as the last", len(tags), len(all))
 	}
 }
 
