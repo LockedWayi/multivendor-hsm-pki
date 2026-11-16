@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+- **The cosign versions are pinned in `ci/scanner-pins.sh`**, where the
+  freshness check reads them as module pins. Its first report: v2.6.1
+  against v2.6.5 and v3.1.3 against v3.1.4, not bumped here.
+- The `suite` job runs the race suite once, inside the coverage step.
+- `vuln-gate -max-horizon-days` is gone: the 180-day ceiling is a
+  constant. The drills share `ci/drill-helpers.sh`.
+
 ### Removed
 - `pkcs11.Workspace.Present`, which was always true.
 
@@ -53,6 +61,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **The test harness closes the adapter when a workspace is missing**, so
   the real reason is reported once per subtest instead of every later
   subtest failing with `CKR_CRYPTOKI_ALREADY_INITIALIZED`.
+- **The committed admission policy is checked against the signed
+  inventory.** The `suite` job renders `image-signature.yaml` and diffs
+  it with the committed file; a hand edit that added an attestor or set
+  `failurePolicy: Ignore` used to pass every gate.
+- **The mechanism job no longer skips on an error.** Only exit 1 of
+  `ci/mechanism-test-needed.sh` means nothing watched changed; a missing
+  or unreachable base used to read as "skip". The watched list now
+  covers the verifiers and the inventory logic the rotation drill
+  asserts.
+- **`token-cleanup` lists secret keys**, so the AES keys a killed
+  conformance run leaves are reported and removed.
+- **`check-image-pins` no longer skips a line with a trailing comment.**
+- **`verify-release.sh` tests select-key's exit status**; the `|| die`
+  after `mapfile` could never fire.
+- **Pin freshness pages until the registry stops moving**, not until the
+  first short page.
+- **Each publish run pushes and verifies only its own tag**, so a release
+  commit's main and tag runs no longer race on `sha-<commit>`.
 
 ### Security
 - **Client authentication compares the issuer.** A certificate minted by
@@ -62,6 +88,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Fresh OCSP signatures are rationed** (20 a second, a burst of 100),
   answered `tryLater` past the ration: every unknown-serial request from
   the unauthenticated endpoint cost one signature on the CA's token.
+- **Pod hardening refuses added capabilities, hostPath and hostPort.** A
+  pod that satisfied every other rule could add `SYS_ADMIN` after
+  dropping `ALL`, mount the node's filesystem and bind a host port.
+  Volumes are limited to PSA `restricted`'s list of types.
 
 ## [0.3.0], 2026-09-29
 
