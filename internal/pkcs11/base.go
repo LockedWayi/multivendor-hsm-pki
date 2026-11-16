@@ -170,6 +170,11 @@ func checkCtx(ctx context.Context) error {
 // stalls every other operation. A module that declares it gets the shared
 // lock, and the conformance suite measures the declaration with eight
 // concurrent callers on every run. Nothing here reads a vendor's name.
+//
+// A token whose information cannot be read fails the whole enumeration,
+// rather than being left out of it: every caller resolves a label against
+// this list and refuses a label that matches twice, and that refusal is
+// worth nothing if one of the two can silently drop out.
 func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -187,7 +192,11 @@ func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 		for _, id := range ids {
 			ti, err := a.ctx.GetTokenInfo(id)
 			if err != nil {
-				continue
+				// Fail closed. A token this cannot read may carry the label
+				// being looked up, and leaving it out would turn "two tokens
+				// share this label" into one match, and a device error into
+				// "token not found".
+				return fmt.Errorf("C_GetTokenInfo slot %d: %w", id, err)
 			}
 			out = append(out, Workspace{
 				SlotID: id,
