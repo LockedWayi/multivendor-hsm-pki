@@ -419,6 +419,15 @@ func TestLoad_RejectsNegativeCRLNumberFloor(t *testing.T) {
 
 // TestLoad_RejectsNonPositiveSessionBudgets: a budget of zero or less is
 // already exceeded when the session opens.
+func TestLoad_RejectsNegativeCRLValidity(t *testing.T) {
+	t.Setenv("TEST_SOFTHSM2_PIN", "123456")
+	body := validSoftHSM2Config + "  crl_validity_hours: -1\n"
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), "crl_validity_hours") {
+		t.Fatalf("Load with a negative ca.crl_validity_hours: %v, want its refusal", err)
+	}
+}
+
 func TestLoad_RejectsNonPositiveSessionBudgets(t *testing.T) {
 	for _, tc := range []struct{ name, field, value string }{
 		{"negative idle_timeout", "idle_timeout", "-5m"},
