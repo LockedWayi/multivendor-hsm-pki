@@ -47,6 +47,7 @@ WATCHED=(
     'ci/publish-image.sh'           # the order the whole thing happens in
     'ci/signing-mechanism-test.sh'  # the test itself
     'ci/rotation-drill.sh'          # the rotation drill, run in the same job
+    'ci/drill-helpers.sh'           # the refusal check both drills use
     'cmd/hsm-pki-keytool/retire.go'     # retires a key: reads the inventory, then destroys
     'cmd/hsm-pki-keytool/provision.go'  # provisions the next key version
     'cmd/hsm-pki-keytool/inventory.go'  # publishes what the signers and verifiers read
