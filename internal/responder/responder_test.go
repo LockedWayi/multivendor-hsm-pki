@@ -9,7 +9,9 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"io"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -351,5 +353,124 @@ func TestDueForRenewal_HalfLife(t *testing.T) {
 	}
 	if !r.dueForRenewal(c.NotBefore.Add(4 * 24 * time.Hour)) {
 		t.Fatal("not due after four of seven days")
+	}
+}
+
+// gatedSigner blocks its next Sign once armed, so a test can land a
+// revocation while a response is being signed.
+type gatedSigner struct {
+	crypto.Signer
+	armed   chan struct{} // closed by the test to arm the gate
+	entered chan struct{} // closed when the gated Sign starts
+	release chan struct{} // closed by the test to let it finish
+	once    sync.Once
+}
+
+func (g *gatedSigner) Sign(rnd io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	select {
+	case <-g.armed:
+		g.once.Do(func() {
+			close(g.entered)
+			<-g.release
+		})
+	default:
+	}
+	return g.Signer.Sign(rnd, digest, opts)
+}
+
+// TestRespond_RevocationDuringSigningIsNotLostFromTheCache: a response
+// read from the store before a revocation, and still being signed when
+// the revocation lands, must not be cached afterwards. Before the fix it
+// was, and the revoked certificate was served "good" until nextUpdate.
+func TestRespond_RevocationDuringSigningIsNotLostFromTheCache(t *testing.T) {
+	f := newFixture(t)
+	g := &gatedSigner{Signer: f.responderKey, armed: make(chan struct{}), entered: make(chan struct{}), release: make(chan struct{})}
+	p := profile.Builtin()[profile.InternalOnlyProfile]
+	p.Validity = 7 * 24 * time.Hour
+	r, err := New(context.Background(), Config{Issuer: f.ca, Records: f.records, Signer: g, Profile: p, Validity: time.Hour})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	leaf := f.leaf(t, "leaf")
+	req := request(t, leaf, f.inter, crypto.SHA1)
+
+	close(g.armed)
+	done := make(chan Outcome)
+	go func() {
+		_, out := r.Respond(ctx, req)
+		done <- out
+	}()
+	<-g.entered
+	if err := f.records.Revoke(ctx, leaf.SerialNumber, store.ReasonKeyCompromise, time.Now()); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	r.Invalidate()
+	close(g.release)
+	if out := <-done; out.Status != ocsp.Good {
+		t.Fatalf("the in-flight answer was read before the revocation and should be good: %+v", out)
+	}
+
+	_, out := r.Respond(ctx, req)
+	if out.Status != ocsp.Revoked {
+		t.Fatalf("after the revocation the answer is %+v; the stale good answer was cached over the invalidation", out)
+	}
+}
+
+// TestRespond_FreshSignaturesAreRationedCachedAnswersAreNot: past the
+// ration an unknown serial is answered tryLater rather than costing a
+// signature, and a serial already cached is still answered.
+func TestRespond_FreshSignaturesAreRationedCachedAnswersAreNot(t *testing.T) {
+	f := newFixture(t)
+	r := f.newResponder(t, 7*24*time.Hour, time.Hour)
+	ctx := context.Background()
+	r.mu.Lock()
+	r.rate, r.burst, r.tokens = 0, 3, 3
+	r.mu.Unlock()
+
+	leaf := f.leaf(t, "leaf")
+	known := request(t, leaf, f.inter, crypto.SHA1)
+	if _, out := r.Respond(ctx, known); out.Status != ocsp.Good {
+		t.Fatalf("known: %+v", out)
+	}
+	for i := int64(0); i < 2; i++ {
+		stranger := &x509.Certificate{SerialNumber: big.NewInt(9000 + i), RawIssuer: f.inter.RawSubject}
+		if _, out := r.Respond(ctx, request(t, stranger, f.inter, crypto.SHA1)); out.Status != ocsp.Unknown {
+			t.Fatalf("unknown %d inside the ration: %+v", i, out)
+		}
+	}
+	stranger := &x509.Certificate{SerialNumber: big.NewInt(9999), RawIssuer: f.inter.RawSubject}
+	der, out := r.Respond(ctx, request(t, stranger, f.inter, crypto.SHA1))
+	if out.Error != "tryLater" || string(der) != string(ocsp.TryLaterErrorResponse) {
+		t.Fatalf("past the ration: %+v", out)
+	}
+	if _, out := r.Respond(ctx, known); !out.Cached || out.Status != ocsp.Good {
+		t.Fatalf("a cached answer was refused with the ration spent: %+v", out)
+	}
+
+	// The ration refills with time.
+	r.mu.Lock()
+	r.rate = 1000
+	r.mu.Unlock()
+	time.Sleep(10 * time.Millisecond)
+	if _, out := r.Respond(ctx, request(t, stranger, f.inter, crypto.SHA1)); out.Status != ocsp.Unknown {
+		t.Fatalf("after refilling: %+v", out)
+	}
+}
+
+// TestRespond_NextUpdateNeverOutlivesTheSigner: with a response window
+// longer than the responder certificate's remaining life, nextUpdate is
+// the certificate's NotAfter, as the CRL's is clamped to its issuer's.
+func TestRespond_NextUpdateNeverOutlivesTheSigner(t *testing.T) {
+	f := newFixture(t)
+	r := f.newResponder(t, 2*time.Hour, 7*24*time.Hour)
+	leaf := f.leaf(t, "leaf")
+	der, out := r.Respond(context.Background(), request(t, leaf, f.inter, crypto.SHA1))
+	if out.Status != ocsp.Good {
+		t.Fatalf("%+v", out)
+	}
+	resp := parse(t, der, leaf, f.inter)
+	if notAfter := r.Certificate().NotAfter; resp.NextUpdate.After(notAfter) {
+		t.Fatalf("nextUpdate %s is past the responder certificate's NotAfter %s", resp.NextUpdate, notAfter)
 	}
 }
