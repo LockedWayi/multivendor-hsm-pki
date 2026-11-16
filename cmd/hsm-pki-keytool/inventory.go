@@ -232,6 +232,22 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 			prior[e.Label] = e
 		}
 	}
+	// A regeneration republishes every key the previous document listed.
+	// One left out would vanish from the signed list: a retired key's
+	// record that verifiers are owed, or an active key whose trust would
+	// end the moment the document is published.
+	listed := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		listed[spec.label] = true
+	}
+	if previous != nil {
+		for _, e := range previous.Keys {
+			if !listed[e.Label] {
+				return nil, fmt.Errorf("%q is in the current inventory as %s but not among the -key specs: "+
+					"list it (as retired, once it has been destroyed) so the new document keeps it", e.Label, e.Status)
+			}
+		}
+	}
 
 	if adapter.TokenLoggedIn() {
 		return nil, fmt.Errorf("a token is already authenticated before logging into %q; refusing to proceed", ws.Label)
@@ -277,6 +293,20 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 			return nil, err
 		}
 		previousEntry, hadPrevious := prior[spec.label]
+		// A label is an address, not an identity. What the previous
+		// document said about it is checked, not just carried over.
+		if hadPrevious {
+			if previousEntry.Purpose != spec.purpose {
+				return nil, fmt.Errorf("%q is listed for %s in the current inventory and as %s here: "+
+					"a key serves one purpose, and a verifier for the other would start accepting its signatures",
+					spec.label, previousEntry.Purpose, spec.purpose)
+			}
+			if previousEntry.Status == inventory.StatusRetired && spec.status != inventory.StatusRetired {
+				return nil, fmt.Errorf("%q is retired in the current inventory and %s here: "+
+					"a retired label is never live again; a key on the token under it now is a different key",
+					spec.label, spec.status)
+			}
+		}
 
 		entry := inventory.Entry{
 			Label:   spec.label,
@@ -326,6 +356,10 @@ func readEntries(ctx context.Context, adapter pk11.VendorAdapter, ws pk11.Worksp
 			return nil, err
 		}
 		entry.PublicKeyPEM = string(pemBytes)
+		if hadPrevious && previousEntry.PublicKeyPEM != entry.PublicKeyPEM {
+			return nil, fmt.Errorf("the key under %q on token %q is not the key the current inventory lists under that label: "+
+				"publishing it would give the old valid_from and the old name to a different key", spec.label, ws.Label)
+		}
 		entries = append(entries, entry)
 	}
 
