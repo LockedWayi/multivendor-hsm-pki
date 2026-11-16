@@ -440,6 +440,33 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 	})
 
+	// A session the janitor reclaimed is closed already. Its owner closing
+	// it afterwards must not reach the module: a module that reuses the
+	// freed handle has given it to another session by then, and closing it
+	// again would close that one.
+	t.Run("CloseSession_AfterTheJanitorDoesNotCloseAnother", func(t *testing.T) {
+		expired, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{IdleTimeout: time.Millisecond, MaxTTL: time.Hour})
+		if err != nil {
+			t.Fatalf("OpenSession: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+		pk11.SweepExpiredNow(b.adapter)
+
+		live, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
+		if err != nil {
+			t.Fatalf("OpenSession: %v", err)
+		}
+		defer func() { _ = b.adapter.CloseSession(ctx, live) }()
+		t.Logf("handle reused by the next session: %v", pk11.HandleOf(live) == pk11.HandleOf(expired))
+
+		if err := b.adapter.CloseSession(ctx, expired); err != nil {
+			t.Fatalf("closing a session the janitor reclaimed = %v, want nil", err)
+		}
+		if _, err := b.adapter.GenerateRandom(ctx, live, 8); err != nil {
+			t.Fatalf("the live session after another's late close = %v; the late close reached its handle", err)
+		}
+	})
+
 	t.Run("CancelledContextRejected", func(t *testing.T) {
 		cctx, cancel := context.WithCancel(ctx)
 		cancel()

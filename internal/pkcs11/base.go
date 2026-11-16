@@ -248,15 +248,24 @@ func (a *pkcs11Adapter) OpenSession(ctx context.Context, ws Workspace, opts Sess
 
 // CloseSession releases the underlying PKCS#11 session.
 //
-// The session is marked unusable at once, whatever the token reports. It
-// is removed from the session map only once the token has released the
-// handle: on success, on CKR_SESSION_HANDLE_INVALID (already gone, the
-// result of a double close), or on ErrAdapterClosed (Close finalized the
-// module). An entry dropped before that would leave a session open on the
-// token that neither the janitor nor Close can reclaim, and session slots
-// are finite.
+// The session is marked unusable at once, whatever the token reports.
+// Holding the session's entry in the map is what entitles a caller to
+// close its handle: the janitor and Close take the entry out before they
+// close, and so does this. A session whose entry is gone, or now belongs
+// to another session that reused the handle, has been closed already, and
+// closing the handle again would close the other session. If the token
+// refuses the close for another reason the entry goes back, so the
+// janitor or Close can still reclaim the slot: session slots are finite.
 func (a *pkcs11Adapter) CloseSession(ctx context.Context, s *Session) error {
 	s.markClosed()
+
+	a.sessMu.Lock()
+	if a.sessions[s.handle] != s {
+		a.sessMu.Unlock()
+		return nil
+	}
+	delete(a.sessions, s.handle)
+	a.sessMu.Unlock()
 
 	err := a.withStateLock(func() error {
 		if err := a.ctx.CloseSession(s.handle); err != nil {
@@ -265,9 +274,11 @@ func (a *pkcs11Adapter) CloseSession(ctx context.Context, s *Session) error {
 		return nil
 	})
 
-	if err == nil || errors.Is(err, ErrAdapterClosed) || isSessionHandleInvalid(err) {
+	if err != nil && !errors.Is(err, ErrAdapterClosed) && !isSessionHandleInvalid(err) {
 		a.sessMu.Lock()
-		delete(a.sessions, s.handle)
+		if _, taken := a.sessions[s.handle]; !taken {
+			a.sessions[s.handle] = s
+		}
 		a.sessMu.Unlock()
 	}
 	return err
