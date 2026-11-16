@@ -20,6 +20,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **The CRL drops an entry** once its certificate expired more than one
   CRL window ago (RFC 5280 section 3.3); it used to list every
   revocation forever.
+- **The ceremony could destroy the root certificate.** Two of its output
+  paths naming one file passed the overwrite check, so the intermediate's
+  certificate was written over the root's, the command succeeded, and
+  the root's key label was taken. One path for two outputs is refused
+  now, before the module is opened, in `ceremony` and in
+  `generate-inventory`.
+- **`generate-inventory` checks the previous document.** It published a
+  purpose flip, a retired label made live again, a different key under a
+  listed label, and dropped any previous entry not repeated as `-key`.
+  Each is refused.
+- **Retired inventory entries keep their own curve**, and
+  `inventory.Validate` refuses a stated curve that is not the key's.
+- **A key refused after generation is destroyed.** Only a duplicate was;
+  a key refused for its protection attributes stayed on the token under
+  its label. The duplicate check also reads EC keys only, so an RSA key
+  on the token no longer makes every provisioning fail after generating.
+- **`retire-signing-key` finishes a retirement left halfway**, when only
+  the public half is still on the token.
 
 ### Security
 - **Client authentication compares the issuer.** A certificate minted by

@@ -536,7 +536,10 @@ label with the one the inventory lists and refuses a mismatch, then
 destroys both halves, private first. The inventory refuses to call a key
 retired while its private half is still on the token, so the destruction
 comes first and `generate-inventory -in … -key <purpose>:<label>:retired`
-comes after. `ci/rotation-drill.sh` runs the whole sequence in CI on a
+comes after. A regeneration lists every key the current document lists,
+and checks each one against it: it refuses a key left out, a purpose that
+changed, a retired label listed as live again, and a key on the token
+that is not the one the document lists under that label. `ci/rotation-drill.sh` runs the whole sequence in CI on a
 throwaway token set, including each of those refusals, and proves at the
 end that the retired label can no longer sign, either through the
 resolver or straight through cosign.
