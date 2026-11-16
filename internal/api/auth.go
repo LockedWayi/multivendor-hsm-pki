@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -135,6 +136,13 @@ func (s *server) authenticate(ctx context.Context, r *http.Request, allowed []st
 		return "", refuse(http.StatusUnauthorized, "a client certificate is required")
 	}
 	leaf := r.TLS.VerifiedChains[0][0]
+	// Issued by this CA's own certificate, not merely by something the
+	// trust anchor vouches for. The serial-and-subject match below cannot
+	// tell this CA from a sibling intermediate under the same root, which
+	// chooses both freely.
+	if !bytes.Equal(leaf.RawIssuer, s.ca.Certificate().RawSubject) {
+		return "", refuse(http.StatusForbidden, "the client certificate was not issued by this CA")
+	}
 
 	// Issued by this CA, and still valid in its records. The chain proves
 	// the root vouched for the issuer; only the store says this CA made
