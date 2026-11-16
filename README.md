@@ -136,8 +136,10 @@ carry a written reason and an expiry date.
 A push to `main` that clears every gate publishes the service image to
 `ghcr.io/lockedwayi/multivendor-hsm-pki`, signed keyless, with a CycloneDX
 SBOM attestation and a SLSA provenance attestation. The bytes are pushed
-under the moving tag `staging`, the digest is signed, and only then are
-`sha-<commit>` and, on a release tag, `v<x.y.z>` applied. `staging` names
+under the moving tag `staging`, the digest is signed, and only then is
+the run's own tag applied: `sha-<commit>` on a push to `main`, `v<x.y.z>`
+on a release tag. A release commit is built twice, once per run, and each
+run tags and verifies only its own image. `staging` names
 the most recent build pushed, signed or not. Nothing should pull it. There
 is no `latest`. **The digest is the identity.**
 

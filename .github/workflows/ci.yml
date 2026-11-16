@@ -544,13 +544,17 @@ jobs:
         run: |
           set -euo pipefail
           repo="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker pull -q "$repo:sha-$GITHUB_SHA" >/dev/null
-          digest="$(docker inspect "$repo:sha-$GITHUB_SHA" \
+          # The tag this run pushed, which no other run pushes:
+          # ci/publish-image.sh says why.
+          tag="sha-$GITHUB_SHA"
+          case "$GITHUB_REF" in refs/tags/*) tag="$GITHUB_REF_NAME" ;; esac
+          docker pull -q "$repo:$tag" >/dev/null
+          digest="$(docker inspect "$repo:$tag" \
             --format '{{range .RepoDigests}}{{println .}}{{end}}' \
             | grep "^$repo@" | head -1 | cut -d@ -f2)"
           case "$digest" in
             sha256:*) ;;
-            *) echo "could not resolve a digest for $repo:sha-$GITHUB_SHA" >&2; exit 1 ;;
+            *) echo "could not resolve a digest for $repo:$tag" >&2; exit 1 ;;
           esac
           echo "ref=$repo@$digest" >> "$GITHUB_OUTPUT"
           echo "$repo@$digest"
