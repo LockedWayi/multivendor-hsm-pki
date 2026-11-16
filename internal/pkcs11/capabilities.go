@@ -16,16 +16,17 @@ package pkcs11
 type Capabilities struct {
 	// ConcurrentSlotEnumeration declares that C_GetSlotList may be called
 	// from several goroutines at once. ProtectToolkit-C 7.3.3 deadlocks
-	// there despite CKF_OS_LOCKING_OK, so the shared implementation holds
-	// the exclusive lock around Workspaces for every module today; a
-	// module declaring true is measured under concurrent callers, and the
-	// lock is what a module declaring false keeps.
+	// there despite CKF_OS_LOCKING_OK, so a module declaring false gets
+	// the exclusive lock around Workspaces and a module declaring true
+	// gets the shared one; SoftHSM2 and Luna declare true, and the
+	// declaration is measured under concurrent callers.
 	ConcurrentSlotEnumeration bool
 
 	// SecondInitializeInProcess declares that a second adapter over the
-	// same module may be opened while the first is live. SoftHSM2 permits
-	// it through a separate dlopen handle; ProtectToolkit-C answers
-	// CKR_CRYPTOKI_ALREADY_INITIALIZED. Code that hands a module to a
+	// same module may be opened while the first is live. Every module
+	// measured so far refuses it with CKR_CRYPTOKI_ALREADY_INITIALIZED,
+	// SoftHSM2 included, which corrects an earlier note that said it
+	// permits one through a separate dlopen handle. Code that hands a module to a
 	// second component in one process (the ceremony's tests, the cleanup
 	// tool) has to know which.
 	SecondInitializeInProcess bool
