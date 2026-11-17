@@ -49,12 +49,12 @@ GOVULNCHECK_VERSION="v1.9.0"
 # fetches. A module version like govulncheck's, so the freshness check
 # asks the module proxy; the binary's per-architecture SHA-256 stays in
 # ci/cosign.sh beside the download it verifies, and moves with this.
-COSIGN_V3_VERSION="v3.1.3"
+COSIGN_V3_VERSION="v3.1.4"
 
 # github.com/sigstore/cosign/v2. The container-image track, kept on v2
 # for its detached signature format (ci/cosign.sh says why). Checked
 # within v2: the module path carries the major.
-COSIGN_V2_VERSION="v2.6.1"
+COSIGN_V2_VERSION="v2.6.5"
 
 # requireSuppressionReporting refuses a trivy invocation that reads the
 # shared allowlist without also reporting what it suppressed.
