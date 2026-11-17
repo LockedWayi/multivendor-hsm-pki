@@ -447,8 +447,8 @@ expect_fail "which the inventory does not list as the" "forcing the retired $V1 
 step "and the token no longer holds it, so cosign cannot sign with it either"
 # Straight to cosign with the PKCS#11 URI, bypassing every script above.
 # The private key is gone; no policy is involved in this refusal. The
-# wording is cosign v2.6.1's for an object the token does not hold,
-# measured: the same call with the next version's label succeeded a few
+# wording is cosign v2.6's for an object the token does not hold (v2.6.1
+# and v2.6.5 alike), measured: the same call with the next version's label succeeded a few
 # steps ago, and the label is the only difference.
 expect_fail "initializing pkcs11 token signer verifier: signer not set" "cosign sign with the destroyed $V1" \
     -- env HSM_PKI_COSIGN_VERSION=v2 HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" sign \
