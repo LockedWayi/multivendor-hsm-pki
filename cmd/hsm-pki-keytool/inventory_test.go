@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
@@ -300,6 +306,87 @@ func TestRunGenerateInventoryCmd_RefusesARetiredKeyItHasNeverSeen(t *testing.T) 
 			t.Fatal("listing a retired key absent from the current inventory succeeded, want an error")
 		}
 	})
+}
+
+// TestRunGenerateInventoryCmd_ChecksWhatThePreviousDocumentSaid: a label
+// is an address, so a regeneration compares the previous entry with what
+// it is about to publish. Each case below published before the fix.
+func TestRunGenerateInventoryCmd_ChecksWhatThePreviousDocumentSaid(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		f := newInventoryFixture(t, b)
+		if err := runGenerateInventoryCmd(f.args); err != nil {
+			t.Fatalf("first generation: %v", err)
+		}
+		current := mustRead(t, f.documentPath())
+
+		// rewritten writes the current document with one change, as the
+		// -in of the next run, and returns its path.
+		rewritten := func(name string, change func(e *inventory.Entry)) string {
+			t.Helper()
+			inv, err := inventory.Parse(current)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			for i := range inv.Keys {
+				if inv.Keys[i].Label == f.imageLabel {
+					change(&inv.Keys[i])
+				}
+			}
+			data, err := inv.Marshal()
+			if err != nil {
+				t.Fatalf("Marshal %s: %v", name, err)
+			}
+			path := filepath.Join(f.dir, name+".json")
+			if err := os.WriteFile(path, data, 0644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			return path
+		}
+		otherKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		otherDER, _ := x509.MarshalPKIXPublicKey(&otherKey.PublicKey)
+		otherPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: otherDER}))
+		retiredAt := time.Now().UTC().Truncate(time.Second)
+
+		cases := []struct {
+			name, want string
+			args       []string
+		}{
+			{"a purpose flip", "one purpose",
+				append(replaceFlag(f.args, "-key", "artifact:"+f.imageLabel+":active"), "-in", f.documentPath())},
+			{"a key left out", "not among the -key specs",
+				append(withoutKey(f.args, f.artifactLabel), "-in", f.documentPath())},
+			{"a retired label live again", "never live again",
+				append(append([]string(nil), f.args...), "-in", rewritten("retired", func(e *inventory.Entry) {
+					e.Status, e.RetiredAt = inventory.StatusRetired, &retiredAt
+				}))},
+			{"a different key under a listed label", "not the key the current inventory lists",
+				append(append([]string(nil), f.args...), "-in", rewritten("other-key", func(e *inventory.Entry) {
+					e.PublicKeyPEM = otherPEM
+				}))},
+		}
+		for _, c := range cases {
+			err := runGenerateInventoryCmd(c.args)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%s: %v, want an error saying %q", c.name, err, c.want)
+			}
+			if got := mustRead(t, f.documentPath()); string(got) != string(current) {
+				t.Fatalf("%s: the published document changed despite the refusal", c.name)
+			}
+		}
+	})
+}
+
+// withoutKey returns args with the -key spec naming label removed.
+func withoutKey(args []string, label string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-key" && i+1 < len(args) && strings.Contains(args[i+1], ":"+label+":") {
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 // --- pure logic below: no token, so these do not multiply per backend ---

@@ -624,3 +624,98 @@ func TestDestroy_RefusesAnAmbiguousLabelAndDestroysNothing(t *testing.T) {
 		}
 	})
 }
+
+// rsaBesideAdapter is the backend's own adapter, with one more public key
+// on the token that is not an EC key: an RSA key on a shared partition.
+// A search for public keys that does not name the key type finds it, and
+// asking it for CKA_EC_POINT fails the way PKCS#11 says it must. The
+// suite cannot generate an RSA key through the adapter, so its presence
+// is modelled here; everything else is the real token.
+type rsaBesideAdapter struct {
+	pk11.VendorAdapter
+}
+
+const rsaHandle = pk11.ObjectHandle(^uint(0) >> 1)
+
+func (a rsaBesideAdapter) FindObjects(ctx context.Context, s *pk11.Session, tmpl []pk11.Attribute) ([]pk11.ObjectHandle, error) {
+	handles, err := a.VendorAdapter.FindObjects(ctx, s, tmpl)
+	if err != nil {
+		return nil, err
+	}
+	public, typed := false, false
+	for _, at := range tmpl {
+		switch at.Type {
+		case pk11.AttrClass:
+			public = bytes.Equal(at.Value, pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPublicKey)).Value)
+		case pk11.AttrKeyType:
+			typed = true
+		case pk11.AttrLabel:
+			return handles, nil // a label search: the RSA key carries none of ours
+		}
+	}
+	if public && !typed {
+		handles = append(handles, rsaHandle)
+	}
+	return handles, nil
+}
+
+func (a rsaBesideAdapter) GetAttributes(ctx context.Context, s *pk11.Session, obj pk11.ObjectHandle, types []pk11.AttributeType) ([]pk11.Attribute, error) {
+	if obj == rsaHandle {
+		return nil, errors.New("pkcs11: 0x12: CKR_ATTRIBUTE_TYPE_INVALID")
+	}
+	return a.VendorAdapter.GetAttributes(ctx, s, obj, types)
+}
+
+// TestProvision_ANonECKeyOnTheTokenDoesNotBlockProvisioning: before the
+// fix the duplicate check read CKA_EC_POINT off every public key, failed
+// on the RSA one, and left each attempt's pair on the token.
+func TestProvision_ANonECKeyOnTheTokenDoesNotBlockProvisioning(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+		label := b.Label("image-signing-key-v1")
+		if _, err := signingkey.Provision(ctx, rsaBesideAdapter{b.Adapter}, s, signingkey.Params{Label: label}); err != nil {
+			t.Fatalf("Provision beside an RSA key: %v", err)
+		}
+	})
+}
+
+// sensitiveFalseAdapter reports CKA_SENSITIVE false on every private key,
+// as a token that ignored the template would.
+type sensitiveFalseAdapter struct {
+	pk11.VendorAdapter
+}
+
+func (a sensitiveFalseAdapter) GetAttributes(ctx context.Context, s *pk11.Session, obj pk11.ObjectHandle, types []pk11.AttributeType) ([]pk11.Attribute, error) {
+	attrs, err := a.VendorAdapter.GetAttributes(ctx, s, obj, types)
+	for i := range attrs {
+		if attrs[i].Type == pk11.AttrSensitive {
+			attrs[i].Value = []byte{0}
+		}
+	}
+	return attrs, err
+}
+
+// TestProvision_ARefusedKeyIsRemovedFromTheToken: a key refused after
+// generation is destroyed, so the label is free again. Before the fix
+// only a duplicate was destroyed, and a key refused for its protection
+// stayed on the token under the label.
+func TestProvision_ARefusedKeyIsRemovedFromTheToken(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		ctx := context.Background()
+		s := session(t, b)
+		label := b.Label("image-signing-key-v1")
+		if _, err := signingkey.Provision(ctx, sensitiveFalseAdapter{b.Adapter}, s, signingkey.Params{Label: label}); err == nil {
+			t.Fatal("Provision accepted a key reported as not sensitive")
+		}
+		for _, class := range []pk11.ObjectClass{pk11.ClassPublicKey, pk11.ClassPrivateKey} {
+			free, err := pk11.LabelIsFree(ctx, b.Adapter, s, class, label)
+			if err != nil {
+				t.Fatalf("LabelIsFree: %v", err)
+			}
+			if !free {
+				t.Fatalf("the refused key's %v half is still on the token under %q", class, label)
+			}
+		}
+	})
+}

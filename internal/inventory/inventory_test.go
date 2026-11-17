@@ -166,6 +166,11 @@ func TestInventory_ValidateRejects(t *testing.T) {
 		"no curve": func(inv *inventory.Inventory) {
 			inv.Keys[0].Curve = ""
 		},
+		// retire-signing-key and verifiers read the curve without decoding
+		// the key; a name that is not the key's misleads them.
+		"a curve that is not the key's": func(inv *inventory.Inventory) {
+			inv.Keys[0].Curve = "P-384"
+		},
 		"no valid_from": func(inv *inventory.Inventory) {
 			inv.Keys[0].ValidFrom = time.Time{}
 		},

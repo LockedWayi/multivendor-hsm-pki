@@ -82,8 +82,9 @@ func (k Key) PEM() ([]byte, error) {
 // The attributes are then read back off the token, and the key is refused
 // if they differ from what was asked. PKCS#11 permits a token to ignore an
 // attribute. CKA_SENSITIVE was false on every key this platform generated
-// before the read-back existed, and ProtectToolkit ignores
-// CKA_EXTRACTABLE=false on unwrap.
+// before the read-back existed, and the ProtectToolkit-C emulator was
+// once seen to ignore CKA_EXTRACTABLE=false on unwrap (it honoured it when
+// measured again on 2026-09-24, and its adapter declares so).
 func Provision(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, p Params) (Key, error) {
 	if err := ValidateLabel(p.Label); err != nil {
 		return Key{}, err
@@ -125,30 +126,40 @@ func Provision(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session,
 		return Key{}, fmt.Errorf("signingkey: generating %q: %w", p.Label, err)
 	}
 
-	key, err := Load(ctx, adapter, s, p.Label, curve)
+	key, err := checkGenerated(ctx, adapter, s, p.Label, curve)
+	if err != nil {
+		// This package made the pair and refuses it, so it removes it. Left
+		// on the token a rejected pair holds the label, so every retry
+		// needs a new one, and a pair refused for its protection is a
+		// private key the token would let anyone read.
+		if destroyErr := destroyKeyPair(ctx, adapter, s, p.Label); destroyErr != nil {
+			return Key{}, fmt.Errorf("%w; and removing it failed, so %q must be destroyed by hand before retrying: %v",
+				err, p.Label, destroyErr)
+		}
+		return Key{}, err
+	}
+	return key, nil
+}
+
+// checkGenerated reads a pair Provision has just generated back off the
+// token and refuses it if the token did not honour the template or
+// produced a key it already holds under another label.
+func checkGenerated(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string, curve pk11.ECCurve) (Key, error) {
+	key, err := Load(ctx, adapter, s, label, curve)
 	if err != nil {
 		return Key{}, err
 	}
 	if err := key.verifyProtection(); err != nil {
 		return Key{}, err
 	}
-
-	// Is this a new key? See findDuplicatePoint. A duplicate is destroyed:
-	// this package made it, and leaving it would hand the caller a label
-	// that aliases another purpose's key.
-	duplicate, err := findDuplicatePoint(ctx, adapter, s, p.Label, key.Public, curve)
+	// Is this a new key? See findDuplicatePoint.
+	duplicate, err := findDuplicatePoint(ctx, adapter, s, label, key.Public, curve)
 	if err != nil {
 		return Key{}, err
 	}
 	if duplicate != "" {
-		destroyErr := destroyKeyPair(ctx, adapter, s, p.Label)
-		err := fmt.Errorf("%w: the key just generated under %q is the same key pair as %q already on this token",
-			ErrDuplicateKey, p.Label, duplicate)
-		if destroyErr != nil {
-			return Key{}, fmt.Errorf("%w; and removing it failed, so %q must be destroyed by hand before retrying: %v",
-				err, p.Label, destroyErr)
-		}
-		return Key{}, err
+		return Key{}, fmt.Errorf("%w: the key just generated under %q is the same key pair as %q already on this token",
+			ErrDuplicateKey, label, duplicate)
 	}
 	return key, nil
 }
@@ -180,8 +191,12 @@ func FindDuplicateKey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.S
 // curve cannot equal one that does.
 func findDuplicatePoint(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, ownLabel string, pub *ecdsa.PublicKey, curve pk11.ECCurve) (string, error) {
 	ellipticCurve := curve.Curve()
+	// EC keys only. Asking an RSA public key for CKA_EC_POINT is
+	// CKR_ATTRIBUTE_TYPE_INVALID, which failed the check, and so every
+	// provisioning, on a token that also held one.
 	handles, err := adapter.FindObjects(ctx, s, []pk11.Attribute{
 		pk11.NumericAttribute(pk11.AttrClass, uint64(pk11.ClassPublicKey)),
+		pk11.NumericAttribute(pk11.AttrKeyType, uint64(pk11.KeyTypeEC)),
 	})
 	if err != nil {
 		return "", fmt.Errorf("signingkey: listing public keys to check %q is new: %w", ownLabel, err)
@@ -281,28 +296,38 @@ func Destroy(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, l
 	return done, nil
 }
 
-// Load reads an existing signing key's public half and protection
-// attributes off the token, without checking them. Verify checks them.
-func Load(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string, curve pk11.ECCurve) (Key, error) {
+// PublicKey reads the public half under label off the token. It needs
+// only that half, which is what a retirement interrupted between its two
+// destructions leaves behind.
+func PublicKey(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string, curve pk11.ECCurve) (*ecdsa.PublicKey, error) {
 	ellipticCurve := curve.Curve()
 	if ellipticCurve == nil {
-		return Key{}, fmt.Errorf("signingkey: %w", pk11.ErrUnsupportedCurve)
+		return nil, fmt.Errorf("signingkey: %w", pk11.ErrUnsupportedCurve)
 	}
-
 	pubHandle, err := pk11.FindKeyByLabel(ctx, adapter, s, pk11.ClassPublicKey, label)
 	if err != nil {
-		return Key{}, fmt.Errorf("signingkey: %w", err)
+		return nil, fmt.Errorf("signingkey: %w", err)
 	}
 	pubAttrs, err := adapter.GetAttributes(ctx, s, pubHandle, []pk11.AttributeType{pk11.AttrEcPoint})
 	if err != nil {
-		return Key{}, fmt.Errorf("signingkey: reading CKA_EC_POINT for %q: %w", label, err)
+		return nil, fmt.Errorf("signingkey: reading CKA_EC_POINT for %q: %w", label, err)
 	}
 	if len(pubAttrs) == 0 {
-		return Key{}, fmt.Errorf("signingkey: CKA_EC_POINT not returned for %q", label)
+		return nil, fmt.Errorf("signingkey: CKA_EC_POINT not returned for %q", label)
 	}
 	pub, err := pk11.DecodeECPoint(ellipticCurve, pubAttrs[0].Value)
 	if err != nil {
-		return Key{}, fmt.Errorf("signingkey: decoding public key %q: %w", label, err)
+		return nil, fmt.Errorf("signingkey: decoding public key %q: %w", label, err)
+	}
+	return pub, nil
+}
+
+// Load reads an existing signing key's public half and protection
+// attributes off the token, without checking them. Verify checks them.
+func Load(ctx context.Context, adapter pk11.VendorAdapter, s *pk11.Session, label string, curve pk11.ECCurve) (Key, error) {
+	pub, err := PublicKey(ctx, adapter, s, label, curve)
+	if err != nil {
+		return Key{}, err
 	}
 
 	privHandle, err := pk11.FindKeyByLabel(ctx, adapter, s, pk11.ClassPrivateKey, label)

@@ -64,10 +64,8 @@ func runProvisionSigningKeyCmd(args []string) error {
 	if err := signingkey.ValidateLabel(*keyLabel); err != nil {
 		return err
 	}
-	if _, err := os.Stat(*publicKeyOut); err == nil {
-		return fmt.Errorf("refusing to overwrite existing file %s", *publicKeyOut)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("checking output path %s: %w", *publicKeyOut, err)
+	if err := refuseExistingFile(*publicKeyOut); err != nil {
+		return err
 	}
 
 	adapter, err := pk11.NewAdapterByName(*adapterName, *modulePath)
