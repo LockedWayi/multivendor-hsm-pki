@@ -402,3 +402,65 @@ func TestAuthenticatedListener_ServesAnHSMHeldIdentity(t *testing.T) {
 		expectStatus(t, resp, http.StatusCreated, "a write over a handshake the HSM signed")
 	})
 }
+
+// TestWrite_SiblingIssuerWithARecordedSerialAndSubjectIsRefused: the
+// store record is matched to the client certificate by serial and
+// subject, and the chain only proves the trust anchor vouched for the
+// issuer. Another intermediate under the same anchor can mint a
+// certificate carrying a recorded issuer's serial and subject; it must
+// still be refused, because this CA did not issue it. The request is
+// handed to the handler with the verified chain already in place, which
+// is what the TLS layer would have produced for that intermediate.
+func TestWrite_SiblingIssuerWithARecordedSerialAndSubjectIsRefused(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		c, adapter, ws, rootArtifacts := newTestCA(t, b)
+		records := store.NewMemory()
+		genuine := issueClientCertificate(t, c, records, testIssuer)
+		genuineLeaf, err := x509.ParseCertificate(genuine.Certificate[0])
+		if err != nil {
+			t.Fatalf("parsing the genuine client certificate: %v", err)
+		}
+		handlers := api.NewServer(api.Config{
+			Profiles: testProfiles(),
+			Issuer:   c, Adapter: adapter, Workspace: ws, Records: records, CRLValidity: 24 * time.Hour,
+			Root: rootArtifacts, Logger: testLogger(),
+			Authorization: api.Authorization{Issuers: entitled(testIssuer), Revokers: []string{testIssuer}},
+		})
+
+		siblingKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		siblingTmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(77), Subject: pkix.Name{CommonName: "Sibling Intermediate"},
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+			KeyUsage: x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true,
+		}
+		siblingDER, _ := x509.CreateCertificate(rand.Reader, siblingTmpl, siblingTmpl, &siblingKey.PublicKey, siblingKey)
+		sibling, _ := x509.ParseCertificate(siblingDER)
+		forgedKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		forgedDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+			SerialNumber: genuineLeaf.SerialNumber, Subject: genuineLeaf.Subject, URIs: genuineLeaf.URIs,
+			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+			KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}, sibling, &forgedKey.PublicKey, siblingKey)
+		if err != nil {
+			t.Fatalf("minting the sibling's certificate: %v", err)
+		}
+		forged, _ := x509.ParseCertificate(forgedDER)
+
+		priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		send := func(leaf *x509.Certificate, issuer *x509.Certificate) int {
+			req := httptest.NewRequest(http.MethodPost, "/certificates?profile=tls-client",
+				bytes.NewReader(csrPEMFor(t, priv, "sibling.example.test")))
+			req.Header.Set("Content-Type", "application/x-pem-file")
+			req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf, issuer}}}
+			rec := httptest.NewRecorder()
+			handlers.Authenticated.ServeHTTP(rec, req)
+			return rec.Code
+		}
+		if code := send(genuineLeaf, c.Certificate()); code != http.StatusCreated {
+			t.Fatalf("the genuine certificate: status %d, want %d", code, http.StatusCreated)
+		}
+		if code := send(forged, sibling); code != http.StatusForbidden {
+			t.Fatalf("a sibling intermediate's certificate carrying a recorded serial and subject: status %d, want %d", code, http.StatusForbidden)
+		}
+	})
+}

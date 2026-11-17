@@ -263,7 +263,12 @@ surface is never large and untested at once.
    limit on a compromised key; so the certificate lives seven days, the
    service renews it at half-life, checks it at the point of signing
    rather than only at startup, and answers `tryLater` under an expired
-   one rather than signing. A serial this CA never issued is `unknown`,
+   one rather than signing. A response's nextUpdate never outlives the
+   certificate that signs it or the issuer it speaks for. Fresh
+   signatures are rationed by a token bucket, because the endpoint is
+   unauthenticated and an unknown serial is never cached; past the
+   ration the answer is `tryLater`, and a cached answer is always
+   served. A serial this CA never issued is `unknown`,
    never `good`. Certificates issued before the responder existed carry
    no OCSP pointer and never will.
 

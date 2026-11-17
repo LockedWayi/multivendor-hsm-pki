@@ -285,6 +285,11 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("config: ca.crl_number_floor %q is negative; RFC 5280 §5.2.3 CRL numbers are non-negative", c.CA.CRLNumberFloor)
 		}
 	}
+	// A negative window fails here rather than at every GET /crl, where
+	// each attempt would also spend a persisted CRL number.
+	if c.CA.CRLValidityHours < 0 {
+		return nil, fmt.Errorf("config: ca.crl_validity_hours is %d; a CRL's nextUpdate must come after its thisUpdate", c.CA.CRLValidityHours)
+	}
 	if c.CA.CRLValidityHours == 0 {
 		c.CA.CRLValidityHours = defaultCRLValidityHours
 	}

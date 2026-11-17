@@ -490,3 +490,43 @@ func TestCRL_NextUpdateNeverOutlivesTheIssuer(t *testing.T) {
 		}
 	})
 }
+
+// TestCRL_DropsEntriesLongExpired: a revoked certificate leaves the CRL
+// once it has expired and a CRL window has passed since, and stays on it
+// until then (RFC 5280 §3.3). Before the fix every revocation stayed on
+// every CRL forever.
+func TestCRL_DropsEntriesLongExpired(t *testing.T) {
+	hsmtest.ForEach(t, func(t *testing.T, b *hsmtest.Backend) {
+		c, adapter, ws, rootArtifacts := newTestCA(t, b)
+		records := store.NewMemory()
+		window := 24 * time.Hour
+		ts := startServers(t, c, adapter, ws, records, window, rootArtifacts)
+		defer ts.Close()
+
+		ctx := context.Background()
+		now := time.Now()
+		long, recent := big.NewInt(7001), big.NewInt(7002)
+		for serial, notAfter := range map[*big.Int]time.Time{
+			long:   now.Add(-3 * window),
+			recent: now.Add(-time.Hour),
+		} {
+			if err := records.Record(ctx, store.CertRecord{Serial: serial, Subject: pkix.Name{CommonName: serial.String()}, NotAfter: notAfter, Status: store.StatusValid}); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+			if err := records.Revoke(ctx, serial, store.ReasonKeyCompromise, notAfter.Add(-time.Hour)); err != nil {
+				t.Fatalf("Revoke: %v", err)
+			}
+		}
+
+		listed := map[string]bool{}
+		for _, e := range fetchCRL(t, ts.public.URL).RevokedCertificateEntries {
+			listed[e.SerialNumber.String()] = true
+		}
+		if listed[long.String()] {
+			t.Fatal("an entry whose certificate expired three CRL windows ago is still on the CRL")
+		}
+		if !listed[recent.String()] {
+			t.Fatal("an entry whose certificate expired an hour ago left the CRL before a CRL issued after its expiry listed it")
+		}
+	})
+}

@@ -187,7 +187,13 @@ answer from the store. Before 2026-09-21 this attacker got a certificate
 for any subject and any SAN, and could revoke any serial it knew. That
 was the largest gap in the platform and it is closed. The residual is
 denial: an attacker who can reach the public port can fetch the CRL as
-often as it likes, and the CRL is cached per process (§6.2).
+often as it likes, and the CRL is cached per process (§6.2). OCSP
+answers for serials it has not seen cost a fresh signature each, on the
+token the CA issues with, so fresh signatures are rationed (20 a second,
+a burst of 100) and the answer past the ration is `tryLater`, which no
+client reads as `good`. A cached answer is never refused, so the
+attacker can delay first answers but not keep a known certificate's
+status from a relying party that already asked.
 
 ### A2: Legitimate requester
 
@@ -224,7 +230,10 @@ it.
 
 **What the check is, precisely.** The TLS layer verifies the chain to
 the root and requires the `clientAuth` extended key usage. The handler
-then looks the leaf's serial up in the store, refuses an unknown serial,
+then refuses a leaf whose issuer is not this CA's own certificate (a
+sibling intermediate under the same root chooses serial and subject
+freely, so the record match alone cannot tell them apart), looks the
+leaf's serial up in the store, refuses an unknown serial,
 refuses a record whose subject differs from the leaf's, refuses a revoked
 one, and only then compares the leaf's identities against the list for
 that endpoint. The service's own TLS identity is a leaf this CA issued

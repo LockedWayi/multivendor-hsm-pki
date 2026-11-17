@@ -517,8 +517,19 @@ func (s *server) currentCRL(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An entry leaves the CRL once its certificate has expired and it has
+	// appeared on a CRL issued after that (RFC 5280 §3.3): a verifier
+	// rejects an expired certificate on its dates alone, so the entry
+	// costs every relying party bytes and protects nobody. Kept for one
+	// full CRL window past NotAfter, plus the skew allowance, so every CRL
+	// a relying party can still hold as current that was issued before
+	// the expiry is followed by one issued after it that still lists it.
+	keepAfter := now.Add(-s.crlValidity - crlClockSkewAllowance)
 	revoked := make([]ca.RevokedCert, 0, len(records))
 	for _, rec := range records {
+		if !rec.NotAfter.IsZero() && rec.NotAfter.Before(keepAfter) {
+			continue
+		}
 		revoked = append(revoked, ca.RevokedCert{
 			Serial:     rec.Serial,
 			RevokedAt:  rec.RevokedAt,

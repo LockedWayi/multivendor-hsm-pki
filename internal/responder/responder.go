@@ -23,6 +23,7 @@
 package responder
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -34,7 +35,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"sync"
 	"time"
 
@@ -49,6 +49,19 @@ import (
 // matching what the CA applies to a leaf's NotBefore and the CRL's
 // thisUpdate.
 const clockSkewAllowance = 5 * time.Minute
+
+// Fresh signatures are rationed; cached answers are not. /ocsp is
+// unauthenticated and shares its token with issuance and CRL signing, and
+// an unknown serial is never cached, so without a ration every request
+// with a random serial is one HSM signature. When the bucket is empty the
+// answer is tryLater, the response RFC 6960 defines for a responder that
+// cannot answer now and that no client reads as good. The numbers are
+// well above what the relying parties of one CA ask for, and well below
+// what a token's session limit and signing rate can absorb.
+const (
+	signaturesPerSecond = 20
+	signatureBurst      = 100
+)
 
 // Config is what New needs.
 type Config struct {
@@ -92,6 +105,15 @@ type Responder struct {
 	mu sync.Mutex
 	// cert is the current responder certificate. Swapped by Renew.
 	cert *x509.Certificate
+	// gen moves on every Invalidate and Renew. A response is cached only
+	// if gen did not move between the store read it answers from and the
+	// cache write: a revocation that lands while the response is being
+	// signed must not be overwritten by the answer read before it.
+	gen uint64
+	// The signature ration: tokens available, refilled at rate per second
+	// up to burst, as of bucketAt.
+	tokens, rate, burst float64
+	bucketAt            time.Time
 	// cache holds signed responses for serials the store knows, until
 	// their nextUpdate. Unknown serials are never cached, so the cache
 	// is bounded by the store and not by a client's imagination.
@@ -101,6 +123,7 @@ type Responder struct {
 type cached struct {
 	der        []byte
 	nextUpdate time.Time
+	status     int
 }
 
 // New builds a responder and issues its first certificate. It fails if
@@ -125,7 +148,8 @@ func New(ctx context.Context, cfg Config) (*Responder, error) {
 	r := &Responder{
 		issuer: cfg.Issuer, records: cfg.Records, signer: cfg.Signer, profile: cfg.Profile,
 		subject: cfg.Subject, window: cfg.Validity, logger: cfg.Logger,
-		cache: make(map[string]cached),
+		cache:  make(map[string]cached),
+		tokens: signatureBurst, rate: signaturesPerSecond, burst: signatureBurst,
 	}
 	var err error
 	if r.nameHash, r.keyHash, err = issuerHashes(cfg.Issuer.Certificate()); err != nil {
@@ -177,6 +201,7 @@ func (r *Responder) Renew(ctx context.Context) error {
 	r.mu.Lock()
 	r.cert = cert
 	r.cache = make(map[string]cached)
+	r.gen++
 	r.mu.Unlock()
 	r.logger.Info("OCSP responder certificate issued",
 		"serial", cert.SerialNumber.String(), "not_after", cert.NotAfter)
@@ -225,6 +250,21 @@ func (r *Responder) Invalidate() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cache = make(map[string]cached)
+	r.gen++
+}
+
+// takeSignatureLocked spends one token of the signature ration, or
+// reports that none is left. r.mu must be held.
+func (r *Responder) takeSignatureLocked(now time.Time) bool {
+	if !r.bucketAt.IsZero() {
+		r.tokens = min(r.burst, r.tokens+now.Sub(r.bucketAt).Seconds()*r.rate)
+	}
+	r.bucketAt = now
+	if r.tokens < 1 {
+		return false
+	}
+	r.tokens--
+	return true
 }
 
 // Outcome says what Respond did, for the log and the HTTP layer. The
@@ -260,7 +300,7 @@ func (r *Responder) Respond(ctx context.Context, reqDER []byte) ([]byte, Outcome
 		// answer.
 		return ocsp.MalformedRequestErrorResponse, Outcome{Status: -1, Error: "malformedRequest"}
 	}
-	if !equal(nameHash, req.IssuerNameHash) || !equal(r.keyHash[req.HashAlgorithm], req.IssuerKeyHash) {
+	if !bytes.Equal(nameHash, req.IssuerNameHash) || !bytes.Equal(r.keyHash[req.HashAlgorithm], req.IssuerKeyHash) {
 		// About some other issuer. RFC 6960 §2.3: unauthorized is the
 		// response for a request the responder is not authoritative
 		// for. Not unknown, which would be a statement about a serial
@@ -272,16 +312,16 @@ func (r *Responder) Respond(ctx context.Context, reqDER []byte) ([]byte, Outcome
 	key := req.SerialNumber.String()
 
 	r.mu.Lock()
-	cert := r.cert
+	cert, gen := r.cert, r.gen
 	if c, hit := r.cache[key]; hit && now.Before(c.nextUpdate) {
 		r.mu.Unlock()
-		status := ocsp.Good
-		if parsed, err := ocsp.ParseResponse(c.der, nil); err == nil {
-			status = parsed.Status
-		}
-		return c.der, Outcome{Status: status, NextUpdate: c.nextUpdate, Cached: true}
+		return c.der, Outcome{Status: c.status, NextUpdate: c.nextUpdate, Cached: true}
 	}
+	allowed := r.takeSignatureLocked(now)
 	r.mu.Unlock()
+	if !allowed {
+		return ocsp.TryLaterErrorResponse, Outcome{Status: -1, Error: "tryLater"}
+	}
 
 	// The responder's own authority, at the point of use. A process
 	// whose certificate was valid at startup is still running after it
@@ -301,11 +341,22 @@ func (r *Responder) Respond(ctx context.Context, reqDER []byte) ([]byte, Outcome
 		return ocsp.TryLaterErrorResponse, Outcome{Status: -1, Error: "tryLater"}
 	}
 
+	// A response may not claim to be fresh past the certificate that signs
+	// it or the issuer it speaks for, the same clamp the CRL applies to the
+	// issuer's NotAfter. A verifier rejects a response whose signer has
+	// expired, so a nextUpdate beyond it promises a freshness nobody can
+	// use.
+	nextUpdate := earliest(now.Add(r.window), cert.NotAfter, r.issuer.Certificate().NotAfter)
+	if !nextUpdate.After(now) {
+		r.logger.Error("OCSP issuer certificate has expired; answering tryLater",
+			"issuer_not_after", r.issuer.Certificate().NotAfter)
+		return ocsp.TryLaterErrorResponse, Outcome{Status: -1, Error: "tryLater"}
+	}
 	tmpl := ocsp.Response{
 		SerialNumber: req.SerialNumber,
 		ProducedAt:   now,
 		ThisUpdate:   now.Add(-clockSkewAllowance),
-		NextUpdate:   now.Add(r.window),
+		NextUpdate:   nextUpdate,
 		IssuerHash:   req.HashAlgorithm,
 		Certificate:  cert,
 	}
@@ -327,15 +378,25 @@ func (r *Responder) Respond(ctx context.Context, reqDER []byte) ([]byte, Outcome
 	}
 	if found {
 		r.mu.Lock()
-		// Only if the certificate did not change underneath: a response
-		// signed under a certificate Renew has just replaced is not
-		// cached under the new one.
-		if r.cert == cert {
-			r.cache[key] = cached{der: der, nextUpdate: tmpl.NextUpdate}
+		// Only if nothing invalidated the cache underneath: not a
+		// revocation, which would make this answer stale before it is
+		// stored, and not a Renew, which replaced the certificate it was
+		// signed under.
+		if r.gen == gen {
+			r.cache[key] = cached{der: der, nextUpdate: tmpl.NextUpdate, status: tmpl.Status}
 		}
 		r.mu.Unlock()
 	}
 	return der, Outcome{Status: tmpl.Status, NextUpdate: tmpl.NextUpdate}
+}
+
+func earliest(first time.Time, rest ...time.Time) time.Time {
+	for _, t := range rest {
+		if t.Before(first) {
+			first = t
+		}
+	}
+	return first
 }
 
 func certTime(c *x509.Certificate, before bool) any {
@@ -346,18 +407,6 @@ func certTime(c *x509.Certificate, before bool) any {
 		return c.NotBefore
 	}
 	return c.NotAfter
-}
-
-func equal(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // issuerHashes computes the issuer name and key hashes a request
@@ -397,14 +446,4 @@ func issuerHashes(issuer *x509.Certificate) (map[crypto.Hash][]byte, map[crypto.
 		name[h], key[h] = n, k
 	}
 	return name, key, nil
-}
-
-// SerialOf is a small helper for callers and tests that need the serial
-// a request is about without parsing it themselves.
-func SerialOf(reqDER []byte) (*big.Int, error) {
-	req, err := ocsp.ParseRequest(reqDER)
-	if err != nil {
-		return nil, err
-	}
-	return req.SerialNumber, nil
 }
