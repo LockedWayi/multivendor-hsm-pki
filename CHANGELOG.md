@@ -7,9 +7,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Changed
-- **The cosign versions are pinned in `ci/scanner-pins.sh`**, where the
-  freshness check reads them as module pins. Its first report: v2.6.1
-  against v2.6.5 and v3.1.3 against v3.1.4, not bumped here.
 - The `suite` job runs the race suite once, inside the coverage step.
 - `vuln-gate -max-horizon-days` is gone: the 180-day ceiling is a
   constant. The drills share `ci/drill-helpers.sh`.
