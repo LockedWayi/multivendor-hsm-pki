@@ -135,6 +135,25 @@ jobs:
       - name: Every relative link in the documentation resolves
         run: tools/check-public-links.sh
 
+      # The admission policy the cluster applies is a committed file
+      # headed "GENERATED -- do not edit". The generator verifies the
+      # inventory's signature before it renders, but nothing compared its
+      # rendering with the file, so a hand edit adding an attestor or
+      # dropping failurePolicy: Fail passed every gate. Stdout mode, so no
+      # rollback floor is involved: this is the same document, rendered
+      # again.
+      - name: The committed admission policy is the signed inventory's rendering
+        run: |
+          docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS hsm-pki-dev sh -c '
+            git config --global --add safe.directory /repo
+            go run ./ci/generate-image-policy' > "$RUNNER_TEMP/image-signature.yaml"
+          diff -u deploy/k8s/policy/image-signature.yaml "$RUNNER_TEMP/image-signature.yaml"
+
+      # The whole suite runs once, here, with the race detector and
+      # coverage together: ci/coverage.sh is `go test ./... -count=1
+      # -race -p 1` under set -e, so a failing test fails this step as a
+      # separate suite step used to, and the suite is not paid for twice.
+      #
       # -p 1: the vendor backends share a persistent token store, and one
       # invocation that works on every backend is kept.
       #
@@ -144,12 +163,7 @@ jobs:
       # input Go can hash, so a cached pass means the token was never
       # touched. Only the result cache is defeated; the compilation cache,
       # which is the expensive part, still applies.
-      - name: Full suite with the race detector
-        run: |
-          docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS hsm-pki-dev sh -c '
-            git config --global --add safe.directory /repo
-            go test -race -p 1 -count=1 ./...'
-
+      #
       # COVERAGE_BADGE_CHECK recomputes docs/coverage.svg and fails when
       # the committed one disagrees. The badge is checked in like a
       # lockfile, so this job needs no write permission.
@@ -380,12 +394,17 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if ci/mechanism-test-needed.sh "$BASE_SHA" > /tmp/needed.txt; then
-            run=true
-          else
-            run=false
-          fi
+          # Only exit 1 means "nothing watched changed". Any other failure,
+          # a missing base (2) or a base git cannot reach (128), is an
+          # error, not a reason to skip the test.
+          rc=0
+          ci/mechanism-test-needed.sh "$BASE_SHA" > /tmp/needed.txt || rc=$?
           cat /tmp/needed.txt
+          case "$rc" in
+            0) run=true ;;
+            1) run=false ;;
+            *) echo "mechanism-test-needed failed with exit $rc; refusing to decide the test is not needed" >&2; exit "$rc" ;;
+          esac
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "decision: run=$run"
           {
@@ -525,13 +544,17 @@ jobs:
         run: |
           set -euo pipefail
           repo="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker pull -q "$repo:sha-$GITHUB_SHA" >/dev/null
-          digest="$(docker inspect "$repo:sha-$GITHUB_SHA" \
+          # The tag this run pushed, which no other run pushes:
+          # ci/publish-image.sh says why.
+          tag="sha-$GITHUB_SHA"
+          case "$GITHUB_REF" in refs/tags/*) tag="$GITHUB_REF_NAME" ;; esac
+          docker pull -q "$repo:$tag" >/dev/null
+          digest="$(docker inspect "$repo:$tag" \
             --format '{{range .RepoDigests}}{{println .}}{{end}}' \
             | grep "^$repo@" | head -1 | cut -d@ -f2)"
           case "$digest" in
             sha256:*) ;;
-            *) echo "could not resolve a digest for $repo:sha-$GITHUB_SHA" >&2; exit 1 ;;
+            *) echo "could not resolve a digest for $repo:$tag" >&2; exit 1 ;;
           esac
           echo "ref=$repo@$digest" >> "$GITHUB_OUTPUT"
           echo "$repo@$digest"

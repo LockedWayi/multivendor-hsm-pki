@@ -113,10 +113,15 @@ the anchor inputs are wrong for this tree. Both are refusals."
 log "3/4  selecting the image-signing keys from the verified inventory"
 # One selection for every consumer. It refuses an expired inventory and
 # leaves out keys that are not yet valid or are retired.
-mapfile -t SELECTION < <(goRun ./ci/select-key \
+# Captured first, so select-key's own exit status is the one tested: a
+# `|| die` after `mapfile < <(...)` tests mapfile, which always succeeds.
+# Only tab-separated lines are selections, as in active-signing-key.sh,
+# so a toolchain message on stdout cannot pass for a key.
+selection="$(goRun ./ci/select-key \
     -inventory "/repo/$KEYS_DIR_REL/key-inventory.json" \
     -purpose image \
-    -out-dir "/repo/${SELECTED#"$REPO_ROOT"/}") || die "key selection failed; see the message above"
+    -out-dir "/repo/${SELECTED#"$REPO_ROOT"/}")" || die "key selection failed; see the message above"
+mapfile -t SELECTION < <(printf '%s\n' "$selection" | grep -F "$(printf '\t')" || true)
 [ "${#SELECTION[@]}" -gt 0 ] || die "the verified inventory lists no usable image-signing key"
 for line in "${SELECTION[@]}"; do
     printf '    %s (%s)\n' "$(cut -f1 <<<"$line")" "$(cut -f2 <<<"$line")"

@@ -160,6 +160,38 @@ spec:
       message: >-
         every container must drop ALL capabilities and add back only what it
         proves it needs. This platform's own service adds none.
+    # Dropping ALL says nothing about what is added back: a container that
+    # drops ALL and adds SYS_ADMIN was admitted. NET_BIND_SERVICE is the one
+    # capability PSA `restricted` allows, so it is the one allowed here.
+    - expression: >-
+        variables.allContainers.all(c,
+          !has(c.securityContext) || !has(c.securityContext.capabilities)
+          || !has(c.securityContext.capabilities.add)
+          || c.securityContext.capabilities.add.all(a, a == 'NET_BIND_SERVICE'))
+      message: >-
+        a container may add back NET_BIND_SERVICE and nothing else.
+    # A volume type outside PSA `restricted`'s list reaches past the pod:
+    # hostPath is the node's own filesystem, and was admitted with every
+    # other rule above satisfied. An allowlist rather than "no hostPath", so
+    # nfs, iscsi and the other node-attached types are covered too. The
+    # platform's own pods use configMap and persistentVolumeClaim; the dev
+    # overlay's hostPath lives in a PersistentVolume, which is the cluster
+    # administrator's object, not the pod author's.
+    - expression: >-
+        !has(object.spec.volumes) || object.spec.volumes.all(v,
+          has(v.configMap) || has(v.csi) || has(v.downwardAPI) || has(v.emptyDir)
+          || has(v.ephemeral) || has(v.persistentVolumeClaim) || has(v.projected)
+          || has(v.secret))
+      message: >-
+        volumes are limited to configMap, csi, downwardAPI, emptyDir,
+        ephemeral, persistentVolumeClaim, projected and secret. A hostPath
+        volume is the node's filesystem inside the pod.
+    - expression: >-
+        variables.allContainers.all(c,
+          !has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0))
+      message: >-
+        hostPort binds the node's own network interface; expose a Service
+        instead.
     # The *effective* value per container, not "the pod says so OR every
     # container says so". Those are different rules and the second one is
     # wrong, because a container's securityContext overrides the pod's.

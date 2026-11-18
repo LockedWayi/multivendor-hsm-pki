@@ -59,16 +59,19 @@ The PKCS#11 mechanism test generates its own."
 identity; there is nothing to sign with outside a workflow run."
 
 SHA="${GITHUB_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
-SHA_TAG="sha-$SHA"
-SEMVER_TAG=""
-# --exact-match: the release tag applies to the commit that carries it and
-# to no other.
-if SEMVER_TAG="$(git -C "$REPO_ROOT" describe --exact-match --tags "$SHA" 2>/dev/null)"; then
-    log "this commit carries the release tag $SEMVER_TAG"
-else
-    SEMVER_TAG=""
-    echo "no release tag on this commit; publishing under $SHA_TAG only"
-fi
+# Each run pushes one tag, the one it owns, and the verify job resolves
+# that same tag. A release commit gets two runs, the branch push and the
+# tag push, and each builds, signs and pushes its own image under its own
+# workflow identity. When both pushed sha-<commit>, the tag ended up on
+# whichever pushed last, and a verify job that resolved it between the
+# other run's push and its own pull checked the wrong run's signature.
+# The tag run owns the release tag and the branch run owns sha-<commit>.
+case "${GITHUB_REF:-}" in
+    refs/tags/*) RUN_TAG="${GITHUB_REF#refs/tags/}"
+                 log "a release tag run: publishing under $RUN_TAG" ;;
+    *)           RUN_TAG="sha-$SHA"
+                 echo "publishing under $RUN_TAG" ;;
+esac
 
 LOCAL_TAG="hsm-pki-server:publish"
 STAGING_TAG="staging"
@@ -136,11 +139,9 @@ verify_keyless verify-attestation --type slsaprovenance1 --allow-http-registry="
 echo "    provenance      verified"
 
 log "6/7  applying the release tags now that the digest is signed"
-for t in "$SHA_TAG" ${SEMVER_TAG:+"$SEMVER_TAG"}; do
-    docker tag "$LOCAL_TAG" "$IMAGE_REPO:$t"
-    docker push "$IMAGE_REPO:$t"
-    echo "    $IMAGE_REPO:$t -> $DIGEST"
-done
+docker tag "$LOCAL_TAG" "$IMAGE_REPO:$RUN_TAG"
+docker push "$IMAGE_REPO:$RUN_TAG"
+echo "    $IMAGE_REPO:$RUN_TAG -> $DIGEST"
 
 log "7/7  extracting the binary from the signed image and signing it keyless"
 # Extracted, not rebuilt: a second go build could produce different bytes.
@@ -169,7 +170,7 @@ cat <<EOT
 Published and signed keyless:
 
   $DIGEST_REF
-  tags       $SHA_TAG${SEMVER_TAG:+, $SEMVER_TAG}, staging
+  tags       $RUN_TAG, staging
   identity   $IDENTITY
   binary     $(cut -d' ' -f1 "$BINARY.sha256")
 

@@ -25,7 +25,8 @@
 #     forgetting the filter is one file away rather than two.
 #
 # Add a path when it changes the image, the SBOM, the provenance, or any
-# tool that signs or verifies them.
+# tool that signs or verifies them. A path ending in / watches everything
+# under it, for a package whose every file is part of the mechanism.
 set -euo pipefail
 
 BASE="${1:-}"
@@ -46,6 +47,7 @@ WATCHED=(
     'ci/publish-image.sh'           # the order the whole thing happens in
     'ci/signing-mechanism-test.sh'  # the test itself
     'ci/rotation-drill.sh'          # the rotation drill, run in the same job
+    'ci/drill-helpers.sh'           # the refusal check both drills use
     'cmd/hsm-pki-keytool/retire.go'     # retires a key: reads the inventory, then destroys
     'cmd/hsm-pki-keytool/provision.go'  # provisions the next key version
     'cmd/hsm-pki-keytool/inventory.go'  # publishes what the signers and verifiers read
@@ -56,6 +58,13 @@ WATCHED=(
     'ci/keyless-identity.sh'
     'deploy/docker/Dockerfile'      # the image being signed
     'deploy/docker/provision-signing-keys.sh'
+    'internal/inventory/'           # what the inventory may say, and its signature check
+    'internal/signingkey/'          # provisions, verifies and destroys the signing keys
+    'internal/artifactsig/'         # the release-artifact signature format
+    'ci/generate-image-policy/'     # the admission policy the drill renders and refuses
+    'ci/verify-artifact/'           # the artifact verifier
+    'ci/check-provenance.sh'        # what a verifier accepts as provenance
+    'ci/fetch-trust-anchor.sh'      # where verification begins
 )
 
 changed="$(git diff --name-only "$BASE"...HEAD)"
@@ -66,9 +75,10 @@ fi
 
 matched=()
 for path in "${WATCHED[@]}"; do
-    if printf '%s\n' "$changed" | grep -qxF "$path"; then
-        matched+=("$path")
-    fi
+    case "$path" in
+        */) printf '%s\n' "$changed" | grep -q "^${path//./\\.}" && matched+=("$path") ;;
+        *) printf '%s\n' "$changed" | grep -qxF "$path" && matched+=("$path") ;;
+    esac
 done
 
 if [ "${#matched[@]}" -eq 0 ]; then

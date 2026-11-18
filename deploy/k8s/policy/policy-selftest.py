@@ -132,6 +132,23 @@ def case_no_memory_limit(p):
     drop(p["spec"]["containers"][0], "resources")
 
 
+def case_capability_added(p):
+    p["spec"]["containers"][0]["securityContext"]["capabilities"]["add"] = ["SYS_ADMIN"]
+
+
+def case_net_bind_service_added(p):
+    p["spec"]["containers"][0]["securityContext"]["capabilities"]["add"] = ["NET_BIND_SERVICE"]
+
+
+def case_host_path_volume(p):
+    p["spec"]["volumes"] = [{"name": "host", "hostPath": {"path": "/", "type": "Directory"}}]
+    p["spec"]["containers"][0]["volumeMounts"] = [{"name": "host", "mountPath": "/host", "readOnly": True}]
+
+
+def case_host_port(p):
+    p["spec"]["containers"][0]["ports"] = [{"containerPort": 8080, "hostPort": 80}]
+
+
 def case_runasnonroot_on_the_container(p):
     """The other arm of an `or`: satisfied per container, not on the pod."""
     drop(p["spec"]["securityContext"], "runAsNonRoot")
@@ -200,6 +217,14 @@ CASES = [
     ("no seccomp profile", case_seccomp_unset, "seccomp"),
     ("no memory limit", case_no_memory_limit, "memory limit"),
     ("a privileged INIT container", case_privileged_init_container, "privileged container"),
+    # Each of these was ADMITTED with every other rule satisfied, until the
+    # audit of 2026-11-16: dropping ALL said nothing about what was added
+    # back, and nothing looked at volumes or host ports.
+    ("a capability added back after drop ALL", case_capability_added, "NET_BIND_SERVICE and nothing else"),
+    ("a hostPath volume", case_host_path_volume, "volumes are limited"),
+    ("a hostPort", case_host_port, "hostPort"),
+    # The one capability PSA restricted allows must still be admitted.
+    ("NET_BIND_SERVICE added back", case_net_bind_service_added, None),
     # The pod-versus-container override. Each of these was ADMITTED by the
     # first version of this policy: the pod-level clause of an `or` was
     # true, so the container that overrode it was never examined.

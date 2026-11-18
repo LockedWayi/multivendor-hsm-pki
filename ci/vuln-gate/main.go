@@ -63,6 +63,11 @@ type hitsFile struct {
 // expiryLayout is the date form trivy's ignorefile uses.
 const expiryLayout = "2006-01-02"
 
+// maxHorizonDays is the furthest future date an allowlist entry may
+// expire on. A constant, not a flag: no caller ever passed one, and the
+// only thing a flag could do is let a caller relax the ceiling.
+const maxHorizonDays = 180
+
 // run takes its clock and streams explicitly, so a test can move the
 // clock.
 func run(args []string, in io.Reader, out io.Writer, now time.Time) error {
@@ -70,7 +75,6 @@ func run(args []string, in io.Reader, out io.Writer, now time.Time) error {
 	fs.SetOutput(out)
 	allowlistPath := fs.String("allowlist", "ci/vuln-allowlist.yaml", "path to the shared vulnerability allowlist")
 	govulnPath := fs.String("govulncheck", "", "govulncheck -format json output to judge (\"-\" for stdin); omit to validate the allowlist only")
-	maxHorizonDays := fs.Int("max-horizon-days", 180, "furthest future date an allowlist entry may expire on")
 	var trivyPaths stringList
 	fs.Var(&trivyPaths, "trivy", "trivy JSON report to read suppressions from (repeatable); needs --show-suppressed")
 	writeHits := fs.String("write-hits", "", "write the allowlist entries this run suppressed something with, as JSON")
@@ -83,7 +87,7 @@ func run(args []string, in io.Reader, out io.Writer, now time.Time) error {
 		return err
 	}
 
-	allowlist, err := loadAllowlist(*allowlistPath, now, *maxHorizonDays)
+	allowlist, err := loadAllowlist(*allowlistPath, now)
 	if err != nil {
 		return err
 	}
@@ -301,7 +305,7 @@ func (a *allowlist) matched() []string {
 // refuse to run, because a misread allowlist suppresses a vulnerability. A
 // missing file is not a defect: a repository with no accepted findings has
 // no allowlist.
-func loadAllowlist(path string, now time.Time, maxHorizonDays int) (*allowlist, error) {
+func loadAllowlist(path string, now time.Time) (*allowlist, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return &allowlist{byID: map[string]allowEntry{}, hits: map[string]bool{}}, nil

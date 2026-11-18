@@ -56,6 +56,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$REPO_ROOT/ci/active-signing-key.sh"
 
 die() { echo "rotation-drill: $*" >&2; exit 1; }
+# shellcheck source=ci/drill-helpers.sh
+. "$REPO_ROOT/ci/drill-helpers.sh"
 log() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 step() { printf '\n\033[1m    -- %s\033[0m\n' "$*"; }
 
@@ -81,25 +83,6 @@ cleanup() {
     unset SUPPLY_PIN INVENTORY_PIN COSIGN_PKCS11_PIN HSM_PKI_SUPPLY_PIN HSM_PKI_INVENTORY_PIN
 }
 trap cleanup EXIT
-
-# expect_fail <substring> <name> -- <command>: the command must exit
-# non-zero and print the substring. A refusal nobody has watched happen
-# proves nothing.
-expect_fail() {
-    local want="$1" name="$2"; shift 2
-    [ "$1" = "--" ] && shift
-    local out status
-    out="$("$@" 2>&1)" && status=0 || status=$?
-    if [ "$status" -eq 0 ]; then
-        printf '%s\n' "$out" >&2
-        die "$name: expected a refusal, got exit 0"
-    fi
-    if ! printf '%s' "$out" | grep -qF "$want"; then
-        printf '%s\n' "$out" >&2
-        die "$name: refused, but not for the stated reason (wanted '$want')"
-    fi
-    echo "    refused: $name"
-}
 
 # expect_line <extended regex> <name> -- <command>: the command must exit
 # 0 and print a line matching the pattern. The pattern names the fact
@@ -260,15 +243,7 @@ fi
 mkdir -p "$WORK"
 
 log "1/7  starting a throwaway registry"
-REGISTRY_CID="$(docker run -d -p 127.0.0.1:0:5000 "$REGISTRY_IMAGE")"
-PORT="$(docker port "$REGISTRY_CID" 5000/tcp | head -1 | sed 's/.*://')"
-REGISTRY="localhost:$PORT"
-for _ in $(seq 1 30); do
-    curl -fsS "http://$REGISTRY/v2/" >/dev/null 2>&1 && break
-    sleep 0.5
-done
-curl -fsS "http://$REGISTRY/v2/" >/dev/null || die "the throwaway registry did not come up on $REGISTRY"
-echo "    $REGISTRY"
+start_registry
 
 log "2/7  provisioning version 1 of every key, and inventory version 1"
 SUPPLY_PIN="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -472,8 +447,8 @@ expect_fail "which the inventory does not list as the" "forcing the retired $V1 
 step "and the token no longer holds it, so cosign cannot sign with it either"
 # Straight to cosign with the PKCS#11 URI, bypassing every script above.
 # The private key is gone; no policy is involved in this refusal. The
-# wording is cosign v2.6.1's for an object the token does not hold,
-# measured: the same call with the next version's label succeeded a few
+# wording is cosign v2.6's for an object the token does not hold (v2.6.1
+# and v2.6.5 alike), measured: the same call with the next version's label succeeded a few
 # steps ago, and the label is the only difference.
 expect_fail "initializing pkcs11 token signer verifier: signer not set" "cosign sign with the destroyed $V1" \
     -- env HSM_PKI_COSIGN_VERSION=v2 HSM_PKI_COSIGN_NETWORK=host "$REPO_ROOT/ci/cosign.sh" sign \
