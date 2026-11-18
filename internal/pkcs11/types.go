@@ -27,8 +27,7 @@ type Workspace struct {
 	SlotID uint
 	Label  string
 	// Serial is CK_TOKEN_INFO.serialNumber with trailing padding trimmed.
-	Serial  string
-	Present bool
+	Serial string
 }
 
 // Role selects which PKCS#11 login identity a session authenticates as.

@@ -170,6 +170,11 @@ func checkCtx(ctx context.Context) error {
 // stalls every other operation. A module that declares it gets the shared
 // lock, and the conformance suite measures the declaration with eight
 // concurrent callers on every run. Nothing here reads a vendor's name.
+//
+// A token whose information cannot be read fails the whole enumeration,
+// rather than being left out of it: every caller resolves a label against
+// this list and refuses a label that matches twice, and that refusal is
+// worth nothing if one of the two can silently drop out.
 func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -187,14 +192,17 @@ func (a *pkcs11Adapter) Workspaces(ctx context.Context) ([]Workspace, error) {
 		for _, id := range ids {
 			ti, err := a.ctx.GetTokenInfo(id)
 			if err != nil {
-				continue
+				// Fail closed. A token this cannot read may carry the label
+				// being looked up, and leaving it out would turn "two tokens
+				// share this label" into one match, and a device error into
+				// "token not found".
+				return fmt.Errorf("C_GetTokenInfo slot %d: %w", id, err)
 			}
 			out = append(out, Workspace{
 				SlotID: id,
 				Label:  strings.TrimRight(ti.Label, " "),
 				// PKCS#11 pads both fixed-width fields with spaces.
-				Serial:  strings.TrimRight(ti.SerialNumber, " "),
-				Present: true,
+				Serial: strings.TrimRight(ti.SerialNumber, " "),
 			})
 		}
 		return nil
@@ -248,15 +256,24 @@ func (a *pkcs11Adapter) OpenSession(ctx context.Context, ws Workspace, opts Sess
 
 // CloseSession releases the underlying PKCS#11 session.
 //
-// The session is marked unusable at once, whatever the token reports. It
-// is removed from the session map only once the token has released the
-// handle: on success, on CKR_SESSION_HANDLE_INVALID (already gone, the
-// result of a double close), or on ErrAdapterClosed (Close finalized the
-// module). An entry dropped before that would leave a session open on the
-// token that neither the janitor nor Close can reclaim, and session slots
-// are finite.
+// The session is marked unusable at once, whatever the token reports.
+// Holding the session's entry in the map is what entitles a caller to
+// close its handle: the janitor and Close take the entry out before they
+// close, and so does this. A session whose entry is gone, or now belongs
+// to another session that reused the handle, has been closed already, and
+// closing the handle again would close the other session. If the token
+// refuses the close for another reason the entry goes back, so the
+// janitor or Close can still reclaim the slot: session slots are finite.
 func (a *pkcs11Adapter) CloseSession(ctx context.Context, s *Session) error {
 	s.markClosed()
+
+	a.sessMu.Lock()
+	if a.sessions[s.handle] != s {
+		a.sessMu.Unlock()
+		return nil
+	}
+	delete(a.sessions, s.handle)
+	a.sessMu.Unlock()
 
 	err := a.withStateLock(func() error {
 		if err := a.ctx.CloseSession(s.handle); err != nil {
@@ -265,9 +282,11 @@ func (a *pkcs11Adapter) CloseSession(ctx context.Context, s *Session) error {
 		return nil
 	})
 
-	if err == nil || errors.Is(err, ErrAdapterClosed) || isSessionHandleInvalid(err) {
+	if err != nil && !errors.Is(err, ErrAdapterClosed) && !isSessionHandleInvalid(err) {
 		a.sessMu.Lock()
-		delete(a.sessions, s.handle)
+		if _, taken := a.sessions[s.handle]; !taken {
+			a.sessions[s.handle] = s
+		}
 		a.sessMu.Unlock()
 	}
 	return err

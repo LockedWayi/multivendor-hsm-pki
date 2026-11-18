@@ -6,6 +6,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Removed
+- `pkcs11.Workspace.Present`, which was always true.
+
 ### Fixed
 - **A revocation could be lost from the OCSP cache.** A response read
   from the store before a revocation and still being signed when the
@@ -38,6 +41,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   on the token no longer makes every provisioning fail after generating.
 - **`retire-signing-key` finishes a retirement left halfway**, when only
   the public half is still on the token.
+- **A late `CloseSession` could close another caller's session.** The
+  session janitor reclaims an expired session by taking it out of the
+  map and closing its handle; `CloseSession` then closed the same handle
+  again. On a module that hands a freed handle to the next
+  `C_OpenSession`, that second close lands on a live session. The map
+  entry is now the right to close a handle.
+- **`Workspaces` fails closed on a token it cannot read.** A slot whose
+  `C_GetTokenInfo` failed was skipped, which could turn a label two
+  tokens share into one match and a device error into "token not found".
+- **The test harness closes the adapter when a workspace is missing**, so
+  the real reason is reported once per subtest instead of every later
+  subtest failing with `CKR_CRYPTOKI_ALREADY_INITIALIZED`.
 
 ### Security
 - **Client authentication compares the issuer.** A certificate minted by
