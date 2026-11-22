@@ -132,9 +132,9 @@ Running `go test` on a host without SoftHSM2 still passes. The token
 tests skip themselves with a message. That skip means you have not run
 them.
 
-The cross-vendor behavioral suite lives in `TestConformance`
-(`pkcs11/conformance_test.go`) and runs against every backend the
-environment can reach:
+The cross-vendor behavioral suite is package `pkcs11/conformance`.
+`TestConformance` (`pkcs11/conformance_test.go`) runs it against every
+backend the environment can reach:
 
 ```sh
 go test ./pkcs11 -run TestConformance -race -v

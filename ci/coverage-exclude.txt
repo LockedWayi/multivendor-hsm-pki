@@ -27,3 +27,9 @@ pkcs11/luna.go
 # tested-ness changed, which is precisely the distortion this file exists to
 # prevent.
 internal/hsmtest/hsmtest.go
+#
+# pkcs11/conformance is the same kind of scaffolding, exported so that a
+# module outside this repository can run the suite against its own token.
+# pkcs11/conformance_test.go runs it here, and the coverage that run
+# produces is counted where the code under test lives, in pkcs11.
+pkcs11/conformance/conformance.go
