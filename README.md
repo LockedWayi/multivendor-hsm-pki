@@ -21,6 +21,11 @@ the HSM. The design reasoning is in
                           appliance)
 ```
 
+The PKCS#11 layer is a package of its own, importable without the CA:
+`go get github.com/LockedWayi/multivendor-hsm-pki/pkcs11`. Its
+interface, how to add a vendor and how to run the conformance suite
+against your own module are in **[pkcs11/README.md](pkcs11/README.md)**.
+
 ## Why this is unusual
 
 Most HSM integrations hard-code one vendor. This one drives three PKCS#11

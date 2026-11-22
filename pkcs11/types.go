@@ -1,7 +1,11 @@
 // Package pkcs11 is the vendor-agnostic PKCS#11 layer. VendorAdapter is
-// written against the standard PKCS#11 surface only. A concrete adapter
-// (SoftHSM2Adapter, ProtectServerAdapter, LunaAdapter) handles its
-// vendor's differences and presents this one interface.
+// written against the standard PKCS#11 surface only. Every adapter wraps
+// one shared implementation, and where conforming modules differ the
+// difference is a field of Capabilities, which package conformance
+// measures. The built-in adapters are SoftHSM2Adapter,
+// ProtectServerAdapter and LunaAdapter; RegisterVendor adds another
+// vendor from outside this package. Signer is an HSM-backed
+// crypto.Signer.
 package pkcs11
 
 import (
