@@ -23,6 +23,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the same backends as before.
 - **`pkcs11.Signer`**, the HSM-backed ECDSA `crypto.Signer` that was the
   CA's. `ca.Signer` wraps it and keeps its errors.
+- **A module's refusal carries its code as `pkcs11.ReturnValue`.** A
+  caller tests `errors.Is(err, pkcs11.RVPINIncorrect)` or reads the code
+  with `ReturnValueOf`, without importing `miekg/pkcs11`. The message is
+  unchanged, and the binding's error stays in the chain. The conformance
+  suite no longer imports the binding, and asserts that a wrong PIN's
+  refusal reaches the caller with a code.
 
 ### Changed
 - The `suite` job runs the race suite once, inside the coverage step.

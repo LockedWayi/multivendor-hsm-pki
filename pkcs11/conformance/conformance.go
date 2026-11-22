@@ -42,8 +42,6 @@ import (
 	"testing"
 	"time"
 
-	p11 "github.com/miekg/pkcs11"
-
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
@@ -262,6 +260,12 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		err = b.adapter.Login(ctx, s, append([]byte(nil), b.wrongPIN...), b.role)
 		if err == nil {
 			t.Fatal("Login with wrong PIN succeeded, want an error")
+		}
+		// The code a module answers a wrong PIN with is not asserted here;
+		// that it reaches the caller as a ReturnValue, without the binding,
+		// is.
+		if _, ok := pk11.ReturnValueOf(err); !ok {
+			t.Fatalf("Login with wrong PIN = %v, which carries no pkcs11.ReturnValue", err)
 		}
 		if s.LoggedIn() {
 			t.Fatal("LoggedIn() = true after a failed Login")
@@ -837,11 +841,10 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		mech := pk11.Mechanism{Type: pk11.MechAESKeyWrap}
 		wrapped, err := b.adapter.Wrap(ctx, s, wrappingKey, kp.Private, mech)
 		if b.caps.PrivateKeyWrapRefused != "" {
-			var ckr p11.Error
 			switch {
 			case err == nil:
 				t.Fatalf("declared refused (%s), but C_WrapKey wrapped the private key: the declaration is wrong", b.caps.PrivateKeyWrapRefused)
-			case !errors.As(err, &ckr) || ckr != p11.CKR_KEY_NOT_WRAPPABLE:
+			case !errors.Is(err, pk11.RVKeyNotWrappable):
 				t.Fatalf("declared refused with CKR_KEY_NOT_WRAPPABLE (%s), got %v", b.caps.PrivateKeyWrapRefused, err)
 			}
 			t.Skipf("refusal measured as declared: %s", b.caps.PrivateKeyWrapRefused)
@@ -933,8 +936,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		case !b.caps.HandlesSpanSessions && err == nil:
 			t.Fatal("declared that handles are per session, but a handle from one session was accepted in another: the declaration is wrong")
 		case !b.caps.HandlesSpanSessions:
-			var ckr p11.Error
-			if !errors.As(err, &ckr) || ckr != p11.CKR_OBJECT_HANDLE_INVALID {
+			if !errors.Is(err, pk11.RVObjectHandleInvalid) {
 				t.Fatalf("handle refused across sessions as declared, but with %v, want CKR_OBJECT_HANDLE_INVALID", err)
 			}
 		}
@@ -965,17 +967,16 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		zero := make([]byte, 32)
 		var got pk11.ZeroDigestBehaviour
 		sig, err := b.adapter.Sign(ctx, s, kp.Private, pk11.Mechanism{Type: pk11.MechECDSA}, zero)
-		var ckr p11.Error
 		switch {
 		case err == nil:
 			if verr := b.adapter.Verify(ctx, s, kp.Public, pk11.Mechanism{Type: pk11.MechECDSA}, zero, sig); verr == nil {
 				got = pk11.ZeroDigestAccepted
-			} else if errors.As(verr, &ckr) && ckr == p11.CKR_SIGNATURE_INVALID {
+			} else if errors.Is(verr, pk11.RVSignatureInvalid) {
 				got = pk11.ZeroDigestVerifyRefused
 			} else {
 				t.Fatalf("C_Verify over an all-zero digest failed with %v, which is none of the three measured answers", verr)
 			}
-		case errors.As(err, &ckr) && ckr == p11.CKR_DATA_INVALID:
+		case errors.Is(err, pk11.RVDataInvalid):
 			got = pk11.ZeroDigestSignRefused
 		default:
 			t.Fatalf("C_Sign over an all-zero digest failed with %v, which is none of the three measured answers", err)
@@ -996,8 +997,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		case !b.caps.SecondInitializeInProcess && err == nil:
 			t.Fatal("declared that a second C_Initialize is refused, but a second adapter opened: the declaration is wrong")
 		case !b.caps.SecondInitializeInProcess:
-			var ckr p11.Error
-			if !errors.As(err, &ckr) || ckr != p11.CKR_CRYPTOKI_ALREADY_INITIALIZED {
+			if !errors.Is(err, pk11.RVCryptokiAlreadyInitialized) {
 				t.Fatalf("second adapter refused as declared, but with %v, want CKR_CRYPTOKI_ALREADY_INITIALIZED", err)
 			}
 		}

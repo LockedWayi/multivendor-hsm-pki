@@ -126,6 +126,22 @@ The differences measured so far, one field each:
 | `UnwrapNeedsValueLen` | whether an unwrap template needs `CKA_VALUE_LEN` (Luna does, SoftHSM2 refuses it) |
 | `SerializeOnOneThread` | whether the module has to be driven from one OS thread |
 
+## Errors
+
+A refusal from the module carries its `CK_RV` as a `pkcs11.ReturnValue`,
+so a caller tests for a code without importing the binding:
+
+```go
+if errors.Is(err, pkcs11.RVPINIncorrect) { ... }
+rv, ok := pkcs11.ReturnValueOf(err) // whichever code is there
+errors.Is(err, pkcs11.ReturnValue(0x80000123)) // a vendor-defined one
+```
+
+The message is the one the module's refusal always had
+(`C_Login (anchor): pkcs11: 0xA0: CKR_PIN_INCORRECT`). The layer's own
+refusals are sentinel errors: `ErrSessionExpired`, `ErrAdapterClosed`,
+`ErrKeyNotFound`, `ErrAmbiguousLabel` and the rest in `errors.go`.
+
 ## Scope
 
 - Asymmetric keys are EC only: P-256, P-384, P-521, ECDSA.
@@ -140,9 +156,6 @@ The differences measured so far, one field each:
   a Go string and copies it into a C buffer that it frees without zeroing.
   [docs/threat-model.md](../docs/threat-model.md) §6.3 says why that is
   accepted.
-- **Module errors are the binding's type.** A refusal from the module
-  arrives as `miekg/pkcs11.Error` (a `CKR_*` value), so a caller that
-  inspects one imports the binding. This is expected to change before v1.
 - **nShield is untested.** Its Security World is where the login and
   key-protection model is expected to differ most from the three measured
   here, so it is the next real test of whether the interface is general.

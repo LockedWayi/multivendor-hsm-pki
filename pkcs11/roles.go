@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	p11 "github.com/miekg/pkcs11"
 )
 
 // RoleCryptoOfficer is the role name every adapter accepts: the standard
@@ -57,8 +55,7 @@ func (r LoginRole) Role() Role {
 // user type the token has no initialized user for, and on its own it reads
 // like a PIN problem. Any other error is returned unchanged.
 func (r LoginRole) Explain(err error) error {
-	var ckr p11.Error
-	if err == nil || r.hint == "" || !errors.As(err, &ckr) || ckr != p11.CKR_USER_PIN_NOT_INITIALIZED {
+	if rv, ok := ReturnValueOf(err); r.hint == "" || !ok || rv != RVUserPINNotInitialized {
 		return err
 	}
 	return fmt.Errorf("%w (role %q: %s)", err, r.Name(), r.hint)

@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	p11 "github.com/miekg/pkcs11"
-
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
@@ -49,8 +47,7 @@ func TestLuna_TheLCOIsRefusedOnAV0PartitionAndTheErrorSaysWhy(t *testing.T) {
 		_ = adapter.LogoutToken(context.Background())
 		t.Fatalf("the LCO logged into %q: either it is not a V0 partition or the finding no longer holds", label)
 	}
-	var ckr p11.Error
-	if !errors.As(err, &ckr) || ckr != p11.CKR_USER_PIN_NOT_INITIALIZED {
+	if !errors.Is(err, pk11.RVUserPINNotInitialized) {
 		t.Fatalf("LCO login on the V0 partition = %v, want CKR_USER_PIN_NOT_INITIALIZED as measured", err)
 	}
 	if explained := lco.Explain(err); !strings.Contains(explained.Error(), "V1 partition") {

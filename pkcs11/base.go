@@ -125,13 +125,14 @@ func (a *pkcs11Adapter) withStateLock(fn func() error) error {
 // onModuleThread runs fn on the module's own OS thread when the adapter
 // declared SerializeOnOneThread, and inline otherwise. Every call into the
 // module goes through it: both lock helpers, the constructor and Close.
+// It is also where a module's refusal gains its ReturnValue (fromModule).
 func (a *pkcs11Adapter) onModuleThread(fn func() error) error {
 	if a.mt == nil {
-		return fn()
+		return fromModule(fn())
 	}
 	var err error
 	a.mt.run(func() { err = fn() })
-	return err
+	return fromModule(err)
 }
 
 // withReadLock runs fn under a shared lock. Only C_GetAttributeValue and
@@ -294,8 +295,8 @@ func (a *pkcs11Adapter) CloseSession(ctx context.Context, s *Session) error {
 
 // isSessionHandleInvalid reports whether the token says the handle is gone.
 func isSessionHandleInvalid(err error) bool {
-	var p11Err p11.Error
-	return errors.As(err, &p11Err) && p11Err == p11.Error(p11.CKR_SESSION_HANDLE_INVALID)
+	rv, ok := ReturnValueOf(err)
+	return ok && rv == RVSessionHandleInvalid
 }
 
 // ─── Login / Logout ─────────────────────────────────────────────────────
