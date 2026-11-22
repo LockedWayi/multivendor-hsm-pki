@@ -61,7 +61,7 @@ Three properties of the harness matter for a new vendor:
 
 | Suite | Tests | Proves |
 |---|---:|---|
-| `internal/pkcs11` `TestConformance` | 1 group, 26 cases | The `VendorAdapter` contract: sessions, login lifecycle, key generation and **key protection attributes**, sign/verify, encrypt/decrypt, wrap/unwrap, find/attributes, error mapping |
+| `pkcs11` `TestConformance` | 1 group, 26 cases | The `VendorAdapter` contract: sessions, login lifecycle, key generation and **key protection attributes**, sign/verify, encrypt/decrypt, wrap/unwrap, find/attributes, error mapping |
 | `internal/ca` ceremony, re-issue + intermediate | 16 | Two-token root ceremony, token-identity checks, fail-closed parameter validation, concurrency, intermediate re-issue under an existing root, `LoadIntermediate`'s startup gates |
 | `internal/ca` issuance, signer, service + profiles | 25 | `crypto.Signer` over PKCS#11, CSR validation through to a signed leaf, CRL building, distribution points, the profile deciding the certificate and a request without one refused |
 | `internal/api` HTTP surface | 47 | Issuance, revocation, CRL generation and caching, the DER artifact endpoints, readiness (27); **mutual TLS on the write endpoints** over an HSM-held TLS identity, with the handshake, the store lookup and the identity lists each refusing on their own (8); the profile query parameter (2); the per-identity binding of profiles and names, every deny path (5); and the OCSP responder over both transports, its error responses, its absence without a key, the AIA pointer in new leaves, `openssl ocsp` agreeing with it, and a GET request whose base64 contains `//` (5) |
@@ -206,7 +206,7 @@ Then: one entry in `hsmtest`'s `registry`, and every test in §3 runs
 against it. Nothing else should need to change. If something does, that is
 a defect in the harness and belongs here as a finding.
 
-**It is one entry since 2026-09-24.** Until then `internal/pkcs11`'s own
+**It is one entry since 2026-09-24.** Until then `pkcs11`'s own
 `TestConformance` kept a backend list of its own, with the wrong-PIN
 cases, the reopen hook and its single-token layout, and a test compared
 the two lists so a vendor added to one and not the other went red. The

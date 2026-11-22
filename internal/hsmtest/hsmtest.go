@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // Backend is one vendor's adapter together with the two tokens a test
@@ -527,7 +527,7 @@ func MustFindWorkspace(t *testing.T, adapter pk11.VendorAdapter, label string) p
 func runID() string { return fmt.Sprintf("%d", time.Now().UnixNano()) }
 
 // Single is one vendor's single token, the shape the conformance suite in
-// internal/pkcs11 runs on: one workspace, its PIN, a PIN that is wrong for
+// pkcs11 runs on: one workspace, its PIN, a PIN that is wrong for
 // it, and the role every login uses. It carries what a test needs to open
 // a second connection to the same module, because that suite closes the
 // adapter on purpose and its cleanup has to get back in.

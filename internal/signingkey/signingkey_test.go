@@ -15,8 +15,8 @@ import (
 	"testing"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // These tests reach a token, so every one runs against every backend. The

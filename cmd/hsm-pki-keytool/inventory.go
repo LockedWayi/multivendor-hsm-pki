@@ -17,8 +17,8 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // keySpec is one `purpose:label:status` triple from the command line.

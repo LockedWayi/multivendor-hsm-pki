@@ -15,8 +15,8 @@
 #
 # When the nShield adapter arrives with the same constraint, add its file
 # here. This list is the single place that decision lives.
-internal/pkcs11/protectserver.go
-internal/pkcs11/luna.go
+pkcs11/protectserver.go
+pkcs11/luna.go
 #
 # internal/hsmtest is test scaffolding that has to be a package rather than a
 # _test.go file, because Go cannot share test helpers across packages. It is

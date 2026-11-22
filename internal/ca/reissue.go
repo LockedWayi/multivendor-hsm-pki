@@ -9,7 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/keylabel"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // ReissueIntermediateParams configures ReissueIntermediate. It is
@@ -82,7 +83,7 @@ func (p *ReissueIntermediateParams) validate() error {
 	if p.RootKeyLabel == p.IntermediateKeyLabel {
 		return fmt.Errorf("ca: reissue-intermediate refuses to use one key label (%q) for both tiers", p.RootKeyLabel)
 	}
-	if err := pk11.ValidateVersionedLabel(p.IntermediateKeyLabel); err != nil {
+	if err := keylabel.ValidateVersioned(p.IntermediateKeyLabel); err != nil {
 		return fmt.Errorf("ca: reissue-intermediate: IntermediateKeyLabel: %w", err)
 	}
 	if err := ValidateDistributionURL("RootCRLURL", p.RootCRLURL); err != nil {

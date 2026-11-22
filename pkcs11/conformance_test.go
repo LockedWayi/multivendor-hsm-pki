@@ -29,7 +29,7 @@ import (
 	p11 "github.com/miekg/pkcs11"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // conformanceBackend is one vendor's adapter plus the credentials the

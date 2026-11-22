@@ -18,7 +18,8 @@ import (
 	"fmt"
 	"regexp"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/keylabel"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // ErrLabelTaken reports that the token already holds an object under the
@@ -28,11 +29,11 @@ var ErrLabelTaken = errors.New("signingkey: label already in use on this token")
 
 // ValidateLabel reports whether label is a versioned signing-key label,
 // the one shape every key label on this platform has
-// (pkcs11.ValidateVersionedLabel; the ceremony applies the same rule).
+// (keylabel.ValidateVersioned; the ceremony applies the same rule).
 // Provision applies the same check first, so the CLI and the library
 // cannot disagree.
 func ValidateLabel(label string) error {
-	if err := pk11.ValidateVersionedLabel(label); err != nil {
+	if err := keylabel.ValidateVersioned(label); err != nil {
 		return fmt.Errorf("signingkey: label %q is not a versioned label (want e.g. image-signing-key-v1)", label)
 	}
 	return nil

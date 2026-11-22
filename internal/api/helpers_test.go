@@ -15,7 +15,7 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // newTestCA runs a real root ceremony on the backend's two tokens and

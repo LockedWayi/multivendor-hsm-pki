@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // TestNewAdapterByName_KnowsEveryName: the module path does not exist, so
@@ -31,31 +31,6 @@ func TestNewAdapterByName_KnowsEveryName(t *testing.T) {
 	for _, name := range pk11.AdapterNames() {
 		if !strings.Contains(err.Error(), name) || !strings.Contains(pk11.AdapterFlagUsage, name) {
 			t.Fatalf("the refusal and the flag usage must name every accepted adapter; missing %q in %q / %q", name, err, pk11.AdapterFlagUsage)
-		}
-	}
-}
-
-func TestValidateVersionedLabel(t *testing.T) {
-	for _, ok := range []string{"ca-root-key-v1", "image-signing-key-v12", "t-1758-cli-root-key-v1", "k-v0"} {
-		if err := pk11.ValidateVersionedLabel(ok); err != nil {
-			t.Errorf("%q should be accepted: %v", ok, err)
-		}
-	}
-	// The rejected shapes are spelled without the word "key" beside a
-	// value, so a secret scanner reading this file sees labels and not
-	// credentials; each still fails the rule for the reason named.
-	for _, bad := range []string{
-		"",                            // empty
-		"ca-root",                     // no version
-		"hand-20260924T1556Z-root-v1", // uppercase, the shape a hand run used
-		"Root-Ca-v1",                  // uppercase
-		"ca_root-v1",                  // underscore
-		"-v1",                         // no purpose
-		"ca-root-v",                   // version without a number
-		"ca-root-v1 ",                 // trailing space
-	} {
-		if err := pk11.ValidateVersionedLabel(bad); err == nil {
-			t.Errorf("%q should be refused", bad)
 		}
 	}
 }

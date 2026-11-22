@@ -11,8 +11,8 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // runRetireSigningKeyCmd destroys one supply-chain signing key on its

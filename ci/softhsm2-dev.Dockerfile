@@ -1,5 +1,5 @@
-# Dev/test environment for internal/pkcs11: Go plus a real SoftHSM2 module,
-# so `go test ./internal/pkcs11/...` runs against an actual PKCS#11 backend
+# Dev/test environment for pkcs11: Go plus a real SoftHSM2 module,
+# so `go test ./pkcs11/...` runs against an actual PKCS#11 backend
 # with zero vendor hardware.
 # This is not the shipped service image (see /deploy/docker for that). It
 # exists so the SoftHSM2-backed test suite is reproducible from code,

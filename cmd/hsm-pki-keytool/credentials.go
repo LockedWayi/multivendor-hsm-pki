@@ -50,10 +50,10 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // defaultCredentialValidity is how long both credentials are valid for

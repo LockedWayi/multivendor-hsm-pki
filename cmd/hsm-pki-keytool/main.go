@@ -25,7 +25,7 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 func main() {

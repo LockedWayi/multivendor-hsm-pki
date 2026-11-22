@@ -8,7 +8,7 @@ import (
 
 	p11 "github.com/miekg/pkcs11"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // The zero LoginRole is the Crypto Officer. A bare Role's zero value is

@@ -322,7 +322,7 @@ different one) that holds the matching unwrapping key. A backup is useless
 without also holding the wrapping key, which is itself an HSM-held object,
 ordinarily kept under separate custody from the key it protects.
 
-`internal/pkcs11`'s
+`pkcs11`'s
 `TestConformance/WrapUnwrapDemo_ECPrivateKeyBackupRoundTrip` proves the
 mechanics: generate an EC key pair with `Extractable: true`, sign with it,
 wrap its private key under an AES wrapping key, **destroy the original
@@ -374,7 +374,7 @@ test harness has no third token to exercise it.
 ### 5.2 Deciding root-key extractability
 
 `CKA_EXTRACTABLE=false` is this platform's default for every key it
-generates, including the root (`internal/pkcs11/types.go`,
+generates, including the root (`pkcs11/types.go`,
 `KeyPairRequest.Extractable`). A wrap-based backup of that same key and a
 non-extractable key are mutually exclusive. A non-extractable key has no
 door `C_WrapKey` can use. The root ceremony faces a fork with no default

@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // provisionTLSKey generates a TLS key pair on the intermediate's token and

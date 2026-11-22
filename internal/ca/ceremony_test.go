@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 const (

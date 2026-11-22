@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 	"gopkg.in/yaml.v3"
 )
 

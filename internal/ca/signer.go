@@ -1,5 +1,5 @@
 // Package ca implements the Certificate Authority: issuance, revocation
-// and CRL generation, built on internal/pkcs11. The CA never holds raw key
+// and CRL generation, built on pkcs11. The CA never holds raw key
 // material; it asks a Signer to sign.
 package ca
 
@@ -13,7 +13,7 @@ import (
 	"io"
 	"math/big"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // PINResolver returns the token's login PIN, read at the point of use (see
@@ -29,7 +29,7 @@ type PINResolver func() ([]byte, error)
 // It does not log in. Bootstrap authenticates the token once through
 // LoginToken for the service's lifetime, and PKCS#11 authenticates the
 // token for the whole application, so a session opened here can use
-// private keys at once. See internal/pkcs11/tokenlogin.go.
+// private keys at once. See pkcs11/tokenlogin.go.
 //
 // No session is held between calls. pkcs11.Session enforces an idle
 // timeout and a maximum TTL and fails closed when either passes, so a

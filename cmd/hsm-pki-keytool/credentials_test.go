@@ -24,9 +24,9 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 const testBaseURL = "http://pki.example.test"

@@ -11,7 +11,8 @@ import (
 	"math/big"
 	"time"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	"github.com/LockedWayi/multivendor-hsm-pki/internal/keylabel"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // DefaultRootValidity is the validity of a ceremony-produced root
@@ -99,7 +100,7 @@ func (p *CeremonyParams) validate() error {
 	// token that no TLS or OCSP key can sit beside, found by running one;
 	// so the same rule applies here, before the first key exists.
 	for field, label := range map[string]string{"RootKeyLabel": p.RootKeyLabel, "IntermediateKeyLabel": p.IntermediateKeyLabel} {
-		if err := pk11.ValidateVersionedLabel(label); err != nil {
+		if err := keylabel.ValidateVersioned(label); err != nil {
 			return fmt.Errorf("ca: ceremony: %s: %w", field, err)
 		}
 	}

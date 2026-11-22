@@ -9,8 +9,8 @@ import (
 	"syscall"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // runProvisionSigningKeyCmd provisions one supply-chain signing key on the

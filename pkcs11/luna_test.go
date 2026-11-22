@@ -10,7 +10,7 @@ import (
 	p11 "github.com/miekg/pkcs11"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // The one operation the Limited Crypto Officer has been refused on Luna:
