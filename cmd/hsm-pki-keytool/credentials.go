@@ -88,7 +88,7 @@ type issuerFlags struct {
 // addIssuerFlags registers the shared flags on fs.
 func addIssuerFlags(fs *flag.FlagSet) *issuerFlags {
 	return &issuerFlags{
-		adapterName:     fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage),
+		adapterName:     fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage()),
 		modulePath:      fs.String("module", "", "path to the PKCS#11 module (.so)"),
 		workspaceLabel:  fs.String("workspace", "", "token label the intermediate key lives on"),
 		workspaceSerial: fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label"),
@@ -394,7 +394,7 @@ func builtinProfile(name string, validity time.Duration) *profile.Profile {
 // responder key must be able to lie about status and nothing else.
 func runProvisionOCSPKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("provision-ocsp-key", flag.ExitOnError)
-	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage())
 	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	workspaceLabel := fs.String("workspace", "", "token label the intermediate key lives on")

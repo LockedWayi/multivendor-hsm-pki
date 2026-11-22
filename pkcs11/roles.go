@@ -64,25 +64,36 @@ func (r LoginRole) Explain(err error) error {
 	return fmt.Errorf("%w (role %q: %s)", err, r.Name(), r.hint)
 }
 
-// adapterRoles is the one table of role names per adapter. Every adapter
-// accepts the Crypto Officer; the vendor-defined user types are listed
-// under the adapter whose module defines them, and a name is accepted only
-// for that adapter, so a Luna role given to another module is refused
-// rather than passed to C_Login as a number that module never defined.
-var adapterRoles = map[string]map[string]LoginRole{
-	AdapterSoftHSM2:      {RoleCryptoOfficer: {}},
-	AdapterProtectServer: {RoleCryptoOfficer: {}},
-	AdapterLuna: {
-		RoleCryptoOfficer: {},
-		// Measured 2026-09-28: on a V0 partition C_Login with this user
-		// type answers CKR_USER_PIN_NOT_INITIALIZED, the same code a V1
-		// partition gives for a role nobody initialized, so the hint names
-		// both.
-		"lco": {name: "lco", role: LunaRoleLimitedCryptoOfficer,
-			hint: "the Limited Crypto Officer exists only on a V1 partition, so a V0 partition has none; on a V1 partition the Crypto Officer has to initialize it first (lunacm: role init -name lco)"},
-		"cu": {name: "cu", role: LunaRoleCryptoUser,
-			hint: "the Crypto User is not initialized on this partition (lunacm: role init -name cu, by the Partition SO)"},
-	},
+// NewLoginRole declares a vendor-defined login identity for a Vendor's
+// Roles: the name an operator types, the user type C_Login takes, and,
+// optionally, what CKR_USER_PIN_NOT_INITIALIZED means for this identity.
+func NewLoginRole(name string, role Role, hint string) LoginRole {
+	return LoginRole{name: name, role: role, hint: hint}
+}
+
+// lunaRoles are the vendor-defined user types the Luna adapter accepts.
+// A name is accepted only for the vendor whose module defines it, so a
+// Luna role given to another module is refused rather than passed to
+// C_Login as a number that module never defined.
+var lunaRoles = []LoginRole{
+	// Measured 2026-09-28: on a V0 partition C_Login with this user
+	// type answers CKR_USER_PIN_NOT_INITIALIZED, the same code a V1
+	// partition gives for a role nobody initialized, so the hint names
+	// both.
+	{name: "lco", role: LunaRoleLimitedCryptoOfficer,
+		hint: "the Limited Crypto Officer exists only on a V1 partition, so a V0 partition has none; on a V1 partition the Crypto Officer has to initialize it first (lunacm: role init -name lco)"},
+	{name: "cu", role: LunaRoleCryptoUser,
+		hint: "the Crypto User is not initialized on this partition (lunacm: role init -name cu, by the Partition SO)"},
+}
+
+// rolesOf is a vendor's role table: the Crypto Officer, which every
+// vendor accepts, and the vendor's own.
+func rolesOf(vendorRoles ...LoginRole) map[string]LoginRole {
+	m := map[string]LoginRole{RoleCryptoOfficer: {}}
+	for _, r := range vendorRoles {
+		m[r.name] = r
+	}
+	return m
 }
 
 // RoleNames returns the role names adapter accepts, the Crypto Officer
@@ -90,7 +101,8 @@ var adapterRoles = map[string]map[string]LoginRole{
 func RoleNames(adapter string) []string {
 	names := []string{RoleCryptoOfficer}
 	var rest []string
-	for n := range adapterRoles[adapter] {
+	e, _ := lookupVendor(adapter)
+	for n := range e.roles {
 		if n != RoleCryptoOfficer {
 			rest = append(rest, n)
 		}
@@ -107,7 +119,8 @@ const RoleFlagUsage = `identity to log into the token as: "co" (Crypto Officer, 
 // error, never a fallback: a service that quietly logged in as another
 // identity than its configuration says is holding authority nobody chose.
 func RoleByName(adapter, name string) (LoginRole, error) {
-	roles, ok := adapterRoles[adapter]
+	e, ok := lookupVendor(adapter)
+	roles := e.roles
 	if !ok {
 		return LoginRole{}, fmt.Errorf("%w %q", ErrUnknownAdapter, adapter)
 	}

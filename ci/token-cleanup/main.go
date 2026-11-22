@@ -51,7 +51,7 @@ type object struct {
 
 func run(args []string) error {
 	fs := flag.NewFlagSet("token-cleanup", flag.ExitOnError)
-	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage())
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	workspaceLabel := fs.String("workspace", "", "token label to clean")
 	workspaceSerial := fs.String("workspace-serial", "", "token serial number, to disambiguate when several tokens share the label")

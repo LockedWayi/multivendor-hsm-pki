@@ -39,7 +39,7 @@ import (
 func runRetireSigningKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("retire-signing-key", flag.ExitOnError)
 
-	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage())
 	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 

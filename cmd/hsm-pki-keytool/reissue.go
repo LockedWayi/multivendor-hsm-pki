@@ -27,7 +27,7 @@ import (
 func runReissueIntermediateCmd(args []string) error {
 	fs := flag.NewFlagSet("reissue-intermediate", flag.ExitOnError)
 
-	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage())
 	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	curveName := fs.String("curve", "P-256", "EC curve for the new intermediate key pair: P-256, P-384, or P-521")
