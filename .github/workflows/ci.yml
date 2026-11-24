@@ -95,7 +95,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/repo -w /repo $CACHE_MOUNTS hsm-pki-dev sh -c '
             git config --global --add safe.directory /repo
-            unformatted="$(gofmt -l cmd internal ci)"
+            unformatted="$(gofmt -l cmd internal pkcs11 ci)"
             if [ -n "$unformatted" ]; then
               echo "gofmt wants to reformat:" >&2
               echo "$unformatted" >&2

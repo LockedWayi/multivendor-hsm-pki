@@ -113,7 +113,7 @@ in `docs/test-matrix.md`, section 5.
 
 ## Running tests locally
 
-`internal/pkcs11`'s test suite needs a real SoftHSM2 PKCS#11 module. Unit
+`pkcs11`'s test suite needs a real SoftHSM2 PKCS#11 module. Unit
 tests that need no token run regardless. Build and use the dev container
 rather than installing SoftHSM2 on your host:
 
@@ -132,12 +132,12 @@ Running `go test` on a host without SoftHSM2 still passes. The token
 tests skip themselves with a message. That skip means you have not run
 them.
 
-The cross-vendor behavioral suite lives in `TestConformance`
-(`internal/pkcs11/conformance_test.go`) and runs against every backend the
-environment can reach:
+The cross-vendor behavioral suite is package `pkcs11/conformance`.
+`TestConformance` (`pkcs11/conformance_test.go`) runs it against every
+backend the environment can reach:
 
 ```sh
-go test ./internal/pkcs11 -run TestConformance -race -v
+go test ./pkcs11 -run TestConformance -race -v
 ```
 
 With only SoftHSM2 available, its subtests run and ProtectServer's and
@@ -180,7 +180,7 @@ its owner; the harness never does that.
 All configured backends run in one invocation by mounting the vendor
 module and its token store or client directory into the dev container.
 `docs/test-matrix.md` §6 has the command. Run it before opening a PR that
-touches `internal/pkcs11` or `internal/ca`. The backends have disagreed
+touches `pkcs11` or `internal/ca`. The backends have disagreed
 before, in both directions, and a green SoftHSM2-only run does not show
 they still agree.
 

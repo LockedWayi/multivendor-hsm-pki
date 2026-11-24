@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	// modernc.org/sqlite is pure Go. internal/pkcs11 carries the one cgo
+	// modernc.org/sqlite is pure Go. pkcs11 carries the one cgo
 	// dependency this repository accepts, and a build failure here must not
 	// look like an HSM toolchain problem.
 	_ "modernc.org/sqlite"

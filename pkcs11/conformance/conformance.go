@@ -1,16 +1,32 @@
-package pkcs11_test
-
-// TestConformance is the cross-vendor suite: every subtest runs, unchanged,
-// against every backend the environment provides. SoftHSM2 is always
-// present in the dev container and carries CI. ProtectServer runs when
-// PROTECTSERVER_MODULE is set and Luna when LUNA_MODULE is; each skips
-// with its module variable unset and fails with it set and the rest of its
-// variables missing.
+// Package conformance is the cross-vendor suite for package pkcs11: every
+// subtest runs, unchanged, against whichever module a Target names, and
+// asserts both the VendorAdapter contract and every field of the adapter's
+// Capabilities declaration. A declaration the module does not match is a
+// failing subtest, never a silent skip.
+//
+// Run it from a test in your own module against your own token:
+//
+//	func TestMyHSM(t *testing.T) {
+//		a, _ := pkcs11.NewAdapterByName("myvendor", os.Getenv("MYHSM_MODULE"))
+//		conformance.Run(t, conformance.Target{
+//			Name: "MyHSM", Adapter: a, Workspace: ws,
+//			PIN: pin, WrongPIN: []byte("00000000"),
+//			Reopen: func() (pkcs11.VendorAdapter, error) {
+//				return pkcs11.NewAdapterByName("myvendor", os.Getenv("MYHSM_MODULE"))
+//			},
+//		})
+//	}
+//
+// The suite creates objects on the token, labelled conf-<RunID>-..., and
+// destroys them when it is done. Use a token that holds nothing you need:
+// a failed run can leave its objects behind. The last subtest closes the
+// adapter.
 //
 // Every test vector is a real digest, a real plaintext, a real key, never
 // an all-zero stand-in. An all-zero digest is a case where conforming
 // implementations may disagree, and one produced a false "ProtectServer
 // cannot verify" finding once.
+package conformance
 
 import (
 	"context"
@@ -26,15 +42,35 @@ import (
 	"testing"
 	"time"
 
-	p11 "github.com/miekg/pkcs11"
-
-	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
-// conformanceBackend is one vendor's adapter plus the credentials the
-// suite needs. runID is folded into every object label, so a persistent
-// token never shows a leftover from an earlier run as a duplicate.
+// Target is the module and token the suite runs against.
+type Target struct {
+	// Name labels the run in failure messages.
+	Name string
+	// Adapter is live. The suite closes it.
+	Adapter pk11.VendorAdapter
+	// Workspace is the token the suite works on.
+	Workspace pk11.Workspace
+	// PIN logs Role into Workspace.
+	PIN []byte
+	// WrongPIN must fail as a wrong PIN and not as a length error: Luna
+	// enforces a minimum of 8, so make it at least that long.
+	WrongPIN []byte
+	// Role is the login identity. The zero value is the Crypto Officer.
+	Role pk11.LoginRole
+	// Reopen builds a second adapter over the same module. The suite uses
+	// it to measure SecondInitializeInProcess and, because it closes
+	// Adapter on purpose, to get back in for cleanup.
+	Reopen func() (pk11.VendorAdapter, error)
+	// RunID is folded into every object label, so a persistent token
+	// never shows a leftover from an earlier run as a duplicate. Empty
+	// means one is chosen.
+	RunID string
+}
+
+// conformanceBackend is a Target as the subtests read it.
 type conformanceBackend struct {
 	name     string
 	adapter  pk11.VendorAdapter
@@ -42,17 +78,12 @@ type conformanceBackend struct {
 	userPIN  []byte
 	wrongPIN []byte
 	// role is the login identity every login in the suite uses, the
-	// PKCS#11 user type of the backend's LoginRole.
+	// PKCS#11 user type of the target's LoginRole.
 	role pk11.Role
 	// caps is the adapter's own declaration. Every field is measured by a
-	// subtest below; a declaration the token no longer matches is a
-	// failing test, not a silent skip.
-	caps        pk11.Capabilities
-	adapterName string
-	modulePath  string
-	runID       string
-	// reopen builds a second connection to the same module, for the case
-	// where cleanup cannot use the first one. See registerCleanup.
+	// subtest below.
+	caps   pk11.Capabilities
+	runID  string
 	reopen func() (pk11.VendorAdapter, error)
 }
 
@@ -60,31 +91,37 @@ func (b *conformanceBackend) label(suffix string) string {
 	return fmt.Sprintf("conf-%s-%s", b.runID, suffix)
 }
 
-// TestConformance runs the full suite against every backend the
-// internal/hsmtest registry provides, in its single-token shape.
-func TestConformance(t *testing.T) {
-	hsmtest.ForEachSingle(t, func(t *testing.T, s *hsmtest.Single) {
-		runConformanceSuite(t, newConformanceBackend(t, s))
-	})
-}
-
-func newConformanceBackend(t *testing.T, s *hsmtest.Single) *conformanceBackend {
+// Run exercises the full VendorAdapter contract and the adapter's
+// Capabilities against tg. Subtests run in declared order, and the last
+// one closes tg.Adapter. A Target missing what the suite needs fails t.
+func Run(t *testing.T, tg Target) {
 	t.Helper()
+	switch {
+	case tg.Adapter == nil:
+		t.Fatal("conformance: Target.Adapter is nil")
+	case tg.Reopen == nil:
+		t.Fatal("conformance: Target.Reopen is nil")
+	case len(tg.PIN) == 0 || len(tg.WrongPIN) == 0:
+		t.Fatal("conformance: Target.PIN and Target.WrongPIN are both required")
+	case string(tg.PIN) == string(tg.WrongPIN):
+		t.Fatal("conformance: Target.WrongPIN is the PIN")
+	}
+	if tg.RunID == "" {
+		tg.RunID = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
 	b := &conformanceBackend{
-		name:        s.Name,
-		adapter:     s.Adapter,
-		ws:          s.Workspace,
-		userPIN:     s.PIN,
-		wrongPIN:    s.WrongPIN,
-		role:        s.Role.Role(),
-		caps:        s.Adapter.Capabilities(),
-		adapterName: s.AdapterName,
-		modulePath:  s.ModulePath,
-		runID:       s.RunID,
-		reopen:      s.Reopen,
+		name:     tg.Name,
+		adapter:  tg.Adapter,
+		ws:       tg.Workspace,
+		userPIN:  tg.PIN,
+		wrongPIN: tg.WrongPIN,
+		role:     tg.Role.Role(),
+		caps:     tg.Adapter.Capabilities(),
+		runID:    tg.RunID,
+		reopen:   tg.Reopen,
 	}
 	b.registerCleanup(t)
-	return b
+	runConformanceSuite(t, b)
 }
 
 // registerCleanup destroys every object this run created once the suite
@@ -223,6 +260,12 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		err = b.adapter.Login(ctx, s, append([]byte(nil), b.wrongPIN...), b.role)
 		if err == nil {
 			t.Fatal("Login with wrong PIN succeeded, want an error")
+		}
+		// The code a module answers a wrong PIN with is not asserted here;
+		// that it reaches the caller as a ReturnValue, without the binding,
+		// is.
+		if _, ok := pk11.ReturnValueOf(err); !ok {
+			t.Fatalf("Login with wrong PIN = %v, which carries no pkcs11.ReturnValue", err)
 		}
 		if s.LoggedIn() {
 			t.Fatal("LoggedIn() = true after a failed Login")
@@ -437,33 +480,6 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		}
 		if _, err := b.adapter.GenerateRandom(ctx, s, 8); err != pk11.ErrSessionClosed {
 			t.Fatalf("GenerateRandom after CloseSession = %v, want ErrSessionClosed", err)
-		}
-	})
-
-	// A session the janitor reclaimed is closed already. Its owner closing
-	// it afterwards must not reach the module: a module that reuses the
-	// freed handle has given it to another session by then, and closing it
-	// again would close that one.
-	t.Run("CloseSession_AfterTheJanitorDoesNotCloseAnother", func(t *testing.T) {
-		expired, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{IdleTimeout: time.Millisecond, MaxTTL: time.Hour})
-		if err != nil {
-			t.Fatalf("OpenSession: %v", err)
-		}
-		time.Sleep(5 * time.Millisecond)
-		pk11.SweepExpiredNow(b.adapter)
-
-		live, err := b.adapter.OpenSession(ctx, b.ws, pk11.SessionOptions{})
-		if err != nil {
-			t.Fatalf("OpenSession: %v", err)
-		}
-		defer func() { _ = b.adapter.CloseSession(ctx, live) }()
-		t.Logf("handle reused by the next session: %v", pk11.HandleOf(live) == pk11.HandleOf(expired))
-
-		if err := b.adapter.CloseSession(ctx, expired); err != nil {
-			t.Fatalf("closing a session the janitor reclaimed = %v, want nil", err)
-		}
-		if _, err := b.adapter.GenerateRandom(ctx, live, 8); err != nil {
-			t.Fatalf("the live session after another's late close = %v; the late close reached its handle", err)
 		}
 	})
 
@@ -825,11 +841,10 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		mech := pk11.Mechanism{Type: pk11.MechAESKeyWrap}
 		wrapped, err := b.adapter.Wrap(ctx, s, wrappingKey, kp.Private, mech)
 		if b.caps.PrivateKeyWrapRefused != "" {
-			var ckr p11.Error
 			switch {
 			case err == nil:
 				t.Fatalf("declared refused (%s), but C_WrapKey wrapped the private key: the declaration is wrong", b.caps.PrivateKeyWrapRefused)
-			case !errors.As(err, &ckr) || ckr != p11.CKR_KEY_NOT_WRAPPABLE:
+			case !errors.Is(err, pk11.RVKeyNotWrappable):
 				t.Fatalf("declared refused with CKR_KEY_NOT_WRAPPABLE (%s), got %v", b.caps.PrivateKeyWrapRefused, err)
 			}
 			t.Skipf("refusal measured as declared: %s", b.caps.PrivateKeyWrapRefused)
@@ -921,8 +936,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		case !b.caps.HandlesSpanSessions && err == nil:
 			t.Fatal("declared that handles are per session, but a handle from one session was accepted in another: the declaration is wrong")
 		case !b.caps.HandlesSpanSessions:
-			var ckr p11.Error
-			if !errors.As(err, &ckr) || ckr != p11.CKR_OBJECT_HANDLE_INVALID {
+			if !errors.Is(err, pk11.RVObjectHandleInvalid) {
 				t.Fatalf("handle refused across sessions as declared, but with %v, want CKR_OBJECT_HANDLE_INVALID", err)
 			}
 		}
@@ -953,17 +967,16 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		zero := make([]byte, 32)
 		var got pk11.ZeroDigestBehaviour
 		sig, err := b.adapter.Sign(ctx, s, kp.Private, pk11.Mechanism{Type: pk11.MechECDSA}, zero)
-		var ckr p11.Error
 		switch {
 		case err == nil:
 			if verr := b.adapter.Verify(ctx, s, kp.Public, pk11.Mechanism{Type: pk11.MechECDSA}, zero, sig); verr == nil {
 				got = pk11.ZeroDigestAccepted
-			} else if errors.As(verr, &ckr) && ckr == p11.CKR_SIGNATURE_INVALID {
+			} else if errors.Is(verr, pk11.RVSignatureInvalid) {
 				got = pk11.ZeroDigestVerifyRefused
 			} else {
 				t.Fatalf("C_Verify over an all-zero digest failed with %v, which is none of the three measured answers", verr)
 			}
-		case errors.As(err, &ckr) && ckr == p11.CKR_DATA_INVALID:
+		case errors.Is(err, pk11.RVDataInvalid):
 			got = pk11.ZeroDigestSignRefused
 		default:
 			t.Fatalf("C_Sign over an all-zero digest failed with %v, which is none of the three measured answers", err)
@@ -974,7 +987,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 	})
 
 	t.Run("Capability_SecondInitializeInProcess", func(t *testing.T) {
-		second, err := pk11.NewAdapterByName(b.adapterName, b.modulePath)
+		second, err := b.reopen()
 		if err == nil {
 			defer second.Close()
 		}
@@ -984,8 +997,7 @@ func runConformanceSuite(t *testing.T, b *conformanceBackend) {
 		case !b.caps.SecondInitializeInProcess && err == nil:
 			t.Fatal("declared that a second C_Initialize is refused, but a second adapter opened: the declaration is wrong")
 		case !b.caps.SecondInitializeInProcess:
-			var ckr p11.Error
-			if !errors.As(err, &ckr) || ckr != p11.CKR_CRYPTOKI_ALREADY_INITIALIZED {
+			if !errors.Is(err, pk11.RVCryptokiAlreadyInitialized) {
 				t.Fatalf("second adapter refused as declared, but with %v, want CKR_CRYPTOKI_ALREADY_INITIALIZED", err)
 			}
 		}

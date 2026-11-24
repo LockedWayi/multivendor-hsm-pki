@@ -6,9 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	p11 "github.com/miekg/pkcs11"
-
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // The zero LoginRole is the Crypto Officer. A bare Role's zero value is
@@ -96,7 +94,7 @@ func TestLoginRole_ExplainNamesTheMissingRoleOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notInit := fmt.Errorf("C_Login (anchor): %w", p11.Error(p11.CKR_USER_PIN_NOT_INITIALIZED))
+	notInit := fmt.Errorf("C_Login (anchor): %w", pk11.RVUserPINNotInitialized)
 
 	got := lco.Explain(notInit)
 	if !errors.Is(got, notInit) {
@@ -106,7 +104,7 @@ func TestLoginRole_ExplainNamesTheMissingRoleOnly(t *testing.T) {
 		t.Fatalf("Explain(CKR_USER_PIN_NOT_INITIALIZED) for lco says nothing about V1: %v", got)
 	}
 
-	wrongPIN := fmt.Errorf("C_Login (anchor): %w", p11.Error(p11.CKR_PIN_INCORRECT))
+	wrongPIN := fmt.Errorf("C_Login (anchor): %w", pk11.RVPINIncorrect)
 	if got := lco.Explain(wrongPIN); got != wrongPIN {
 		t.Fatalf("Explain changed an unrelated error: %v", got)
 	}

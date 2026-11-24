@@ -16,8 +16,8 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/hsmtest"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/inventory"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // provisionOn generates one signing key on ws and returns its public PEM.

@@ -5,7 +5,7 @@ import (
 	"flag"
 	"fmt"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // addRoleFlag registers -role, the identity every token this command

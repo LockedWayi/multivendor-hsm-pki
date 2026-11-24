@@ -21,9 +21,9 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/responder"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // The identities the helpers authorise. URIs, as an operator would

@@ -366,7 +366,7 @@ Three of them sign something for somebody else to check:
 │                   │   │ -key-v1          │   │ artifact-signing-key-v1 │
 └────────┬──────────┘   └────────┬─────────┘   └───┬──────────────┬──────┘
          │                       │                 │              │
-  cmd/hsm-pki-keytool     internal/pkcs11    cosign sign    cosign sign-blob
+  cmd/hsm-pki-keytool     pkcs11    cosign sign    cosign sign-blob
   ceremony, run once      core + internal/ca (--key         (--key
   by an operator          in the daemon      "pkcs11:...")  "pkcs11:...")
          │                       │                 │              │

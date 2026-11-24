@@ -9,8 +9,8 @@ import (
 	"syscall"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/signingkey"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // runProvisionSigningKeyCmd provisions one supply-chain signing key on the
@@ -28,7 +28,7 @@ import (
 func runProvisionSigningKeyCmd(args []string) error {
 	fs := flag.NewFlagSet("provision-signing-key", flag.ExitOnError)
 
-	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage)
+	adapterName := fs.String("adapter", pk11.AdapterSoftHSM2, pk11.AdapterFlagUsage())
 	roleName := addRoleFlag(fs)
 	modulePath := fs.String("module", "", "path to the PKCS#11 module (.so)")
 	curveName := fs.String("curve", "P-256", "EC curve for the key pair: P-256, P-384, or P-521")

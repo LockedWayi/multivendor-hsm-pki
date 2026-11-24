@@ -6,6 +6,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **The PKCS#11 layer can be imported on its own.** `internal/pkcs11` is
+  now `pkcs11`, importable as
+  `github.com/LockedWayi/multivendor-hsm-pki/pkcs11`, with its own
+  [README](pkcs11/README.md). It stays in this module until its API
+  settles.
+- **A vendor can be added from outside the package.** `RegisterVendor`
+  takes a `Vendor` (a name, its measured `Capabilities`, its
+  vendor-defined login roles) and makes it reachable wherever an adapter
+  name is accepted. `NewAdapter` exposes the shared implementation, and
+  `NewLoginRole` the role declaration.
+- **The conformance suite is a package.** `pkcs11/conformance.Run` runs
+  the full suite against any `Target`, so whoever has a module this
+  repository cannot reach can measure it. `TestConformance` runs it over
+  the same backends as before.
+- **`pkcs11.Signer`**, the HSM-backed ECDSA `crypto.Signer` that was the
+  CA's. `ca.Signer` wraps it and keeps its errors.
+- **A module's refusal carries its code as `pkcs11.ReturnValue`.** A
+  caller tests `errors.Is(err, pkcs11.RVPINIncorrect)` or reads the code
+  with `ReturnValueOf`, without importing `miekg/pkcs11`. The message is
+  unchanged, and the binding's error stays in the chain. The conformance
+  suite no longer imports the binding, and asserts that a wrong PIN's
+  refusal reaches the caller with a code.
+
 ### Changed
 - The `suite` job runs the race suite once, inside the coverage step.
 - `vuln-gate -max-horizon-days` is gone: the 180-day ceiling is a
@@ -16,6 +40,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **cosign v2.6.5 and v3.1.4.** The image-signature track picks up three
   advisory fixes, the last a verification bypass through a public key in
   a legacy bundle (GHSA-fx35-mq7g-6g98).
+- `pkcs11.AdapterFlagUsage` is a function, so a registered vendor appears
+  in the help text.
+- The versioned-label rule moves from the PKCS#11 layer to
+  `internal/keylabel`: it is this CA's policy, not PKCS#11's.
+- Configuration, adapter names, role names, environment variables and
+  command-line flags are unchanged.
 
 ### Removed
 - `pkcs11.Workspace.Present`, which was always true.

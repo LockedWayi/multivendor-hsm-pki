@@ -1,4 +1,4 @@
-package ca
+package pkcs11
 
 // A white-box test, for the one case the black-box tests cannot reach:
 // a session that is already expired when Sign uses it. NewSigner opens a
@@ -17,8 +17,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 )
 
 func requireSoftHSM2Internal(t *testing.T) string {
@@ -58,7 +56,7 @@ func TestSigner_Sign_ExpiredSessionFailsClosed(t *testing.T) {
 		t.Fatalf("softhsm2-util --init-token: %v: %s", err, out)
 	}
 
-	adapter, err := pk11.NewSoftHSM2Adapter(modulePath)
+	adapter, err := NewSoftHSM2Adapter(modulePath)
 	if err != nil {
 		t.Fatalf("NewSoftHSM2Adapter: %v", err)
 	}
@@ -69,7 +67,7 @@ func TestSigner_Sign_ExpiredSessionFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Workspaces: %v", err)
 	}
-	var ws pk11.Workspace
+	var ws Workspace
 	for _, w := range wss {
 		if w.Label == label {
 			ws = w
@@ -79,35 +77,35 @@ func TestSigner_Sign_ExpiredSessionFailsClosed(t *testing.T) {
 		t.Fatalf("workspace %q not found among %+v", label, wss)
 	}
 	// The anchor login, once.
-	if err := adapter.LoginToken(ctx, ws, []byte(pin), pk11.RoleUser); err != nil {
+	if err := adapter.LoginToken(ctx, ws, []byte(pin), RoleUser); err != nil {
 		t.Fatalf("LoginToken: %v", err)
 	}
 
 	const keyLabel = "expiry-test-key"
-	if _, err := withSession(ctx, adapter, ws, pk11.SessionOptions{}, func(s *pk11.Session) (struct{}, error) {
-		_, err := adapter.GenerateKeyPair(ctx, s, pk11.KeyPairRequest{
-			Curve: pk11.P256, Label: keyLabel, Sign: true, Verify: true,
+	if err := inSession(ctx, adapter, ws, SessionOptions{}, func(s *Session) error {
+		_, err := adapter.GenerateKeyPair(ctx, s, KeyPairRequest{
+			Curve: P256, Label: keyLabel, Sign: true, Verify: true,
 		})
-		return struct{}{}, err
+		return err
 	}); err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
 
 	// Built with a normal budget, so construction succeeds.
-	signer, err := NewSigner(ctx, adapter, ws, pk11.SessionOptions{}, keyLabel, pk11.P256)
+	signer, err := NewSigner(ctx, adapter, ws, SessionOptions{}, keyLabel, P256)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
 
 	// Every session Sign opens is now already past budget.
-	signer.sessionOpts = pk11.SessionOptions{IdleTimeout: time.Nanosecond, MaxTTL: time.Nanosecond}
+	signer.sessionOpts = SessionOptions{IdleTimeout: time.Nanosecond, MaxTTL: time.Nanosecond}
 
 	digest := sha256.Sum256([]byte("hsm-pki-platform phase 2 session-expiry test"))
 	_, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
 	if err == nil {
 		t.Fatal("Sign with an already-expired session budget succeeded, want an error")
 	}
-	if !errors.Is(err, pk11.ErrSessionExpired) {
-		t.Fatalf("Sign error = %v, want it to wrap pkcs11.ErrSessionExpired", err)
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("Sign error = %v, want it to wrap ErrSessionExpired", err)
 	}
 }

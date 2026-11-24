@@ -20,10 +20,10 @@ import (
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/api"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/config"
-	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/responder"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/store"
+	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // shutdownGrace bounds how long the server waits for in-flight requests to
@@ -281,7 +281,7 @@ func newHTTPServer(addr string, handler http.Handler) *http.Server {
 // the token login before the service accepts traffic. A wrong PIN or an
 // unreachable module fails the process at startup. The login is the
 // service's anchor login, held by the adapter for the process lifetime;
-// see internal/pkcs11/tokenlogin.go.
+// see pkcs11/tokenlogin.go.
 func verifyHSMConnection(ctx context.Context, cfg *config.Config, adapter pkcs11.VendorAdapter) (pkcs11.Workspace, error) {
 	vendor, err := cfg.Vendor()
 	if err != nil {

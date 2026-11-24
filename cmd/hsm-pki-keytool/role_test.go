@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // Every command that logs into a token takes -role, and refuses a role the

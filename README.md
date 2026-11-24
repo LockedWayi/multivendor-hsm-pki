@@ -21,6 +21,11 @@ the HSM. The design reasoning is in
                           appliance)
 ```
 
+The PKCS#11 layer is a package of its own, importable without the CA:
+`go get github.com/LockedWayi/multivendor-hsm-pki/pkcs11`. Its
+interface, how to add a vendor and how to run the conformance suite
+against your own module are in **[pkcs11/README.md](pkcs11/README.md)**.
+
 ## Why this is unusual
 
 Most HSM integrations hard-code one vendor. This one drives three PKCS#11
@@ -266,10 +271,11 @@ certificate it was not granted; and a delegated OCSP responder, signing
 with its own HSM-held key under a short-lived, self-renewed certificate,
 answering from the same store the CRL is built from; and the third
 backend, Luna, with every token-touching test run against two partitions
-of a real appliance and every divergence recorded. Planned next: the
-fourth backend, nShield, under the maintainer's own access, and a
-capability descriptor per adapter so the per-backend declarations the
-conformance suite carries today move into the core. Vault custody is
+of a real appliance and every divergence recorded; and a capability
+descriptor per adapter, so every measured divergence is a declaration
+the core reads and the conformance suite asserts. Planned next: the
+fourth backend, nShield, once there is hardware to run it on. Vault
+custody is
 designed and optional, not scheduled
 ([docs/architecture.md](docs/architecture.md), layer 6).
 

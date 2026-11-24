@@ -15,12 +15,12 @@ import (
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/entitlement"
-	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
+	pkcs11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // Adapter names accepted by pkcs11.adapter in the config file: the one
-// list in internal/pkcs11, re-exported so config-reading code need not
+// list in pkcs11, re-exported so config-reading code need not
 // import the PKCS#11 layer for a name.
 const (
 	AdapterSoftHSM2      = pkcs11.AdapterSoftHSM2

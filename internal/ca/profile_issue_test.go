@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/ca"
-	pk11 "github.com/LockedWayi/multivendor-hsm-pki/internal/pkcs11"
 	"github.com/LockedWayi/multivendor-hsm-pki/internal/profile"
+	pk11 "github.com/LockedWayi/multivendor-hsm-pki/pkcs11"
 )
 
 // csrWith builds a signed request with the given subject and names.
